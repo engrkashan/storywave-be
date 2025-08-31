@@ -1,10 +1,15 @@
 {
   "name": "storywave-be",
   "version": "1.0",
-  "description": "",
-  "main": "app.js",
+  "type": "module",
+  "main": "src/app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "nodemon src/app.js",
+    "start": "node src/app.js",
+    "prisma:generate": "prisma generate",
+    "prisma:reset": "prisma migrate reset",
+    "prisma:studio": "prisma studio",
+    "prisma:push": "prisma db push"
   },
   "keywords": [],
   "author": "",
@@ -12,6 +17,21 @@
   "dependencies": {
     "@prisma/client": "^6.14.0",
     "langchain": "^0.3.30",
-    "prisma": "^6.14.0"
+    "bcryptjs": "^3.0.2",
+    "cloudinary": "^2.7.0",
+    "cors": "^2.8.5",
+    "cryptojs": "^2.5.3",
+    "dotenv": "^17.2.0",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "^6.18.0",
+    "morgan": "^1.10.0",
+    "multer": "^2.0.1",
+    "multer-storage-cloudinary": "^4.0.0",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^7.0.5",
+    "nodemon": "^3.1.10",
+    "prisma": "^6.11.1",
+    "react-redux": "^9.2.0"
   }
 }
