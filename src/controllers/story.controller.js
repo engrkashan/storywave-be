@@ -1,33 +1,5 @@
 import prisma from "../config/prisma.client.js";
 
-// CREATE Story
-export const createStory = async (req, res) => {
-  try {
-    const userId = req?.user?.userId;
-    const { title, content, mediaURL } = req.body;
-
-    if (!title || !content) {
-      return res.status(400).json({ error: "Title and content are required" });
-    }
-
-    const story = await prisma.story.create({
-      data: {
-        title,
-        content,
-        mediaURL,
-        adminId: userId,
-      },
-    });
-
-    return res
-      .status(200)
-      .json({ message: "Story created successfully", story });
-  } catch (error) {
-    console.error("Create Story Error:", error);
-    return res.status(500).json({ error: "Failed to create story" });
-  }
-};
-
 // GET all Stories (for current admin)
 export const getStories = async (req, res) => {
   try {
@@ -62,36 +34,6 @@ export const getStoryById = async (req, res) => {
   } catch (error) {
     console.error("Get Story Error:", error);
     return res.status(500).json({ error: "Failed to fetch story" });
-  }
-};
-
-// UPDATE Story
-export const updateStory = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { title, content, mediaURL } = req.body;
-
-    const existing = await prisma.story.findUnique({ where: { id } });
-    if (!existing) {
-      return res.status(404).json({ error: "Story not found" });
-    }
-
-    const updated = await prisma.story.update({
-      where: { id },
-      data: {
-        title: title ?? existing.title,
-        content: content ?? existing.content,
-        mediaURL: mediaURL ?? existing.mediaURL,
-        updatedAt: new Date(),
-      },
-    });
-
-    return res
-      .status(200)
-      .json({ message: "Story updated successfully", story: updated });
-  } catch (error) {
-    console.error("Update Story Error:", error);
-    return res.status(500).json({ error: "Failed to update story" });
   }
 };
 

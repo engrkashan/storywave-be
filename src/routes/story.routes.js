@@ -1,26 +1,34 @@
 import express from "express";
-import {
-  createStory,
-  getStories,
-  getStoryById,
-  updateStory,
-  deleteStory,
-} from "../controllers/story.controller.js";
-import { verifyToken } from "../middlewares/auth.js";
+import { generateStory } from "../services/storyService.js";
 
 const router = express.Router();
 
-// CREATE
-router.post("/", verifyToken, createStory);
+/**
+ * POST /api/story
+ * Generate story only (no workflow, no TTS).
+ */
+router.post("/", async (req, res) => {
+  try {
+    const { textIdea, url, videoFile, storyType, voiceTone, storyLength } = req.body;
 
-// READ
-router.get("/", verifyToken, getStories);
-router.get("/:id", verifyToken, getStoryById);
+    if (!textIdea && !url && !videoFile) {
+      return res.status(400).json({ error: "You must provide textIdea, url, or videoFile." });
+    }
 
-// UPDATE
-router.patch("/:id", verifyToken, updateStory);
+    const { outline, script } = await generateStory({
+      textIdea,
+      url,
+      videoFile,
+      storyType,
+      voiceTone,
+      storyLength,
+    });
 
-// DELETE
-router.delete("/:id", verifyToken, deleteStory);
+    res.json({ outline, script });
+  } catch (err) {
+    console.error("Error generating story:", err);
+    res.status(500).json({ error: "Failed to generate story" });
+  }
+});
 
 export default router;

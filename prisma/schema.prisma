@@ -1,6 +1,5 @@
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
 }
 
 datasource db {
@@ -17,6 +16,7 @@ enum CreationType {
   VIDEO
   IMAGE
   VOICEOVER
+  PODCAST
 }
 
 enum Platform {
@@ -27,6 +27,22 @@ enum Platform {
   LINKEDIN
   X
   FACEBOOK
+}
+
+enum MediaType {
+  SCRIPT
+  AUDIO
+  IMAGE
+  VIDEO
+  SUBTITLE
+  PODCAST
+  TRANSCRIPT
+}
+
+enum InputType {
+  URL
+  TEXT
+  VIDEO
 }
 
 model AdminUser {
@@ -40,22 +56,112 @@ model AdminUser {
 
   creations    Creation[]
   integrations Integration[]
-  stories      Story[]
-  voiceovers   Voiceover[]
+  workflows    Workflow[]
+  assets       Asset[]
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   lastLoginAt DateTime?
 }
 
-model Story {
-  id       String  @id @default(auto()) @map("_id") @db.ObjectId
+model Workflow {
+  id       String       @id @default(auto()) @map("_id") @db.ObjectId
   title    String
-  content  String
-  mediaURL String?
+  type     CreationType
+  status   String       @default("PENDING") 
+  metadata Json?
 
   admin   AdminUser @relation(fields: [adminId], references: [id])
   adminId String    @db.ObjectId
+
+  inputs    Input[]
+  story     Story?
+  voiceover Voiceover?
+  video     Video?
+  podcast   Podcast?
+  media     Media[]
+  tasks     Task[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Input {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  type      InputType
+  source    String   
+  processed Boolean   @default(false)
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id])
+  workflowId String   @db.ObjectId
+
+  createdAt DateTime @default(now())
+}
+
+model Task {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  step      String    
+  status    String    @default("QUEUED")
+  log       String?
+  metadata  Json?
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id])
+  workflowId String   @db.ObjectId
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Story {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  title     String
+  outline   String?
+  content   String   
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id])
+  workflowId String   @unique @db.ObjectId
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Video {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  title     String
+  fileURL   String?
+  duration  Int?
+  subtitles String?
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id])
+  workflowId String   @unique @db.ObjectId
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Voiceover {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  script    String
+  audioURL  String?
+  voice     String?
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id])
+  workflowId String   @unique @db.ObjectId
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Podcast {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  title     String
+  audioURL  String?
+  duration  Int?
+  guests    String?  
+  script    String?
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id])
+  workflowId String   @unique @db.ObjectId
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -68,19 +174,6 @@ model Creation {
   content  String?
   mediaURL String?
   metadata Json?
-
-  admin   AdminUser @relation(fields: [adminId], references: [id])
-  adminId String    @db.ObjectId
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Voiceover {
-  id       String  @id @default(auto()) @map("_id") @db.ObjectId
-  script   String
-  audioURL String?
-  voice    String?
 
   admin   AdminUser @relation(fields: [adminId], references: [id])
   adminId String    @db.ObjectId
@@ -103,9 +196,27 @@ model Integration {
 }
 
 model Media {
-  id         String   @id @default(auto()) @map("_id") @db.ObjectId
-  fileUrl    String?
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  type       MediaType
+  fileUrl    String
   fileType   String
   publicId   String?
+
+  workflow   Workflow? @relation(fields: [workflowId], references: [id])
+  workflowId String?   @db.ObjectId
+
   uploadedAt DateTime @default(now())
+}
+
+model Asset {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  name     String
+  type     String   
+  url      String? 
+  metadata Json?
+
+  admin   AdminUser @relation(fields: [adminId], references: [id])
+  adminId String    @db.ObjectId
+
+  createdAt DateTime @default(now())
 }

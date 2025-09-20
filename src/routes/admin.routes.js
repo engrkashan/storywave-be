@@ -4,7 +4,7 @@ import {
   deleteAdminUser,
   getAdminUserProfile,
   updateAdminUser,
-} from "../controllers/adminUser.controller.js";
+} from "../controllers/admin.controller.js";
 import { verifyToken } from "../middlewares/auth.js";
 
 const router = express.Router();

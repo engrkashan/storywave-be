@@ -46,12 +46,12 @@ export const registerAdminUser = async (req, res) => {
 // LOGIN Admin User
 export const loginAdminUser = async (req, res) => {
   try {
-    const { emailOrUsername, password } = req.body;
+    const { email, password } = req.body;
 
     // Find by email OR username
     const user = await prisma.adminUser.findFirst({
       where: {
-        OR: [{ email: emailOrUsername }, { username: emailOrUsername }],
+        email: email,
       },
     });
 

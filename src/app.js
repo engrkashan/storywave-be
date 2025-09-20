@@ -23,6 +23,14 @@ app.get("/", (req, res) => {
   res.json({ message: "Hello, world!" });
 });
 
+import authRoutes from "./routes/auth.routes.js";
+import storyRoutes from "./routes/story.routes.js"
+import adminRoutes from "./routes/admin.routes.js"
+
+app.use("/api/auth", authRoutes);
+app.use("/api/story", storyRoutes);
+app.use("/api/admin", adminRoutes);
+
 // dns configuration
 dns.setDefaultResultOrder("ipv4first");
 

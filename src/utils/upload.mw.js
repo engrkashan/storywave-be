@@ -35,7 +35,7 @@ export const mediaUpload = multer({
       } else if (
         file.mimetype === "application/msword" ||
         file.mimetype ===
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
       ) {
         folder = "Ethbat/Documents";
       }
