@@ -10,25 +10,27 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  * @param {string} filename - File name for the saved audio.
  * @returns {Promise<string>} - Path to the saved audio file (relative to /public).
  */
-export async function generateVoiceover(script, filename = "voiceover.mp3") {
+export async function generateVoiceover(script, filename) {
     const response = await openai.audio.speech.create({
         model: "gpt-4o-mini-tts",
         voice: "onyx",
         input: script,
     });
 
-    const buffer = Buffer.from(await response.arrayBuffer());
+    console.log(response)
 
-    // Ensure path is inside /public/stories
+    // Ensure /public/stories exists
     const outputDir = path.join(process.cwd(), "public", "stories");
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
     }
 
     const outputFile = path.join(outputDir, filename);
+    console.log("Saving file to:", outputFile);
 
+    // Write file (response supports .arrayBuffer)
+    const buffer = Buffer.from(await response.arrayBuffer());
     fs.writeFileSync(outputFile, buffer);
 
-    // Return a relative URL for frontend use
     return `/stories/${filename}`;
 }

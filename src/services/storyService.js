@@ -24,15 +24,14 @@ export async function generateStory({
     voiceTone = "neutral",
     storyLength = "medium",
 }) {
-    // 1️⃣ Extract input text from whichever source
+    // Extract input text from whichever source
     let inputText = textIdea;
     if (url) inputText = await extractFromUrl(url);
     if (videoFile) inputText = await transcribeVideo(videoFile);
 
-    // 2️⃣ Build prompt
+    // Build prompt
     const prompt = `
             You are an expert storyteller and creative writer.  
-
             **Your Task**:  
             - Take the following idea (may be text, URL extract, or transcript).  
             - Create a **${storyLength} length, engaging, and original story**.  
@@ -79,7 +78,7 @@ export async function generateStory({
         throw new Error("Failed to generate story after multiple retries due to a 503 error.");
     }
 
-    // 3️⃣ Parse outline & script
+    // Parse outline & script
     const outlineMatch = text.match(/Outline:\s*(.*?)\s*Script:/s);
     const scriptMatch = text.match(/Script:\s*(.*)/s);
 

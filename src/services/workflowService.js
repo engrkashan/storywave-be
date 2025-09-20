@@ -4,7 +4,7 @@ import { generateStory } from "./storyService.js";
 import { generateVoiceover } from "./ttsService.js";
 
 export async function runWorkflow({ adminId, title, url, videoFile, textIdea }) {
-    // 1️⃣ Create workflow entry in DB
+    // 1️⃣ Create workflow entry
     const workflow = await prisma.workflow.create({
         data: {
             title,
@@ -15,7 +15,7 @@ export async function runWorkflow({ adminId, title, url, videoFile, textIdea }) 
         },
     });
 
-    // 2️⃣ Save input
+    // 2️⃣ Process input
     let inputText = textIdea;
     let inputSource = "TEXT";
 
@@ -38,7 +38,7 @@ export async function runWorkflow({ adminId, title, url, videoFile, textIdea }) 
     });
 
     // 3️⃣ Generate story
-    const storyType = "horror"
+    const storyType = "horror"; 
     const { outline, script } = await generateStory(inputText, storyType);
 
     const story = await prisma.story.create({
@@ -50,11 +50,9 @@ export async function runWorkflow({ adminId, title, url, videoFile, textIdea }) 
         },
     });
 
-    // 4️⃣ Generate voiceover
-    const voiceFile = await generateVoiceover(
-        script,
-        `${workflow.id}-${Date.now()}.mp3`
-    );
+    // 4️⃣ Generate voiceover with unique filename
+    const uniqueFilename = `${workflow.id}-${Date.now()}.mp3`;
+    const voiceFile = await generateVoiceover(script, uniqueFilename);
 
     const voiceover = await prisma.voiceover.create({
         data: {
@@ -64,7 +62,7 @@ export async function runWorkflow({ adminId, title, url, videoFile, textIdea }) 
         },
     });
 
-    // 5️⃣ Update workflow status to completed
+    // 5️⃣ Update workflow
     await prisma.workflow.update({
         where: { id: workflow.id },
         data: { status: "COMPLETED" },
