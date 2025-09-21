@@ -1,13 +1,12 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import OpenAI from "openai";
 import { extractFromUrl, transcribeVideo } from "./inputService.js";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Generate story outline and script from input text using Gemini
+ * Generate story outline and script from input text using OpenAI
  * @param {object} options
  * @param {string} options.textIdea - The core idea for the story.
  * @param {string} [options.url] - Optional reference URL.
@@ -24,34 +23,34 @@ export async function generateStory({
     voiceTone = "neutral",
     storyLength = "medium",
 }) {
-    // Extract input text from whichever source
+    // Extract input text
     let inputText = textIdea;
     if (url) inputText = await extractFromUrl(url);
     if (videoFile) inputText = await transcribeVideo(videoFile);
 
     // Build prompt
     const prompt = `
-            You are an expert storyteller and creative writer.  
-            **Your Task**:  
-            - Take the following idea (may be text, URL extract, or transcript).  
-            - Create a **${storyLength} length, engaging, and original story**.  
-            - Genre: ${storyType}  
-            - Tone: ${voiceTone}  
+        You are an expert storyteller and creative writer.  
+        **Your Task**:  
+        - Take the following idea (may be text, URL extract, or transcript).  
+        - Create a **${storyLength} length, engaging, and original story**.  
+        - Genre: ${storyType}  
+        - Tone: ${voiceTone}  
 
-            **Requirements**:  
-            1. Provide a concise **Outline** summarizing the main plot and structure.  
-            2. Write a **Script** with immersive narration, dialogue, and vivid details.  
+        **Requirements**:  
+        1. Provide a concise **Outline** summarizing the main plot and structure.  
+        2. Write a **Script** with immersive narration, dialogue, and vivid details.  
 
-            **Idea / Inspiration**:  
-            ${inputText}
+        **Idea / Inspiration**:  
+        ${inputText}
 
-            **Format strictly**:
-            Outline:
-            - ...
+        **Format strictly**:
+        Outline:
+        - ...
 
-            Script:
-            - ...
-        `;
+        Script:
+        - ...
+    `;
 
     let retries = 3;
     let success = false;
@@ -59,23 +58,26 @@ export async function generateStory({
 
     while (retries > 0 && !success) {
         try {
-            const result = await model.generateContent(prompt);
-            text = result.response.text();
+            const result = await openai.chat.completions.create({
+                model: "gpt-4o-mini", // or "gpt-4o" if you want better quality
+                messages: [
+                    { role: "system", content: "You are a creative writing assistant." },
+                    { role: "user", content: prompt },
+                ],
+                temperature: 0.8,
+            });
+
+            text = result.choices[0].message.content;
             success = true;
         } catch (err) {
-            console.error(`Attempt failed. Retries left: ${retries - 1}`);
-            if (err.status === 503 && retries > 1) {
+            console.error(`Attempt failed. Retries left: ${retries - 1}`, err.message);
+            if (retries > 1) {
                 retries--;
                 await sleep(2000);
             } else {
-                console.error("Error generating story:", err);
-                throw err;
+                throw new Error("Failed to generate story after multiple retries.");
             }
         }
-    }
-
-    if (!success) {
-        throw new Error("Failed to generate story after multiple retries due to a 503 error.");
     }
 
     // Parse outline & script
