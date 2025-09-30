@@ -27,10 +27,12 @@ app.get("/", (req, res) => {
 import authRoutes from "./routes/auth.routes.js";
 import storyRoutes from "./routes/story.routes.js"
 import adminRoutes from "./routes/admin.routes.js"
+import podcastRoutes from "./routes/podcast.routes.js";
 
 app.use("/api/auth", authRoutes);
 app.use("/api/story", storyRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/podcast", podcastRoutes);
 
 // dns configuration
 dns.setDefaultResultOrder("ipv4first");

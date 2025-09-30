@@ -18,10 +18,20 @@ function generateRandomTitle(storyType = "Story") {
  */
 router.post("/", async (req, res) => {
   try {
-    const { textIdea, url, videoFile, storyType, voiceTone, storyLength, admin } = req.body;
+    const {
+      textIdea,
+      url,
+      videoFile,
+      storyType,
+      voiceTone,
+      storyLength,
+      admin,
+    } = req.body;
 
     if (!textIdea && !url && !videoFile) {
-      return res.status(400).json({ error: "You must provide textIdea, url, or videoFile." });
+      return res
+        .status(400)
+        .json({ error: "You must provide textIdea, url, or videoFile." });
     }
 
     const { outline, script } = await generateStory({
@@ -31,7 +41,7 @@ router.post("/", async (req, res) => {
       storyType,
       voiceTone,
       storyLength,
-      admin
+      admin,
     });
 
     res.json({ outline, script });
@@ -50,7 +60,9 @@ router.post("/workflow", async (req, res) => {
     const { adminId, title, url, videoFile, textIdea, storyType } = req.body;
 
     if (!textIdea && !url && !videoFile) {
-      return res.status(400).json({ error: "You must provide textIdea, url, or videoFile." });
+      return res
+        .status(400)
+        .json({ error: "You must provide textIdea, url, or videoFile." });
     }
 
     // Generate title if not provided
@@ -61,7 +73,8 @@ router.post("/workflow", async (req, res) => {
       title: finalTitle,
       url,
       videoFile,
-      textIdea
+      textIdea,
+      storyType,
     });
 
     res.json(result);
