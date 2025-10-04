@@ -30,7 +30,6 @@ export const createPodcast = async (req, res) => {
       data: {
         title: `${topic} Podcast Workflow`,
         type: "PODCAST", 
-        subType: type || null, 
         status: "COMPLETED",
         adminId,
       },
