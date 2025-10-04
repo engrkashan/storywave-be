@@ -102,17 +102,15 @@ model Story {
 }
 
 model Video {
-  id        String  @id @default(auto()) @map("_id") @db.ObjectId
+  id        String     @id @default(auto()) @map("_id") @db.ObjectId
   title     String
   fileURL   String?
   duration  Int?
   subtitles String?
-
-  workflow   Workflow @relation(fields: [workflowId], references: [id])
-  workflowId String   @unique @db.ObjectId
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  adminId   String     @db.ObjectId
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  Workflow  Workflow[]
 }
 
 model Voiceover {
@@ -124,6 +122,7 @@ model Voiceover {
   workflow   Workflow @relation(fields: [workflowId], references: [id])
   workflowId String   @unique @db.ObjectId
 
+  adminId   String   @db.ObjectId
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -142,7 +141,7 @@ model Workflow {
   inputs    Input[]
   story     Story?     @relation(fields: [storyId], references: [id])
   voiceover Voiceover?
-  video     Video?
+  video     Video?     @relation(fields: [videoId], references: [id])
   podcast   Podcast?
   media     Media[]
   tasks     Task[]
@@ -150,6 +149,7 @@ model Workflow {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   storyId   String?  @db.ObjectId
+  videoId   String?  @db.ObjectId
 }
 
 model Podcast {
@@ -165,6 +165,7 @@ model Podcast {
 
   workflow   Workflow @relation(fields: [workflowId], references: [id])
   workflowId String   @unique @db.ObjectId
+  adminId    String   @db.ObjectId
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
