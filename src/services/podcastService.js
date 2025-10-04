@@ -2,14 +2,13 @@ import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import OpenAI from "openai";
 import path from "path";
-import { mixPodcast } from "./audioService.js";
+import { mergeAudioFiles } from "./audioService.js";
 import { generateVoiceover } from "./ttsService.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
  * Generate multiple script sections with enhanced delivery instructions.
- * The prompt strictly prohibits production cues and speaker labels.
  */
 export async function generatePodcastScript({ topic, tone, length, audience }) {
   let sections = 3;
@@ -25,22 +24,16 @@ export async function generatePodcastScript({ topic, tone, length, audience }) {
       Write section ${i} of a ${length} podcast on "${topic}".
       Tone: ${tone}.
       Audience: ${audience || "general listeners"}.
-      Structure: Write a dynamic, engaging script with a natural conversational flow, using contractions and informal language appropriate for a podcast.
-      
-      **STRICT REQUIREMENT: DO NOT include speaker labels (like "Host:", "Narrator:", etc.) or audio production directions (like "Music fades in," "SFX:", "Jingle plays"). Only output the exact words the host should speak.**
+      Structure: conversational, engaging, with natural flow.
 
-      CRITICAL for Realism: Include specific delivery notes for the voice model to follow, using parentheses. These enhance pacing and tone:
-      - (Pause) for natural breaths or dramatic effect.
-      - (Emphasis) on key words.
-      - (Slight chuckle) or (Whispering) for specific moods.
-      - (Deepens voice) for a serious point.
-      - (Speaks quickly) or (Speaks slowly) for pacing.
-      
-      Length: around 500 words per section.
-      End with a strong, expressive hook for the next section if not the last one.
+      **STRICT REQUIREMENT: DO NOT include speaker labels (like "Host:" or "Narrator:") or production directions (like "Music fades in"). Only output the host’s words.**
+
+      Add delivery cues in parentheses for realism:
+      - (Pause), (Emphasis), (Slight chuckle), (Whispering), etc.
+      Around 500 words.
+      End with a hook for the next section unless it’s the last one.
     `;
 
-    // Using gpt-4o-mini for better comprehension of complex delivery instructions
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
@@ -55,45 +48,7 @@ export async function generatePodcastScript({ topic, tone, length, audience }) {
 }
 
 /**
- * Merge multiple audio files into one MP3 using fluent-ffmpeg.
- */
-async function mergeAudioFiles(files, outputFile) {
-  return new Promise((resolve, reject) => {
-    const ffmpegCommand = ffmpeg();
-
-    files.forEach((file) => ffmpegCommand.input(file));
-
-    ffmpegCommand
-      .on("error", (err) => {
-        console.error("FFMPEG Merge Error:", err);
-        reject(
-          new Error(
-            "Cannot find ffmpeg. Please install FFmpeg and ensure it's in your PATH."
-          )
-        );
-      })
-      .on("end", () => {
-        console.log(`Audio merged successfully to ${outputFile}`);
-        resolve(outputFile);
-      })
-      // Use complex filter to ensure proper concatenation
-      .complexFilter(
-        [
-          {
-            filter: "concat",
-            options: { n: files.length, v: 0, a: 1 },
-            outputs: "aout",
-          },
-        ],
-        "aout"
-      )
-      .outputOptions(["-map aout", "-c:a libmp3lame", "-q:a 2"])
-      .save(outputFile);
-  });
-}
-
-/**
- * Full pipeline: scripts -> TTS per section (using 'onyx' male voice) -> merge -> mix
+ * Full pipeline: scripts -> TTS per section -> merge -> final file
  */
 export async function generatePodcast({ topic, tone, length, audience }) {
   console.log("Starting script generation...");
@@ -114,10 +69,8 @@ export async function generatePodcast({ topic, tone, length, audience }) {
     `Generating ${scripts.length} voiceover sections using ${selectedVoice} voice...`
   );
 
-  // Generate narration per section
   for (let i = 0; i < scripts.length; i++) {
     const filename = `section_${i + 1}_${Date.now()}.mp3`;
-    // Pass the male voice ('onyx') to the TTS service
     const ttsPath = await generateVoiceover(
       scripts[i],
       filename,
@@ -126,24 +79,16 @@ export async function generatePodcast({ topic, tone, length, audience }) {
     ttsFiles.push(ttsPath);
   }
 
-  // Merge narration into one file
+  // Merge narration sections into one file
   console.log("Merging audio sections...");
-  const narrationFile = path.join(outputDir, `narration_${Date.now()}.mp3`);
-  await mergeAudioFiles(ttsFiles, narrationFile);
+  const finalFile = path.join(outputDir, `podcast_${Date.now()}.mp3`);
+  await mergeAudioFiles(ttsFiles, finalFile);
 
   // Clean up temporary section files
-  ttsFiles.forEach((file) => fs.unlinkSync(file));
+  ttsFiles.forEach((file) => {
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  });
   console.log("Temporary section files removed.");
-
-  // Add intro/outro music, ducking, etc.
-  console.log("Mixing final podcast...");
-  const finalFile = path.join(outputDir, `podcast_${Date.now()}.mp3`);
-  // Assuming mixPodcast is implemented in audioService.js
-  await mixPodcast(narrationFile, finalFile);
-
-  // Clean up intermediate narration file
-  fs.unlinkSync(narrationFile);
-  console.log("Intermediate narration file removed.");
 
   return {
     title: `${topic} Podcast`,
