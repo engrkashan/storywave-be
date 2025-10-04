@@ -13,7 +13,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(morgan("dev"));
-app.use(express.static("public"));
+app.use("/static", express.static("public"));
 
 import mediaRoutes from "./routes/media.routes.js";
 
@@ -25,14 +25,20 @@ app.get("/", (req, res) => {
 });
 
 import authRoutes from "./routes/auth.routes.js";
-import storyRoutes from "./routes/story.routes.js"
-import adminRoutes from "./routes/admin.routes.js"
+import storyRoutes from "./routes/story.routes.js";
+import adminRoutes from "./routes/admin.routes.js";
 import podcastRoutes from "./routes/podcast.routes.js";
 
 app.use("/api/auth", authRoutes);
 app.use("/api/story", storyRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/podcast", podcastRoutes);
+
+app.get("/download/:file", (req, res) => {
+  const fileName = req.params.file;
+  const filePath = path.join(__dirname, "public/podcasts", fileName);
+  res.download(filePath);
+});
 
 // dns configuration
 dns.setDefaultResultOrder("ipv4first");
