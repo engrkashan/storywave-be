@@ -1,4 +1,3 @@
-import path from "path";
 import cors from "cors";
 import dns from "dns";
 import dotenv from "dotenv";
@@ -34,12 +33,6 @@ app.use("/api/auth", authRoutes);
 app.use("/api/story", storyRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/podcast", podcastRoutes);
-
-app.get("/download/:file", (req, res) => {
-  const fileName = req.params.file;
-  const filePath = path.join(__dirname, "public/podcasts", fileName);
-  res.download(filePath);
-});
 
 // dns configuration
 dns.setDefaultResultOrder("ipv4first");
