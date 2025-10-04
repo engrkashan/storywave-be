@@ -15,10 +15,10 @@ function cleanScript(rawScript) {
 
   // Preserve content in parentheses (our delivery notes)
   return rawScript
-    .replace(/\*\*/g, "") 
-    .replace(/\*/g, "") 
-    .replace(/#+\s/g, "") 
-    .replace(/\[.*?\]/g, "") 
+    .replace(/\*\*/g, "")
+    .replace(/\*/g, "")
+    .replace(/#+\s/g, "")
+    .replace(/\[.*?\]/g, "")
     .replace(/Target Audience:.*\n?/gi, "")
     .replace(/Length:.*\n?/gi, "")
     .replace(/End of Script/gi, "")
@@ -33,9 +33,9 @@ function cleanScript(rawScript) {
  * @param {string} [voice='onyx'] - The desired OpenAI voice ('onyx' is a male voice).
  * @returns {Promise<string>} The path to the generated MP3 file.
  */
-export async function generateVoiceover(script, filename, voice = 'onyx') {
-  const selectedVoice = voice || 'onyx'; 
-  
+export async function generateVoiceover(script, filename, voice = "onyx") {
+  const selectedVoice = voice || "onyx";
+
   const outputDir = path.join(process.cwd(), "public", "stories");
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
@@ -44,7 +44,7 @@ export async function generateVoiceover(script, filename, voice = 'onyx') {
   try {
     const response = await openai.audio.speech.create({
       model: "tts-1",
-      voice: selectedVoice, 
+      voice: selectedVoice,
       input: cleaned,
     });
 
@@ -52,7 +52,9 @@ export async function generateVoiceover(script, filename, voice = 'onyx') {
     const buffer = Buffer.from(await response.arrayBuffer());
     fs.writeFileSync(outputFile, buffer);
 
-    console.log(`Voiceover generated for ${filename} using voice ${selectedVoice}`);
+    console.log(
+      `Voiceover generated for ${filename} using voice ${selectedVoice}`
+    );
     return outputFile;
   } catch (error) {
     console.error(`Error generating voiceover for ${filename}:`, error);
