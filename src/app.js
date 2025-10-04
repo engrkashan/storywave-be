@@ -28,11 +28,13 @@ import authRoutes from "./routes/auth.routes.js";
 import storyRoutes from "./routes/story.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import podcastRoutes from "./routes/podcast.routes.js";
+import creationsRoutes from "./routes/creations.route.js";
 
 app.use("/api/auth", authRoutes);
 app.use("/api/story", storyRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/podcast", podcastRoutes);
+app.use("/api/creations", creationsRoutes);
 
 // dns configuration
 dns.setDefaultResultOrder("ipv4first");
