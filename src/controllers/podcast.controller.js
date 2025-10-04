@@ -1,4 +1,5 @@
 import prisma from "../config/prisma.client.js";
+import { CreationType } from "@prisma/client";
 import { generatePodcast } from "../services/podcastService.js";
 
 /**
@@ -28,8 +29,8 @@ export const createPodcast = async (req, res) => {
     const workflow = await prisma.workflow.create({
       data: {
         title: `${topic} Podcast Workflow`,
-        type: "PODCAST", // broad enum
-        subType: type || null, // subtype like debate/interview/etc.
+        type: "PODCAST", 
+        subType: type || null, 
         status: "COMPLETED",
         adminId,
       },
@@ -52,12 +53,13 @@ export const createPodcast = async (req, res) => {
     });
 
     // Save media reference
-    await prisma.media.create({
+    await prisma.workflow.create({
       data: {
-        type: "PODCAST",
-        fileUrl: podcast.audioURL,
-        fileType: "audio/mpeg",
-        workflowId: workflow.id,
+        title: `${topic} Podcast Workflow`,
+        type: CreationType.PODCAST,
+        subType: type || null,
+        status: "COMPLETED",
+        adminId,
       },
     });
 
