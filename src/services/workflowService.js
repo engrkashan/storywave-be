@@ -54,13 +54,15 @@ export async function runWorkflow({
       title,
       outline,
       content: script,
-      workflowId: workflow.id,
-      adminId
+      adminId,
+      Workflow: {
+        connect: { id: workflow.id },
+      },
     },
   });
 
   // --- 🔥 Scene Splitting ---
-  const scenes = script.split(/\n{2,}/).filter(Boolean); 
+  const scenes = script.split(/\n{2,}/).filter(Boolean);
   const imagePaths = [];
   for (let i = 0; i < scenes.length; i++) {
     const sceneText = scenes[i];
@@ -77,6 +79,7 @@ export async function runWorkflow({
       script,
       audioURL: voiceFile,
       workflowId: workflow.id,
+      adminId
     },
   });
 
