@@ -83,7 +83,6 @@ model Workflow {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  podcastId String?  @db.ObjectId
 }
 
 model Input {
