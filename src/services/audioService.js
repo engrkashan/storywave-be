@@ -26,7 +26,9 @@ export async function mergeAudioFiles(files, outputFile) {
       "podcasts",
       `merge_list_${Date.now()}.txt`
     );
-    const fileContent = files.map(f => `file '${path.resolve(f)}'`).join("\n");
+    const fileContent = files
+      .map((f) => `file '${path.resolve(f)}'`)
+      .join("\n");
     fs.writeFileSync(listFile, fileContent);
 
     ffmpeg()
@@ -36,12 +38,28 @@ export async function mergeAudioFiles(files, outputFile) {
       .save(outputFile)
       .on("end", () => {
         console.log(`Audio merged successfully to ${outputFile}`);
-        fs.unlinkSync(listFile); // clean up temp file
+        fs.unlinkSync(listFile); 
         resolve(outputFile);
       })
       .on("error", (err) => {
         console.error("FFMPEG Merge Error:", err.message);
         reject(err);
       });
+  });
+}
+
+/**
+ * Get duration of an audio file in seconds using ffprobe
+ */
+export async function getAudioDuration(filePath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) {
+        console.error("FFMPEG Duration Error:", err.message);
+        return reject(err);
+      }
+      const duration = metadata?.format?.duration || 0;
+      resolve(Math.round(duration)); 
+    });
   });
 }

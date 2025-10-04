@@ -64,27 +64,6 @@ model AdminUser {
   lastLoginAt DateTime?
 }
 
-model Workflow {
-  id       String       @id @default(auto()) @map("_id") @db.ObjectId
-  title    String
-  type     CreationType
-  status   String       @default("PENDING")
-  metadata Json?
-
-  admin   AdminUser @relation(fields: [adminId], references: [id])
-  adminId String    @db.ObjectId
-
-  inputs    Input[]
-  story     Story?
-  voiceover Voiceover?
-  video     Video?
-  media     Media[]
-  tasks     Task[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
 model Input {
   id        String    @id @default(auto()) @map("_id") @db.ObjectId
   type      InputType
@@ -151,6 +130,29 @@ model Voiceover {
   updatedAt DateTime @updatedAt
 }
 
+model Workflow {
+  id       String       @id @default(auto()) @map("_id") @db.ObjectId
+  title    String
+  type     CreationType
+  subType  String?
+  status   String       @default("PENDING")
+  metadata Json?
+
+  admin   AdminUser @relation(fields: [adminId], references: [id])
+  adminId String    @db.ObjectId
+
+  inputs    Input[]
+  story     Story?
+  voiceover Voiceover?
+  video     Video?
+  podcast   Podcast?
+  media     Media[]
+  tasks     Task[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model Podcast {
   id       String  @id @default(auto()) @map("_id") @db.ObjectId
   title    String
@@ -158,6 +160,12 @@ model Podcast {
   duration Int?
   guests   String?
   script   String?
+  subType  String?
+  episodes Int?
+  audience String?
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id])
+  workflowId String   @unique @db.ObjectId
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

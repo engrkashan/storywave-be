@@ -6,46 +6,71 @@ import { generatePodcast } from "../services/podcastService.js";
  */
 export const createPodcast = async (req, res) => {
   try {
-    const { topic, tone, length, audience } = req.body;
+    const { topic, tone, type, audience, episodes, length, adminId } = req.body;
 
-    if (!topic || !tone || !length) {
+    if (!topic || !tone || !length || !adminId) {
       return res.status(400).json({
         success: false,
-        message: "topic, tone, and length are required",
+        message: "topic, tone, length, and adminId are required",
       });
     }
 
-    // 1. Generate podcast files
-    const podcast = await generatePodcast({ topic, tone, length, audience });
+    // Generate podcast files
+    const podcast = await generatePodcast({
+      topic,
+      tone,
+      length,
+      audience,
+      episodes,
+    });
 
-    // 2. Save podcast entry in DB
+    // Create workflow
+    const workflow = await prisma.workflow.create({
+      data: {
+        title: `${topic} Podcast Workflow`,
+        type: "PODCAST", // broad enum
+        subType: type || null, // subtype like debate/interview/etc.
+        status: "COMPLETED",
+        adminId,
+      },
+    });
+
+    // Save podcast record
     const savedPodcast = await prisma.podcast.create({
       data: {
         title: podcast.title,
         script: podcast.script.join("\n\n"),
         audioURL: podcast.audioURL,
+        duration: podcast.duration || null,
+        subType: type || null,
+        episodes: episodes || null,
+        audience: audience || null,
+        workflow: {
+          connect: { id: workflow.id },
+        },
       },
     });
 
-    // 3. Save media record for easier access
+    // Save media reference
     await prisma.media.create({
       data: {
         type: "PODCAST",
         fileUrl: podcast.audioURL,
         fileType: "audio/mpeg",
+        workflowId: workflow.id,
       },
     });
 
-    // Return the full podcast including script and public URL
     res.json({
       success: true,
       message: "Podcast generated and stored successfully",
       data: {
-        ...(savedPodcast.toObject?.() || savedPodcast),
+        ...savedPodcast,
         script: podcast.script,
         publicURL: `${req.protocol}://${req.get("host")}/static${
           podcast.audioURL
         }`,
+        workflowId: workflow.id,
       },
     });
   } catch (err) {
@@ -69,7 +94,7 @@ export const getPodcasts = async (req, res) => {
 
     const withUrls = podcasts.map((p) => ({
       ...p,
-      publicURL: `${req.protocol}://${req.get("host")}${p.audioURL}`,
+      publicURL: `${req.protocol}://${req.get("host")}/static${p.audioURL}`,
     }));
 
     res.json({
