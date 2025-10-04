@@ -91,16 +91,14 @@ model Task {
 }
 
 model Story {
-  id      String  @id @default(auto()) @map("_id") @db.ObjectId
-  title   String
-  outline String?
-  content String
-
-  workflow   Workflow @relation(fields: [workflowId], references: [id])
-  workflowId String   @unique @db.ObjectId
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id        String     @id @default(auto()) @map("_id") @db.ObjectId
+  title     String
+  outline   String?
+  content   String
+  adminId   String     @db.ObjectId
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  Workflow  Workflow[]
 }
 
 model Video {
@@ -142,7 +140,7 @@ model Workflow {
   adminId String    @db.ObjectId
 
   inputs    Input[]
-  story     Story?
+  story     Story?     @relation(fields: [storyId], references: [id])
   voiceover Voiceover?
   video     Video?
   podcast   Podcast?
@@ -151,6 +149,7 @@ model Workflow {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  storyId   String?  @db.ObjectId
 }
 
 model Podcast {
@@ -165,7 +164,7 @@ model Podcast {
   audience String?
 
   workflow   Workflow @relation(fields: [workflowId], references: [id])
-  workflowId String   @unique @db.ObjectId 
+  workflowId String   @unique @db.ObjectId
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
