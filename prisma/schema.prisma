@@ -165,7 +165,7 @@ model Podcast {
   audience String?
 
   workflow   Workflow @relation(fields: [workflowId], references: [id])
-  workflowId String   @unique @db.ObjectId // must be unique for 1-1
+  workflowId String   @unique @db.ObjectId 
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

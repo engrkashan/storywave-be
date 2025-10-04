@@ -5,26 +5,25 @@ export const getOverview = async (req, res) => {
   try {
     const userId = req?.user?.userId;
 
-    // Count creations by type
-    const [storiesCount, videosCount, voiceoversCount, podcastsCount] =
-      await Promise.all([
-        prisma.creation.count({
-          where: { adminId: userId, type: "STORY" },
-        }),
-        prisma.creation.count({
-          where: { adminId: userId, type: "VIDEO" },
-        }),
-        prisma.creation.count({
-          where: { adminId: userId, type: "VOICEOVER" },
-        }),
-        prisma.creation.count({
-          where: { adminId: userId, type: "PODCAST" },
-        }),
-      ]);
+    // Count items directly from each table
+    const [storiesCount, videosCount, voiceoversCount, podcastsCount] = await Promise.all([
+      prisma.story.count({
+        where: { workflow: { adminId: userId } },
+      }),
+      prisma.video.count({
+        where: { workflow: { adminId: userId } },
+      }),
+      prisma.voiceover.count({
+        where: { workflow: { adminId: userId } },
+      }),
+      prisma.podcast.count({
+        where: { workflow: { adminId: userId } },
+      }),
+    ]);
 
     // Fetch all stories
-    const stories = await prisma.creation.findMany({
-      where: { adminId: userId, type: "STORY" },
+    const stories = await prisma.story.findMany({
+      where: { workflow: { adminId: userId } },
       orderBy: { createdAt: "desc" },
     });
 
