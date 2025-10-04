@@ -29,7 +29,7 @@ export const createPodcast = async (req, res) => {
     const workflow = await prisma.workflow.create({
       data: {
         title: `${topic} Podcast Workflow`,
-        type: "PODCAST", 
+        type: "PODCAST",
         status: "COMPLETED",
         adminId,
       },
@@ -45,6 +45,7 @@ export const createPodcast = async (req, res) => {
         subType: type || null,
         episodes: episodes || null,
         audience: audience || null,
+        adminId: adminId,
         workflow: {
           connect: { id: workflow.id },
         },
