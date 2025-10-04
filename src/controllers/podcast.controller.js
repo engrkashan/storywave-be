@@ -30,7 +30,6 @@ export const createPodcast = async (req, res) => {
         type: "PODCAST",
         fileUrl: podcast.audioURL,
         fileType: "audio/mpeg",
-        workflowId: workflowId,
       },
     });
 

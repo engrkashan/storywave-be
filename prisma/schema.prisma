@@ -68,7 +68,7 @@ model Workflow {
   id       String       @id @default(auto()) @map("_id") @db.ObjectId
   title    String
   type     CreationType
-  status   String       @default("PENDING") 
+  status   String       @default("PENDING")
   metadata Json?
 
   admin   AdminUser @relation(fields: [adminId], references: [id])
@@ -78,18 +78,19 @@ model Workflow {
   story     Story?
   voiceover Voiceover?
   video     Video?
-  podcast   Podcast?
+  podcast   Podcast?   @relation(fields: [podcastId], references: [id])
   media     Media[]
   tasks     Task[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  podcastId String?  @db.ObjectId
 }
 
 model Input {
   id        String    @id @default(auto()) @map("_id") @db.ObjectId
   type      InputType
-  source    String   
+  source    String
   processed Boolean   @default(false)
 
   workflow   Workflow @relation(fields: [workflowId], references: [id])
@@ -99,11 +100,11 @@ model Input {
 }
 
 model Task {
-  id        String    @id @default(auto()) @map("_id") @db.ObjectId
-  step      String    
-  status    String    @default("QUEUED")
-  log       String?
-  metadata  Json?
+  id       String  @id @default(auto()) @map("_id") @db.ObjectId
+  step     String
+  status   String  @default("QUEUED")
+  log      String?
+  metadata Json?
 
   workflow   Workflow @relation(fields: [workflowId], references: [id])
   workflowId String   @db.ObjectId
@@ -113,10 +114,10 @@ model Task {
 }
 
 model Story {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  title     String
-  outline   String?
-  content   String   
+  id      String  @id @default(auto()) @map("_id") @db.ObjectId
+  title   String
+  outline String?
+  content String
 
   workflow   Workflow @relation(fields: [workflowId], references: [id])
   workflowId String   @unique @db.ObjectId
@@ -126,7 +127,7 @@ model Story {
 }
 
 model Video {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  id        String  @id @default(auto()) @map("_id") @db.ObjectId
   title     String
   fileURL   String?
   duration  Int?
@@ -140,10 +141,10 @@ model Video {
 }
 
 model Voiceover {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  script    String
-  audioURL  String?
-  voice     String?
+  id       String  @id @default(auto()) @map("_id") @db.ObjectId
+  script   String
+  audioURL String?
+  voice    String?
 
   workflow   Workflow @relation(fields: [workflowId], references: [id])
   workflowId String   @unique @db.ObjectId
@@ -153,18 +154,16 @@ model Voiceover {
 }
 
 model Podcast {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  title     String
-  audioURL  String?
-  duration  Int?
-  guests    String?  
-  script    String?
+  id       String  @id @default(auto()) @map("_id") @db.ObjectId
+  title    String
+  audioURL String?
+  duration Int?
+  guests   String?
+  script   String?
 
-  workflow   Workflow @relation(fields: [workflowId], references: [id])
-  workflowId String   @unique @db.ObjectId
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  Workflow  Workflow[]
 }
 
 model Creation {
@@ -196,11 +195,11 @@ model Integration {
 }
 
 model Media {
-  id         String    @id @default(auto()) @map("_id") @db.ObjectId
-  type       MediaType
-  fileUrl    String
-  fileType   String
-  publicId   String?
+  id       String    @id @default(auto()) @map("_id") @db.ObjectId
+  type     MediaType
+  fileUrl  String
+  fileType String
+  publicId String?
 
   workflow   Workflow? @relation(fields: [workflowId], references: [id])
   workflowId String?   @db.ObjectId
@@ -209,10 +208,10 @@ model Media {
 }
 
 model Asset {
-  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  id       String  @id @default(auto()) @map("_id") @db.ObjectId
   name     String
-  type     String   
-  url      String? 
+  type     String
+  url      String?
   metadata Json?
 
   admin   AdminUser @relation(fields: [adminId], references: [id])
