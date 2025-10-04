@@ -23,7 +23,7 @@ export const createPodcast = async (req, res) => {
       data: {
         title: podcast.title,
         script: podcast.script.join("\n\n"),
-        audioURL: podcast.audioURL, // already relative path like /podcasts/xxx.mp3
+        audioURL: podcast.audioURL,
       },
     });
 
@@ -36,14 +36,16 @@ export const createPodcast = async (req, res) => {
       },
     });
 
-    // ✅ Return the full podcast including script and public URL
+    // Return the full podcast including script and public URL
     res.json({
       success: true,
       message: "Podcast generated and stored successfully",
       data: {
-        ...savedPodcast,
-        script: podcast.script, // keep as array for frontend ease
-        publicURL: `${req.protocol}://${req.get("host")}${podcast.audioURL}`,
+        ...(savedPodcast.toObject?.() || savedPodcast),
+        script: podcast.script,
+        publicURL: `${req.protocol}://${req.get("host")}/static${
+          podcast.audioURL
+        }`,
       },
     });
   } catch (err) {
