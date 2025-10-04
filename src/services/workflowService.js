@@ -55,6 +55,7 @@ export async function runWorkflow({
       outline,
       content: script,
       workflowId: workflow.id,
+      adminId
     },
   });
 
