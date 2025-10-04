@@ -2,23 +2,21 @@ import prisma from "../config/prisma.client.js";
 
 export const getOverview = async (req, res) => {
   try {
-    const userId = req?.user?.userId;
-
-    if (!userId) return res.status(401).json({ error: "Unauthorized" });
-
+    // Fetch counts directly from each table
     const [storiesCount, videosCount, voiceoversCount, podcastsCount] =
       await Promise.all([
-        prisma.story.count({ where: { adminId: userId } }),
-        prisma.video.count({ where: { adminId: userId } }),
-        prisma.voiceover.count({ where: { adminId: userId } }),
-        prisma.podcast.count({ where: { adminId: userId } }),
+        prisma.story.count(),
+        prisma.video.count(),
+        prisma.voiceover.count(),
+        prisma.podcast.count(),
       ]);
 
+    // Fetch all items directly from each table, ordered by creation date
     const [stories, videos, voiceovers, podcasts] = await Promise.all([
-      prisma.story.findMany({ where: { adminId: userId }, orderBy: { createdAt: "desc" } }),
-      prisma.video.findMany({ where: { adminId: userId }, orderBy: { createdAt: "desc" } }),
-      prisma.voiceover.findMany({ where: { adminId: userId }, orderBy: { createdAt: "desc" } }),
-      prisma.podcast.findMany({ where: { adminId: userId }, orderBy: { createdAt: "desc" } }),
+      prisma.story.findMany({ orderBy: { createdAt: "desc" } }),
+      prisma.video.findMany({ orderBy: { createdAt: "desc" } }),
+      prisma.voiceover.findMany({ orderBy: { createdAt: "desc" } }),
+      prisma.podcast.findMany({ orderBy: { createdAt: "desc" } }),
     ]);
 
     return res.status(200).json({

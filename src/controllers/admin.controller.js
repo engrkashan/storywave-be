@@ -8,12 +8,6 @@ export const getAdminUserProfile = async (req, res) => {
 
     const admin = await prisma.adminUser.findUnique({
       where: { id: userId },
-      include: {
-        creations: true,
-        integrations: true,
-        stories: true,
-        voiceovers: true,
-      },
     });
 
     if (!admin) {
