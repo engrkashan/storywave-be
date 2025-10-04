@@ -78,7 +78,6 @@ model Workflow {
   story     Story?
   voiceover Voiceover?
   video     Video?
-  podcast   Podcast?   @relation(fields: [podcastId], references: [id])
   media     Media[]
   tasks     Task[]
 
@@ -161,9 +160,8 @@ model Podcast {
   guests   String?
   script   String?
 
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  Workflow  Workflow[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Creation {
