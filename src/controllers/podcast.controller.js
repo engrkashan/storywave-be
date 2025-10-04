@@ -3,7 +3,7 @@ import { generatePodcast } from "../services/podcastService.js";
 
 export const createPodcast = async (req, res) => {
   try {
-    const { topic, tone, length, audience, workflowId } = req.body;
+    const { topic, tone, length, audience } = req.body;
 
     if (!topic || !tone || !length) {
       return res.status(400).json({
@@ -21,9 +21,6 @@ export const createPodcast = async (req, res) => {
         title: podcast.title,
         script: podcast.script.join("\n\n"),
         audioURL: podcast.audioURL,
-        workflow: {
-          connect: { id: workflowId },
-        },
       },
     });
 
