@@ -1,57 +1,87 @@
-import prisma from "../config/prisma.client.js";
+import express from "express";
+import { generateStory } from "../services/storyService.js";
+import { runWorkflow } from "../services/workflowService.js";
+import crypto from "crypto";
 
-// GET all Stories (for current admin)
-export const getStories = async (req, res) => {
+const router = express.Router();
+
+// Helper — consistent random title
+function generateRandomTitle(storyType = "Story") {
+  const randomId = crypto.randomBytes(3).toString("hex");
+  const timestamp = Date.now();
+  return `${storyType}_${randomId}_${timestamp}`;
+}
+
+/**
+ * POST /api/story
+ * Generate story only (no workflow, no TTS).
+ */
+router.post("/", async (req, res) => {
   try {
-    const userId = req?.user?.userId;
+    const {
+      textIdea,
+      url,
+      videoFile,
+      storyType,
+      voiceTone,
+      storyLength,
+      admin,
+    } = req.body;
 
-    const stories = await prisma.story.findMany({
-      where: { adminId: userId },
-      orderBy: { createdAt: "desc" },
-    });
-
-    return res.status(200).json(stories);
-  } catch (error) {
-    console.error("Get Stories Error:", error);
-    return res.status(500).json({ error: "Failed to fetch stories" });
-  }
-};
-
-// GET single Story
-export const getStoryById = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const story = await prisma.story.findUnique({
-      where: { id },
-    });
-
-    if (!story) {
-      return res.status(404).json({ error: "Story not found" });
+    if (!textIdea && !url && !videoFile) {
+      return res
+        .status(400)
+        .json({ error: "You must provide textIdea, url, or videoFile." });
     }
 
-    return res.status(200).json(story);
-  } catch (error) {
-    console.error("Get Story Error:", error);
-    return res.status(500).json({ error: "Failed to fetch story" });
+    const { outline, script } = await generateStory({
+      textIdea,
+      url,
+      videoFile,
+      storyType,
+      voiceTone,
+      storyLength,
+      admin,
+    });
+
+    res.json({ outline, script });
+  } catch (err) {
+    console.error("Error generating story:", err);
+    res.status(500).json({ error: "Failed to generate story" });
   }
-};
+});
 
-// DELETE Story
-export const deleteStory = async (req, res) => {
+/**
+ * POST /api/story/workflow
+ * Full pipeline: generate story → save DB → voiceover → images → video.
+ */
+router.post("/workflow", async (req, res) => {
   try {
-    const { id } = req.params;
+    const adminId = req.user?.userId; 
+    const { title, url, videoFile, textIdea, storyType } = req.body;
 
-    const existing = await prisma.story.findUnique({ where: { id } });
-    if (!existing) {
-      return res.status(404).json({ error: "Story not found" });
+    if (!textIdea && !url && !videoFile) {
+      return res
+        .status(400)
+        .json({ error: "You must provide textIdea, url, or videoFile." });
     }
 
-    await prisma.story.delete({ where: { id } });
+    const finalTitle = title || generateRandomTitle(storyType);
 
-    return res.status(200).json({ message: "Story deleted successfully" });
-  } catch (error) {
-    console.error("Delete Story Error:", error);
-    return res.status(500).json({ error: "Failed to delete story" });
+    const result = await runWorkflow({
+      adminId,
+      title: finalTitle,
+      url,
+      videoFile,
+      textIdea,
+      storyType,
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error("Error running workflow:", err);
+    res.status(500).json({ error: err.message || "Workflow failed" });
   }
-};
+});
+
+export default router;

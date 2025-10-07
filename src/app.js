@@ -30,6 +30,7 @@ import adminRoutes from "./routes/admin.routes.js";
 import podcastRoutes from "./routes/podcast.routes.js";
 import creationsRoutes from "./routes/creations.route.js";
 import overviewRoutes from "./routes/overview.routes.js";
+import voiceCloneRoutes from "./routes/voice.clone.routes.js";
 
 app.use("/api/auth", authRoutes);
 app.use("/api/story", storyRoutes);
@@ -37,6 +38,7 @@ app.use("/api/overview", overviewRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/podcast", podcastRoutes);
 app.use("/api/creations", creationsRoutes);
+app.use("/api/voice-clone", voiceCloneRoutes);
 
 // dns configuration
 dns.setDefaultResultOrder("ipv4first");

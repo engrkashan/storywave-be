@@ -1,11 +1,12 @@
 import express from "express";
+import crypto from "crypto";
 import { generateStory } from "../services/storyService.js";
 import { runWorkflow } from "../services/workflowService.js";
-import crypto from "crypto";
+import { verifyToken } from "../middlewares/auth.js";
 
 const router = express.Router();
 
-// Helper to generate random title
+// Helper — consistent random title
 function generateRandomTitle(storyType = "Story") {
   const randomId = crypto.randomBytes(3).toString("hex");
   const timestamp = Date.now();
@@ -22,9 +23,9 @@ router.post("/", async (req, res) => {
       textIdea,
       url,
       videoFile,
-      storyType,
-      voiceTone,
-      storyLength,
+      storyType = "Story",
+      voiceTone = "neutral",
+      storyLength = "medium",
       admin,
     } = req.body;
 
@@ -44,20 +45,35 @@ router.post("/", async (req, res) => {
       admin,
     });
 
-    res.json({ outline, script });
+    return res.status(200).json({ outline, script });
   } catch (err) {
     console.error("Error generating story:", err);
-    res.status(500).json({ error: "Failed to generate story" });
+    return res
+      .status(500)
+      .json({ error: err.message || "Failed to generate story" });
   }
 });
 
 /**
  * POST /api/story/workflow
- * Full pipeline: generate story → save DB → voiceover → save → video.
+ * Full pipeline: story → DB → voiceover → images → video.
  */
-router.post("/workflow", async (req, res) => {
+router.post("/workflow", verifyToken, async (req, res) => {
   try {
-    const { adminId, title, url, videoFile, textIdea, storyType } = req.body;
+    const adminId = req.user?.userId;
+    const {
+      title,
+      url,
+      videoFile,
+      textIdea,
+      storyType = "Story",
+      voiceTone = "neutral",
+      storyLength = "medium",
+    } = req.body;
+
+    if (!adminId) {
+      return res.status(401).json({ error: "Unauthorized: missing user" });
+    }
 
     if (!textIdea && !url && !videoFile) {
       return res
@@ -65,7 +81,6 @@ router.post("/workflow", async (req, res) => {
         .json({ error: "You must provide textIdea, url, or videoFile." });
     }
 
-    // Generate title if not provided
     const finalTitle = title || generateRandomTitle(storyType);
 
     const result = await runWorkflow({
@@ -75,12 +90,14 @@ router.post("/workflow", async (req, res) => {
       videoFile,
       textIdea,
       storyType,
+      voiceTone,
+      storyLength,
     });
 
-    res.json(result);
+    return res.status(200).json(result);
   } catch (err) {
     console.error("Error running workflow:", err);
-    res.status(500).json({ error: "Failed to run workflow" });
+    return res.status(500).json({ error: err.message || "Workflow failed" });
   }
 });
 
