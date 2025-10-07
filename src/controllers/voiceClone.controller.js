@@ -1,98 +1,169 @@
-import prisma from "../config/prisma.client.js";
-import path from "path";
 import fs from "fs";
-import { spawn } from "child_process";
+import path from "path";
+import { Client } from "@gradio/client";
+import prisma from "../config/prisma.client.js";
 
-/**
- * Clone a user’s voice using myshell-ai/OpenVoice
- */
 export const cloneVoice = async (req, res) => {
+  const transaction = prisma.$transaction.bind(prisma);
+
   try {
-    const { adminId, voiceName } = req.body;
+    const adminId = req.user?.userId;
+    const text = req.body.text || "Hello, this is your cloned voice!";
     const voiceSample = req.file;
 
-    if (!adminId || !voiceSample) {
+    if (!adminId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: adminId missing from token.",
+      });
+    }
+
+    if (!voiceSample) {
       return res.status(400).json({
         success: false,
-        message: "adminId and voice sample are required.",
+        message: "Voice sample is required.",
       });
     }
 
-    const uploadDir = path.join(process.cwd(), "public", "voices");
-    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+    // ====== Save temp file ======
+    const tempDir = path.join(process.cwd(), "tmp_uploads");
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-    const inputPath = path.join(
-      uploadDir,
+    const tempPath = path.join(
+      tempDir,
       `${Date.now()}_${voiceSample.originalname}`
     );
-    fs.writeFileSync(inputPath, voiceSample.buffer);
+    fs.writeFileSync(tempPath, voiceSample.buffer);
 
-    const modelOutput = path.join(uploadDir, `${Date.now()}_cloned_voice`);
-
-    console.log("🧠 Running OpenVoice cloning model...");
-    const processClone = spawn("python", [
-      "scripts/clone_voice.py",
-      "--input",
-      inputPath,
-      "--output",
-      modelOutput,
-    ]);
-
-    await new Promise((resolve, reject) => {
-      processClone.on("close", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error("Voice cloning failed"));
-      });
+    // ====== Prepare Blob ======
+    const audioBlob = new Blob([fs.readFileSync(tempPath)], {
+      type: voiceSample.mimetype || "audio/wav",
     });
 
-    const clonedFile = `${modelOutput}.pth`;
-    if (!fs.existsSync(clonedFile)) {
-      return res.status(500).json({
-        success: false,
-        message: "Voice cloning output not found.",
-      });
-    }
-
-    // Create a workflow entry
-    const workflow = await prisma.workflow.create({
-      data: {
-        title: `Voice Clone - ${voiceName || "Custom Voice"}`,
-        type: "VOICEOVER",
-        status: "COMPLETED",
-        adminId,
-      },
+    // ====== Connect to model ======
+    const client = await Client.connect("tonyassi/voice-clone", {
+      hf_token: process.env.HF_API_KEY,
     });
 
-    // Save voice asset record
-    const savedVoice = await prisma.asset.create({
-      data: {
-        name: voiceName || `Voice_${Date.now()}`,
-        type: "VOICE_MODEL",
-        url: `/voices/${path.basename(clonedFile)}`,
-        metadata: {
-          sourceFile: voiceSample.originalname,
+    // ====== Call the model ======
+    const result = await client.predict("/predict", {
+      text,
+      audio: audioBlob,
+    });
+
+    // Extract URL from result (it’s an object)
+    const output = result?.data?.[0];
+    const audioURL =
+      typeof output === "string" ? output : output?.url || output?.path || null;
+
+    if (!audioURL || typeof audioURL !== "string")
+      throw new Error("Model did not return a valid audio URL");
+
+    // ====== Store in DB ======
+    const voiceRecord = await transaction(async (tx) => {
+      const workflow = await tx.workflow.create({
+        data: {
+          title: `Voice Clone - ${new Date().toISOString()}`,
+          type: "VOICEOVER",
+          status: "COMPLETED",
+          adminId,
+          metadata: { source: "HuggingFace - tonyassi/voice-clone" },
         },
-        adminId,
-      },
+      });
+
+      const voiceover = await tx.voiceover.create({
+        data: {
+          script: text,
+          audioURL,
+          voice: voiceSample.originalname,
+          adminId,
+          workflowId: workflow.id,
+        },
+      });
+
+      await tx.media.create({
+        data: {
+          type: "AUDIO",
+          fileUrl: audioURL,
+          fileType: "audio/wav",
+          workflowId: workflow.id,
+        },
+      });
+
+      await tx.creation.create({
+        data: {
+          type: "VOICEOVER",
+          title: `Voice Clone - ${voiceSample.originalname}`,
+          content: text,
+          mediaURL: audioURL,
+          adminId,
+          metadata: { workflowId: workflow.id },
+        },
+      });
+
+      return { workflow, voiceover };
     });
 
-    res.json({
+    fs.unlinkSync(tempPath);
+
+    return res.status(200).json({
       success: true,
       message: "Voice cloned successfully",
       data: {
-        voiceName: savedVoice.name,
-        modelURL: `${req.protocol}://${req.get("host")}/static${
-          savedVoice.url
-        }`,
-        workflowId: workflow.id,
+        audioURL,
+        workflowId: voiceRecord.workflow.id,
+        voiceoverId: voiceRecord.voiceover.id,
       },
     });
-  } catch (err) {
-    console.error("❌ Voice cloning failed:", err);
-    res.status(500).json({
+  } catch (error) {
+    console.error("Voice cloning failed:", error);
+    return res.status(500).json({
       success: false,
-      message: "Failed to clone voice",
-      error: err.message,
+      message: "Voice cloning failed",
+      error: error.message,
+    });
+  }
+};
+
+export const getVoiceClones = async (req, res) => {
+  try {
+    const adminId = req.user?.userId;
+
+    if (!adminId) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing adminId in token.",
+      });
+    }
+
+    const voiceovers = await prisma.voiceover.findMany({
+      where: { adminId },
+      orderBy: { createdAt: "desc" },
+      include: {
+        workflow: {
+          include: {
+            media: true,
+          },
+        },
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Voice clones fetched successfully.",
+      data: voiceovers.map((v) => ({
+        id: v.id,
+        audioURL: v.audioURL,
+        voice: v.voice,
+        createdAt: v.createdAt,
+      })),
+    });
+  } catch (error) {
+    console.error("Failed to fetch voice clones:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch voice clones",
+      error: error.message,
     });
   }
 };
