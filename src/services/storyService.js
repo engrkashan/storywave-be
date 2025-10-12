@@ -23,20 +23,20 @@ export async function generateStory({
 
   // 2️⃣ Prompt
   const prompt = `
-You are a professional creative writer.
-Create a ${storyLength}-length, immersive, and original **${storyType}** story.
-Tone: ${voiceTone}.
+      You are a professional creative writer.
+      Create a ${storyLength}-length, immersive, and original **${storyType}** story.
+      Tone: ${voiceTone}.
 
-Input:
-${inputText}
+      Input:
+      ${inputText}
 
-Format strictly as:
+      Format strictly as:
 
-Outline:
-- bullet points
+      Outline:
+      - bullet points
 
-Script:
-Full story text
+      Script:
+      Full story text
 `;
 
   // 3️⃣ OpenAI with retry

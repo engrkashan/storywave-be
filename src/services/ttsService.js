@@ -1,5 +1,5 @@
-import OpenAI from "openai";
 import fs from "fs";
+import OpenAI from "openai";
 import path from "path";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
