@@ -128,9 +128,7 @@ export async function runWorkflow({
     const videoPath = path.join(videosDir, videoFilename);
 
     await createVideo(
-      imageResults.map((url) =>
-        path.join(process.cwd(), "public", url.replace(/^\//, ""))
-      ),
+      imageResults,
       path.join(process.cwd(), "public", "stories", voiceFilename),
       videoPath
     );
