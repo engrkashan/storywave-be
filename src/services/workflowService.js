@@ -102,9 +102,17 @@ export async function runWorkflow({
     const scenes = script.split(/\n{2,}/).filter(Boolean);
     const imageResults = [];
 
+    // for (let i = 0; i < scenes.length; i++) {
+    //   log(`🧩 Generating image for scene ${i + 1}/${scenes.length}...`);
+    //   const imageUrl = await generateImage(`Scene ${i + 1}: ${scenes[i]}`);
+    //   imageResults.push(imageUrl);
+    //   log(`✅ Scene ${i + 1} image generated.`);
     for (let i = 0; i < scenes.length; i++) {
       log(`🧩 Generating image for scene ${i + 1}/${scenes.length}...`);
-      const imageUrl = await generateImage(`Scene ${i + 1}: ${scenes[i]}`);
+      const imageUrl = await generateImage(
+        `An artistic cinematic scene based on this description: ${scenes[i+1]}`,
+        i + 1
+      );
       imageResults.push(imageUrl);
       log(`✅ Scene ${i + 1} image generated.`);
 
