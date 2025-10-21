@@ -3,59 +3,50 @@ import cloudinary from "../config/cloudinary.config.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-function cleanScript(rawScript) {
-  if (typeof rawScript !== "string") rawScript = String(rawScript || "");
-  return rawScript
+function cleanScript(script) {
+  return script
     .replace(/\*\*/g, "")
     .replace(/\*/g, "")
-    .replace(/#+\s/g, "")
     .replace(/\[.*?\]/g, "")
-    .replace(/Target Audience:.*\n?/gi, "")
-    .replace(/Length:.*\n?/gi, "")
-    .replace(/End of Script/gi, "")
-    .replace(/\n{2,}/g, "\n\n")
+    .replace(/\(Pause\)/g, ". ")
     .trim();
 }
 
 /**
- * Generate voiceover → upload to Cloudinary → return Cloudinary URL
+ * Generates TTS audio and uploads to Cloudinary.
+ * Handles long text by chunking automatically.
  */
 export async function generateVoiceover(script, filename, voice = "onyx") {
-  const cleaned = cleanScript(script);
-  const selectedVoice = voice || "onyx";
+  const text = cleanScript(script);
+  const CHUNK_SIZE = 1000; 
+  const chunks = text.match(new RegExp(`.{1,${CHUNK_SIZE}}(\\s|$)`, "g")) || [];
 
-  try {
-    // Generate speech from OpenAI TTS
-    const response = await openai.audio.speech.create({
+  const buffers = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    console.log(`🔊 TTS chunk ${i + 1}/${chunks.length}`);
+    const res = await openai.audio.speech.create({
       model: "tts-1",
-      voice: selectedVoice,
-      input: cleaned,
+      voice,
+      input: chunks[i],
     });
-
-    // Convert response to buffer
-    const buffer = Buffer.from(await response.arrayBuffer());
-
-    // Upload buffer directly to Cloudinary as a raw (audio) file
-    const uploadRes = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        {
-          folder: "podcasts",
-          resource_type: "video", // Cloudinary treats audio under 'video' type
-          public_id: filename.replace(".mp3", ""),
-          format: "mp3",
-        },
-        (err, result) => {
-          if (err) reject(err);
-          else resolve(result);
-        }
-      );
-      stream.end(buffer);
-    });
-
-    console.log(`✅ Uploaded to Cloudinary: ${uploadRes.secure_url}`);
-    return uploadRes.secure_url;
-  } catch (error) {
-    console.error(`❌ TTS Generation/Upload failed for ${filename}:`, error);
-    throw new Error(`TTS generation failed: ${error.message}`);
+    buffers.push(Buffer.from(await res.arrayBuffer()));
   }
+
+  const fullBuffer = Buffer.concat(buffers);
+
+  const uploadRes = await new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: "podcasts",
+        resource_type: "video",
+        public_id: filename.replace(".mp3", ""),
+        format: "mp3",
+      },
+      (err, result) => (err ? reject(err) : resolve(result))
+    );
+    stream.end(fullBuffer);
+  });
+
+  return uploadRes.secure_url;
 }
