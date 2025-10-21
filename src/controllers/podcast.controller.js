@@ -1,6 +1,7 @@
 import prisma from "../config/prisma.client.js";
 import { CreationType } from "@prisma/client";
-import { generateLongPodcastEpisode } from "../services/podcastService.js"; // updated generator
+
+import { generateLongPodcastEpisode } from "../services/podcastService.js"; 
 
 /**
  * Create a long-form podcast (30–40 min) with structured segments
