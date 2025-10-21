@@ -36,3 +36,5 @@ Thumbs.db
 .next/
 out/
 tmp/
+
+public/
