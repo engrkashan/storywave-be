@@ -1,13 +1,13 @@
 import fs from "fs";
-import OpenAI from "openai";
 import path from "path";
-import { mergeAudioFiles, getAudioDuration } from "./audioService.js";
+import OpenAI from "openai";
+import { getAudioDuration } from "./audioService.js";
 import { generateVoiceover } from "./ttsService.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
- * Generate multiple script sections with enhanced delivery instructions.
+ * Generate multiple script sections (one per episode)
  */
 export async function generatePodcastScript({
   topic,
@@ -17,6 +17,7 @@ export async function generatePodcastScript({
   episodes,
 }) {
   let sections = episodes || 3;
+
   if (typeof length === "string") {
     if (length === "short") sections = 2;
     if (length === "medium") sections = 4;
@@ -24,17 +25,21 @@ export async function generatePodcastScript({
   }
 
   const scripts = [];
+
   for (let i = 1; i <= sections; i++) {
     const prompt = `
-      You are a world-class podcast host.
-      Write section ${i} of a ${sections}-part podcast on "${topic}".
+      You are an expert storyteller and conversational writer.
+      Write episode ${i} of a ${sections}-part podcast on "${topic}".
       Tone: ${tone}.
       Audience: ${audience || "general listeners"}.
-      Conversational and natural flow only.
-      STRICT: No speaker labels, no production notes.
-      Use delivery cues like (Pause), (Emphasis).
-      Around 500 words.
-      End with a hook for the next section unless last.
+      Conversational, natural, immersive style — like someone thinking out loud or discussing ideas with energy and flow.
+
+      ❌ DO NOT start with greetings, intros, or phrases like "Welcome", "In this episode", "Thanks for listening", etc.
+      ✅ Start immediately with the main discussion — like jumping straight into the topic mid-conversation.
+      No speaker labels, no production directions.
+      Use subtle natural cues like (Pause), (Emphasis) where they enhance flow.
+      Aim for around 500 words.
+      If this is not the last episode, end with a subtle teaser leading into the next one.
     `;
 
     const response = await openai.chat.completions.create({
@@ -45,11 +50,13 @@ export async function generatePodcastScript({
 
     scripts.push(response.choices[0].message.content.trim());
   }
+
   return scripts;
 }
 
 /**
- * Full pipeline: scripts -> TTS per section -> merge -> final file -> duration
+ * Full generation pipeline:
+ * scripts -> voiceover per episode -> store metadata
  */
 export async function generatePodcast({
   topic,
@@ -58,7 +65,7 @@ export async function generatePodcast({
   audience,
   episodes,
 }) {
-  console.log("Starting script generation...");
+  console.log("Starting podcast generation...");
   const scripts = await generatePodcastScript({
     topic,
     tone,
@@ -70,41 +77,31 @@ export async function generatePodcast({
   const outputDir = path.join(process.cwd(), "public", "podcasts");
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-  const ttsFiles = [];
   const selectedVoice = "onyx";
-
-  console.log(
-    `Generating ${scripts.length} voiceover sections using ${selectedVoice} voice...`
-  );
+  const episodeData = [];
 
   for (let i = 0; i < scripts.length; i++) {
-    const filename = `section_${i + 1}_${Date.now()}.mp3`;
+    const filename = `podcast_episode_${i + 1}_${Date.now()}.mp3`;
     const ttsPath = await generateVoiceover(
       scripts[i],
       filename,
       selectedVoice
     );
-    ttsFiles.push(ttsPath);
+
+    const duration = await getAudioDuration(ttsPath);
+
+    episodeData.push({
+      title: `${topic} — Episode ${i + 1}`,
+      script: scripts[i],
+      audioURL: `/podcasts/${path.basename(ttsPath)}`,
+      duration,
+      episodeNo: i + 1,
+    });
   }
-
-  // Merge narration sections into one file
-  console.log("Merging audio sections...");
-  const finalFile = path.join(outputDir, `podcast_${Date.now()}.mp3`);
-  await mergeAudioFiles(ttsFiles, finalFile);
-
-  // Clean up temporary section files
-  ttsFiles.forEach((file) => {
-    if (fs.existsSync(file)) fs.unlinkSync(file);
-  });
-  console.log("Temporary section files removed.");
-
-  // Extract duration
-  const duration = await getAudioDuration(finalFile);
 
   return {
     title: `${topic} Podcast`,
-    script: scripts,
-    audioURL: `/podcasts/${path.basename(finalFile)}`,
-    duration,
+    audience,
+    episodes: episodeData,
   };
 }

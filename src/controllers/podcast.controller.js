@@ -3,7 +3,7 @@ import { CreationType } from "@prisma/client";
 import { generatePodcast } from "../services/podcastService.js";
 
 /**
- * Create a podcast
+ * Create a new podcast (with episodes)
  */
 export const createPodcast = async (req, res) => {
   try {
@@ -16,8 +16,8 @@ export const createPodcast = async (req, res) => {
       });
     }
 
-    // Generate podcast files
-    const podcast = await generatePodcast({
+    // 1️⃣ Generate all episodes (scripts + audio)
+    const generated = await generatePodcast({
       topic,
       tone,
       length,
@@ -25,54 +25,55 @@ export const createPodcast = async (req, res) => {
       episodes,
     });
 
-    // Create workflow
+    // 2️⃣ Create workflow
     const workflow = await prisma.workflow.create({
       data: {
         title: `${topic} Podcast Workflow`,
-        type: "PODCAST",
+        type: CreationType.PODCAST,
         status: "COMPLETED",
         adminId,
       },
     });
 
-    // Save podcast record
+    // 3️⃣ Create main podcast entry
     const savedPodcast = await prisma.podcast.create({
       data: {
-        title: podcast.title,
-        script: podcast.script.join("\n\n"),
-        audioURL: podcast.audioURL,
-        duration: podcast.duration || null,
+        title: generated.title,
         subType: type || null,
-        episodes: episodes || null,
         audience: audience || null,
-        adminId: adminId,
-        workflow: {
-          connect: { id: workflow.id },
-        },
-      },
-    });
-
-    // Save media reference
-    await prisma.workflow.create({
-      data: {
-        title: `${topic} Podcast Workflow`,
-        type: CreationType.PODCAST,
-        subType: type || null,
-        status: "COMPLETED",
         adminId,
+        workflowId: workflow.id,
       },
     });
 
+    // 4️⃣ Create all episode records
+    const episodeRecords = await Promise.all(
+      generated.episodes.map((ep) =>
+        prisma.episode.create({
+          data: {
+            title: ep.title,
+            script: ep.script,
+            audioURL: ep.audioURL,
+            duration: ep.duration,
+            episodeNo: ep.episodeNo,
+            podcastId: savedPodcast.id,
+          },
+        })
+      )
+    );
+
+    // 5️⃣ Respond with success
     res.json({
       success: true,
-      message: "Podcast generated and stored successfully",
+      message: "Podcast with episodes generated successfully",
       data: {
-        ...savedPodcast,
-        script: podcast.script,
-        publicURL: `${req.protocol}://${req.get("host")}/static${
-          podcast.audioURL
-        }`,
-        workflowId: workflow.id,
+        podcast: savedPodcast,
+        episodes: episodeRecords.map((ep) => ({
+          ...ep,
+          publicURL: `${req.protocol}://${req.get("host")}/static${
+            ep.audioURL
+          }`,
+        })),
       },
     });
   } catch (err) {
@@ -86,22 +87,28 @@ export const createPodcast = async (req, res) => {
 };
 
 /**
- * Get all podcasts
+ * Fetch all podcasts with their episodes
  */
 export const getPodcasts = async (req, res) => {
   try {
     const podcasts = await prisma.podcast.findMany({
       orderBy: { createdAt: "desc" },
+      include: {
+        episodes: true,
+      },
     });
 
-    const withUrls = podcasts.map((p) => ({
+    const formatted = podcasts.map((p) => ({
       ...p,
-      publicURL: `${req.protocol}://${req.get("host")}/static${p.audioURL}`,
+      episodes: p.episodes.map((ep) => ({
+        ...ep,
+        publicURL: `${req.protocol}://${req.get("host")}/static${ep.audioURL}`,
+      })),
     }));
 
     res.json({
       success: true,
-      data: withUrls,
+      data: formatted,
     });
   } catch (err) {
     console.error("Error fetching podcasts:", err);

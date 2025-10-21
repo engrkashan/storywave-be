@@ -153,22 +153,29 @@ model Workflow {
 }
 
 model Podcast {
-  id       String  @id @default(auto()) @map("_id") @db.ObjectId
-  title    String
-  audioURL String?
-  duration Int?
-  guests   String?
-  script   String?
-  subType  String?
-  episodes Int?
-  audience String?
-
-  workflow   Workflow @relation(fields: [workflowId], references: [id])
-  workflowId String   @unique @db.ObjectId
-  adminId    String   @db.ObjectId
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  title      String
+  audience   String?
+  subType    String?
+  adminId    String    @db.ObjectId
+  workflow   Workflow  @relation(fields: [workflowId], references: [id])
+  workflowId String    @unique @db.ObjectId
+  episodes   Episode[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model Episode {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  title     String
+  script    String
+  audioURL  String
+  duration  Int?
+  episodeNo Int
+  podcast   Podcast  @relation(fields: [podcastId], references: [id])
+  podcastId String   @db.ObjectId
+  createdAt DateTime @default(now())
 }
 
 model Creation {
