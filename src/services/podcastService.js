@@ -1,5 +1,3 @@
-import fs from "fs";
-import path from "path";
 import OpenAI from "openai";
 import { getAudioDuration } from "./audioService.js";
 import { generateVoiceover } from "./ttsService.js";
@@ -33,13 +31,10 @@ export async function generatePodcastScript({
       Tone: ${tone}.
       Audience: ${audience || "general listeners"}.
       Conversational, natural, immersive style — like someone thinking out loud or discussing ideas with energy and flow.
-
-      ❌ DO NOT start with greetings, intros, or phrases like "Welcome", "In this episode", "Thanks for listening", etc.
-      ✅ Start immediately with the main discussion — like jumping straight into the topic mid-conversation.
-      No speaker labels, no production directions.
-      Use subtle natural cues like (Pause), (Emphasis) where they enhance flow.
-      Aim for around 500 words.
-      If this is not the last episode, end with a subtle teaser leading into the next one.
+      ❌ No greetings or intro phrases.
+      ✅ Jump straight into the discussion.
+      Use (Pause), (Emphasis) where it improves rhythm.
+      Around 500 words.
     `;
 
     const response = await openai.chat.completions.create({
@@ -55,8 +50,7 @@ export async function generatePodcastScript({
 }
 
 /**
- * Full generation pipeline:
- * scripts -> voiceover per episode -> store metadata
+ * Full generation pipeline: scripts → voiceover → Cloudinary → metadata
  */
 export async function generatePodcast({
   topic,
@@ -65,7 +59,7 @@ export async function generatePodcast({
   audience,
   episodes,
 }) {
-  console.log("Starting podcast generation...");
+  console.log("🎙️ Starting podcast generation...");
   const scripts = await generatePodcastScript({
     topic,
     tone,
@@ -74,26 +68,24 @@ export async function generatePodcast({
     episodes,
   });
 
-  const outputDir = path.join(process.cwd(), "public", "podcasts");
-  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-
   const selectedVoice = "onyx";
   const episodeData = [];
 
   for (let i = 0; i < scripts.length; i++) {
     const filename = `podcast_episode_${i + 1}_${Date.now()}.mp3`;
-    const ttsPath = await generateVoiceover(
+    const audioURL = await generateVoiceover(
       scripts[i],
       filename,
       selectedVoice
     );
 
-    const duration = await getAudioDuration(ttsPath);
+    // Optional: Get duration via ffmpeg if you want to include it
+    const duration = await getAudioDuration(audioURL).catch(() => 0);
 
     episodeData.push({
       title: `${topic} — Episode ${i + 1}`,
       script: scripts[i],
-      audioURL: `/podcasts/${path.basename(ttsPath)}`,
+      audioURL, 
       duration,
       episodeNo: i + 1,
     });
