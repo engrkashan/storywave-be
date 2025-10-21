@@ -25,8 +25,9 @@ Tone: ${tone}.
 Audience: ${audience || "general"}.
 Break it into 6–8 major segments.
 Each segment should include 3–5 bullet points describing talking ideas.
-
-Return *only valid JSON array*, no explanations, no markdown, no intro text.
+Do not add greetings, introductions, or music cues.
+Do not include filler text or unrelated content.
+Return only the script for this segment, concise and directly on topic.
 Format:
 [
   { "segment": "Intro: Setting the Stage", "points": ["...", "..."] },
@@ -45,13 +46,12 @@ Format:
 
       let content = res.choices[0].message.content.trim();
 
-      // 🧹 Strip markdown/code fences or extra text
       content = content
         .replace(/^```json\s*/i, "")
         .replace(/^```/, "")
         .replace(/```$/g, "")
-        .replace(/^[^{\[]*/, "") // remove anything before first [ or {
-        .replace(/[^}\]]*$/g, "") // remove anything after last ] or }
+        .replace(/^[^{\[]*/, "")
+        .replace(/[^}\]]*$/g, "")
         .trim();
 
       const outline = JSON.parse(content);
@@ -63,7 +63,6 @@ Format:
         throw new Error("Invalid structure");
       }
 
-      console.log(`✅ Parsed outline with ${outline.length} segments.`);
       return outline;
     } catch (err) {
       console.warn(
