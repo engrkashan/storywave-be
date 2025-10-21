@@ -24,14 +24,15 @@ Create a detailed outline for a ${length || 40}-minute podcast on "${topic}".
 Tone: ${tone}.
 Audience: ${audience || "general"}.
 Break it into 6–8 major segments.
-Each segment should include 3–5 bullet points describing talking ideas.
-Do not add greetings, introductions, or music cues.
-Do not include filler text or unrelated content.
-Return only the script for this segment, concise and directly on topic.
-Format:
+Each segment should have 3–5 concise bullet points.
+Do NOT include:
+- greetings or welcomes
+- music cues
+- narration stage directions
+- filler or unrelated content
+Return ONLY valid JSON in this format:
 [
-  { "segment": "Intro: Setting the Stage", "points": ["...", "..."] },
-  { "segment": "Deep Dive into X", "points": ["...", "..."] },
+  { "segment": "Segment Title", "points": ["Point 1", "Point 2", "..."] },
   ...
 ]
 `;
@@ -45,15 +46,10 @@ Format:
       });
 
       let content = res.choices[0].message.content.trim();
-
       content = content
         .replace(/^```json\s*/i, "")
-        .replace(/^```/, "")
         .replace(/```$/g, "")
-        .replace(/^[^{\[]*/, "")
-        .replace(/[^}\]]*$/g, "")
         .trim();
-
       const outline = JSON.parse(content);
 
       if (
@@ -66,12 +62,11 @@ Format:
       return outline;
     } catch (err) {
       console.warn(
-        `⚠️ Outline parsing failed (Attempt ${attempt}/${retries}):`,
+        `⚠️ Outline parsing failed (Attempt ${attempt}):`,
         err.message
       );
-      if (attempt === retries) {
+      if (attempt === retries)
         throw new Error("Invalid outline format from model");
-      }
     }
   }
 }
@@ -86,24 +81,37 @@ export async function generateSegmentScript({
   segment,
 }) {
   const prompt = `
-You are a skilled podcast narrator.
-Write the narration for the segment "${segment.segment}" 
-from a podcast on "${topic}".
+You are a professional podcast writer.
+Write the narration script for the segment "${
+    segment.segment
+  }" of a podcast on "${topic}".
 Tone: ${tone}.
 Audience: ${audience}.
-Focus on these ideas: ${segment.points.join(", ")}.
-Style: conversational, natural, immersive — like someone thinking aloud.
-Include light pacing cues like (Pause), (Emphasis), (Beat).
+Focus only on these ideas: ${segment.points.join(", ")}.
+Do NOT include:
+- greetings or welcomes
+- music cues or sound directions
+- narration stage directions
+- filler or unrelated content
+Start directly with the topic content.
 Length: ~900–1100 words.
+Return only the text content.
 `;
 
   const res = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
-    temperature: 0.9,
+    temperature: 0.8,
   });
 
-  return res.choices[0].message.content.trim();
+  // Optional post-processing to remove stray stage directions or brackets
+  let script = res.choices[0].message.content.trim();
+  script = script
+    .split("\n")
+    .filter((line) => !/^[\[\🎙️]/.test(line))
+    .join("\n");
+
+  return script;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -115,7 +123,6 @@ export async function mergeAudioFiles(tempDir, outputFile) {
     .filter((f) => f.endsWith(".mp3"))
     .map((f) => path.join(tempDir, f))
     .sort();
-
   if (!files.length) throw new Error("No audio files found to merge.");
 
   const listPath = path.join(tempDir, "list.txt");
@@ -135,7 +142,7 @@ export async function mergeAudioFiles(tempDir, outputFile) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 🎧 STEP 4 — Full Long-Form Podcast Generator (with final Cloudinary upload)*/
+/* 🎧 STEP 4 — Full Long-Form Podcast Generator                               */
 /* -------------------------------------------------------------------------- */
 export async function generateLongPodcastEpisode({
   topic,
@@ -149,7 +156,7 @@ export async function generateLongPodcastEpisode({
     `🎧 Generating long-form podcast: ${topic} (Episode ${episodeNo})`
   );
 
-  // 1️⃣ Generate structured outline
+  // Generate outline
   const outline = await generatePodcastOutline({
     topic,
     tone,
@@ -157,13 +164,10 @@ export async function generateLongPodcastEpisode({
     length,
   });
 
-  // 2️⃣ Create temp directory
   const tempDir = path.resolve(`./tmp_${Date.now()}`);
   fs.mkdirSync(tempDir, { recursive: true });
-
   const segments = [];
 
-  // 3️⃣ Generate each segment
   for (let i = 0; i < outline.length; i++) {
     const segment = outline[i];
     console.log(`📝 Segment ${i + 1}/${outline.length}: ${segment.segment}`);
@@ -179,27 +183,17 @@ export async function generateLongPodcastEpisode({
     const audioUrl = await generateVoiceover(script, filename, voice);
     const duration = await getAudioDuration(audioUrl).catch(() => 0);
 
-    // Download from Cloudinary for merging
     const localPath = path.join(tempDir, filename);
     const response = await fetch(audioUrl);
     const arrayBuffer = await response.arrayBuffer();
     fs.writeFileSync(localPath, Buffer.from(arrayBuffer));
 
-    segments.push({
-      title: segment.segment,
-      script,
-      audioUrl,
-      duration,
-    });
+    segments.push({ title: segment.segment, script, audioUrl, duration });
   }
 
-  // 4️⃣ Merge all segment mp3s
   const mergedFile = path.join(tempDir, `final_episode_${episodeNo}.mp3`);
   await mergeAudioFiles(tempDir, mergedFile);
 
-  console.log(`✅ Merged final episode: ${mergedFile}`);
-
-  // 5️⃣ Upload merged file to Cloudinary
   console.log(`☁️ Uploading merged file to Cloudinary...`);
   const uploadRes = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
@@ -219,7 +213,6 @@ export async function generateLongPodcastEpisode({
 
   const totalDuration = segments.reduce((acc, s) => acc + (s.duration || 0), 0);
 
-  // Clean temp files
   try {
     fs.rmSync(tempDir, { recursive: true, force: true });
   } catch (err) {
