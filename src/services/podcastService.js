@@ -135,7 +135,7 @@ export async function mergeAudioFiles(tempDir, outputFile) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 🎧 STEP 4 — Full Long-Form Podcast Generator                               */
+/* 🎧 STEP 4 — Full Long-Form Podcast Generator (with final Cloudinary upload)*/
 /* -------------------------------------------------------------------------- */
 export async function generateLongPodcastEpisode({
   topic,
@@ -163,7 +163,7 @@ export async function generateLongPodcastEpisode({
 
   const segments = [];
 
-  // 3️⃣ Process each segment
+  // 3️⃣ Generate each segment
   for (let i = 0; i < outline.length; i++) {
     const segment = outline[i];
     console.log(`📝 Segment ${i + 1}/${outline.length}: ${segment.segment}`);
@@ -193,13 +193,38 @@ export async function generateLongPodcastEpisode({
     });
   }
 
-  // 4️⃣ Merge all segments into final MP3
+  // 4️⃣ Merge all segment mp3s
   const mergedFile = path.join(tempDir, `final_episode_${episodeNo}.mp3`);
   await mergeAudioFiles(tempDir, mergedFile);
 
-  console.log(`🎙️ Episode ${episodeNo} complete.`);
+  console.log(`✅ Merged final episode: ${mergedFile}`);
+
+  // 5️⃣ Upload merged file to Cloudinary
+  console.log(`☁️ Uploading merged file to Cloudinary...`);
+  const uploadRes = await new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: "podcasts/final",
+        resource_type: "video",
+        public_id: path.basename(mergedFile, ".mp3"),
+        format: "mp3",
+      },
+      (err, result) => (err ? reject(err) : resolve(result))
+    );
+    fs.createReadStream(mergedFile).pipe(stream);
+  });
+
+  const finalCloudinaryUrl = uploadRes.secure_url;
+  console.log(`✅ Uploaded final episode to Cloudinary: ${finalCloudinaryUrl}`);
 
   const totalDuration = segments.reduce((acc, s) => acc + (s.duration || 0), 0);
+
+  // Clean temp files
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  } catch (err) {
+    console.warn("⚠️ Failed to clean temp dir:", err.message);
+  }
 
   return {
     episodeTitle: `${topic} — Episode ${episodeNo}`,
@@ -208,6 +233,6 @@ export async function generateLongPodcastEpisode({
     tone,
     totalDuration,
     segments,
-    mergedFile,
+    mergedFileUrl: finalCloudinaryUrl,
   };
 }

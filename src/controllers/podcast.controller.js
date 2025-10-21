@@ -58,8 +58,8 @@ export const createPodcast = async (req, res) => {
     const episodeRecord = await prisma.episode.create({
       data: {
         title: generated.episodeTitle,
-        script: generated.segments.map(s => s.script).join("\n\n---\n\n"),
-        audioURL: generated.mergedFile,
+        script: generated.segments.map((s) => s.script).join("\n\n---\n\n"),
+        audioURL: generated.mergedFileUrl,
         duration: generated.totalDuration,
         episodeNo: 1,
         podcastId: savedPodcast.id,
