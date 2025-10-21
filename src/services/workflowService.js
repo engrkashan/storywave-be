@@ -4,14 +4,47 @@ import prisma from "../config/prisma.client.js";
 import { generateImage } from "./imageService.js";
 import { extractFromUrl, transcribeVideo } from "./inputService.js";
 import { generateStory } from "./storyService.js";
-import { generateVoiceover } from "./ttsService.js";
 import { createVideo } from "./videoService.js";
+import cloudinary from "../config/cloudinary.js";
+import { generateVoiceover as oldGenerateVoiceover } from "./ttsService.js";
 
-// Simple timestamp + color helper
+// Simple timestamp + color logger
 const log = (msg, color = "\x1b[36m") => {
   const time = new Date().toISOString().split("T")[1].split(".")[0];
   console.log(`${color}[${time}] ${msg}\x1b[0m`);
 };
+
+// Upload voiceover to Cloudinary
+async function generateVoiceover(script, filename) {
+  const tempDir = path.join(process.cwd(), "temp");
+  fs.mkdirSync(tempDir, { recursive: true });
+  const localPath = path.join(tempDir, filename);
+
+  await oldGenerateVoiceover(script, filename); // generates local MP3
+
+  const uploaded = await cloudinary.uploader.upload(localPath, {
+    resource_type: "video", // mp3 as video/raw
+    folder: "voiceovers",
+    public_id: path.parse(filename).name,
+    overwrite: true,
+  });
+
+  fs.unlinkSync(localPath); // remove temp file
+  return uploaded.secure_url;
+}
+
+// Upload video to Cloudinary
+async function uploadVideoToCloud(videoPath, filename) {
+  const uploaded = await cloudinary.uploader.upload(videoPath, {
+    resource_type: "video",
+    folder: "videos",
+    public_id: path.parse(filename).name,
+    overwrite: true,
+  });
+
+  fs.unlinkSync(videoPath); // remove temp file
+  return uploaded.secure_url;
+}
 
 export async function runWorkflow({
   adminId,
@@ -85,13 +118,13 @@ export async function runWorkflow({
     // 3️⃣ Generate Voiceover
     log("🎙️ Step 3: Generating voiceover...");
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
-    const voicePath = await generateVoiceover(script, voiceFilename);
-    log(`✅ Voiceover created: ${voiceFilename}`);
+    const voiceURL = await generateVoiceover(script, voiceFilename);
+    log(`✅ Voiceover uploaded to Cloudinary: ${voiceURL}`);
 
     await prisma.voiceover.create({
       data: {
         script,
-        audioURL: `/stories/${voiceFilename}`,
+        audioURL: voiceURL,
         workflowId: workflow.id,
         adminId,
       },
@@ -105,9 +138,7 @@ export async function runWorkflow({
     for (let i = 0; i < scenes.length; i++) {
       log(`🧩 Generating image for scene ${i + 1}/${scenes.length}...`);
       const imageUrl = await generateImage(
-        `An artistic cinematic scene based on this description: ${
-          scenes[i + 1]
-        }`,
+        `An artistic cinematic scene based on this description: ${scenes[i]}`,
         i + 1
       );
       imageResults.push(imageUrl);
@@ -127,23 +158,21 @@ export async function runWorkflow({
 
     // 5️⃣ Merge Video
     log("🎬 Step 5: Combining images + voiceover into final video...");
-    const videosDir = path.join(process.cwd(), "public", "videos");
-    fs.mkdirSync(videosDir, { recursive: true });
+    const tempDir = path.join(process.cwd(), "temp");
+    fs.mkdirSync(tempDir, { recursive: true });
     const videoFilename = `${workflow.id}-${Date.now()}.mp4`;
-    const videoPath = path.join(videosDir, videoFilename);
+    const videoPath = path.join(tempDir, videoFilename);
 
-    await createVideo(
-      imageResults,
-      path.join(process.cwd(), "public", "stories", voiceFilename),
-      videoPath
-    );
+    await createVideo(imageResults, voiceURL, videoPath);
 
-    log(`✅ Video created successfully: ${videoFilename}`);
+    // Upload video to Cloudinary
+    const videoURL = await uploadVideoToCloud(videoPath, videoFilename);
+    log(`✅ Video uploaded to Cloudinary: ${videoURL}`);
 
     const video = await prisma.video.create({
       data: {
         title,
-        fileURL: `/videos/${videoFilename}`,
+        fileURL: videoURL,
         adminId,
       },
     });
@@ -153,8 +182,6 @@ export async function runWorkflow({
       data: { videoId: video.id, status: "COMPLETED" },
     });
 
-    // 6️⃣ Final response
-    const publicBase = process.env.BASE_URL || "https://yourdomain.com";
     log("🎉 Workflow completed successfully.");
 
     return {
@@ -165,9 +192,9 @@ export async function runWorkflow({
         outline: story.outline,
         script: story.content,
       },
-      voiceover: `${publicBase}/stories/${voiceFilename}`,
-      video: `${publicBase}/videos/${videoFilename}`,
-      images: imageResults.map((img) => `${publicBase}${img}`),
+      voiceover: voiceURL,
+      video: videoURL,
+      images: imageResults,
     };
   } catch (err) {
     log(`❌ Workflow failed: ${err.message}`, "\x1b[31m");
