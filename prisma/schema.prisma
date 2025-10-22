@@ -132,11 +132,11 @@ model Workflow {
   title    String
   type     CreationType
   subType  String?
-  status   String       @default("PENDING")
+  status   String?      @default("PENDING")
   metadata Json?
 
-  admin   AdminUser @relation(fields: [adminId], references: [id])
-  adminId String    @db.ObjectId
+  admin   AdminUser? @relation(fields: [adminId], references: [id])
+  adminId String?    @db.ObjectId
 
   inputs    Input[]
   story     Story?     @relation(fields: [storyId], references: [id])

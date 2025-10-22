@@ -119,10 +119,13 @@ export async function runWorkflow({
             type: "IMAGE",
             fileUrl: imageUrl,
             fileType: "image/png",
-            workflowId: workflow.id,
+            workflow: {
+              connect: { id: workflow.id },
+            },
             metadata: { scene: i + 1, prompt },
           },
         });
+
         log(`Scene ${i + 1} image ready.`);
       } catch (err) {
         log(
