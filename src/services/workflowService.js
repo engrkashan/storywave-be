@@ -6,32 +6,13 @@ import { extractFromUrl, transcribeVideo } from "./inputService.js";
 import { generateStory } from "./storyService.js";
 import { createVideo } from "./videoService.js";
 import cloudinary from "../config/cloudinary.config.js";
-import { generateVoiceover as oldGenerateVoiceover } from "./ttsService.js";
+import { generateVoiceover } from "./generateVoiceoverService.js";
 
 // Simple timestamp + color logger
 const log = (msg, color = "\x1b[36m") => {
   const time = new Date().toISOString().split("T")[1].split(".")[0];
   console.log(`${color}[${time}] ${msg}\x1b[0m`);
 };
-
-// Upload voiceover to Cloudinary
-async function generateVoiceover(script, filename) {
-  const tempDir = path.join(process.cwd(), "temp");
-  fs.mkdirSync(tempDir, { recursive: true });
-  const localPath = path.join(tempDir, filename);
-
-  await oldGenerateVoiceover(script, filename); // generates local MP3
-
-  const uploaded = await cloudinary.uploader.upload(localPath, {
-    resource_type: "video", // mp3 as video/raw
-    folder: "voiceovers",
-    public_id: path.parse(filename).name,
-    overwrite: true,
-  });
-
-  fs.unlinkSync(localPath); // remove temp file
-  return uploaded.secure_url;
-}
 
 // Upload video to Cloudinary
 async function uploadVideoToCloud(videoPath, filename) {
@@ -64,7 +45,7 @@ export async function runWorkflow({
   log(`✅ Workflow record created (ID: ${workflow.id})`);
 
   try {
-    // 1️⃣ Input Preparation
+    // 1️⃣ Prepare input
     log("🧩 Step 1: Preparing input text...");
     let inputText = textIdea || "";
     if (url) {
@@ -90,23 +71,17 @@ export async function runWorkflow({
       },
     });
 
-    // 2️⃣ Story Generation
-    log("📖 Step 2: Generating story from input...");
+    // 2️⃣ Story generation
+    log("📖 Step 2: Generating story...");
     const { outline, script } = await generateStory({
       textIdea: inputText,
       storyType,
       voiceTone,
       storyLength,
     });
-    log("✅ Story generated successfully.");
 
     const story = await prisma.story.create({
-      data: {
-        title,
-        outline,
-        content: script,
-        adminId,
-      },
+      data: { title, outline, content: script, adminId },
     });
     log(`🧠 Story saved to DB (ID: ${story.id})`);
 
@@ -115,50 +90,22 @@ export async function runWorkflow({
       data: { storyId: story.id },
     });
 
-    // 3️⃣ Generate Voiceover
+    // 3️⃣ Voiceover
     log("🎙️ Step 3: Generating voiceover...");
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
-    const voiceURL = await generateVoiceover(script, voiceFilename);
-    log(`✅ Voiceover uploaded to Cloudinary: ${voiceURL}`);
+    const { url: voiceURL, localPath: voiceLocalPath } =
+      await generateVoiceover(script, voiceFilename);
+    log(`✅ Voiceover ready: ${voiceURL}`);
 
     await prisma.voiceover.create({
-      data: {
-        script,
-        audioURL: voiceURL,
-        workflowId: workflow.id,
-        adminId,
-      },
+      data: { script, audioURL: voiceURL, workflowId: workflow.id, adminId },
     });
 
-    // 4️⃣ Generate Images
-    // log("🖼️ Step 4: Generating scene images...");
-    // const scenes = script.split(/\n{2,}/).filter(Boolean);
-    // const imageResults = [];
-
-    // for (let i = 0; i < scenes.length; i++) {
-    //   log(`🧩 Generating image for scene ${i + 1}/${scenes.length}...`);
-    //   const imageUrl = await generateImage(
-    //     `An artistic cinematic scene based on this description: ${scenes[i]}`,
-    //     i + 1
-    //   );
-    //   imageResults.push(imageUrl);
-    //   log(`✅ Scene ${i + 1} image generated.`);
-
-    //   await prisma.media.create({
-    //     data: {
-    //       type: "IMAGE",
-    //       fileUrl: imageUrl,
-    //       fileType: "image/png",
-    //       workflowId: workflow.id,
-    //     },
-    //   });
-    // }
-
-    // 4️⃣ Generate a single image for the whole story
-    log("🖼️ Step 4: Generating a single image for the entire story...");
+    // 4️⃣ Single Image Generation
+    log("🖼️ Step 4: Generating a single image for the story...");
     const imagePrompt = `An artistic cinematic scene representing the entire story: ${script}`;
     const singleImageUrl = await generateImage(imagePrompt, 1);
-    log(`✅ Single story image generated.`);
+    log(`✅ Image generated successfully.`);
 
     await prisma.media.create({
       data: {
@@ -171,27 +118,25 @@ export async function runWorkflow({
 
     const imageResults = [singleImageUrl];
 
-    log(`🖼️ All ${imageResults.length} images generated successfully.`);
-
-    // 5️⃣ Merge Video
-    log("🎬 Step 5: Combining images + voiceover into final video...");
+    // 5️⃣ Create video
+    log("🎬 Step 5: Combining image + voiceover into video...");
     const tempDir = path.join(process.cwd(), "temp");
     fs.mkdirSync(tempDir, { recursive: true });
+
     const videoFilename = `${workflow.id}-${Date.now()}.mp4`;
     const videoPath = path.join(tempDir, videoFilename);
 
-    await createVideo(imageResults, voiceURL, videoPath);
+    await createVideo(imageResults, voiceLocalPath, videoPath);
 
-    // Upload video to Cloudinary
+    // Clean up local MP3 after FFmpeg
+    if (fs.existsSync(voiceLocalPath)) fs.unlinkSync(voiceLocalPath);
+
+    // Upload to Cloudinary
     const videoURL = await uploadVideoToCloud(videoPath, videoFilename);
-    log(`✅ Video uploaded to Cloudinary: ${videoURL}`);
+    log(`✅ Video uploaded: ${videoURL}`);
 
     const video = await prisma.video.create({
-      data: {
-        title,
-        fileURL: videoURL,
-        adminId,
-      },
+      data: { title, fileURL: videoURL, adminId },
     });
 
     await prisma.workflow.update({
