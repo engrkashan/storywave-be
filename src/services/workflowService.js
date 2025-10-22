@@ -5,7 +5,7 @@ import { generateImage } from "./imageService.js";
 import { extractFromUrl, transcribeVideo } from "./inputService.js";
 import { generateStory } from "./storyService.js";
 import { createVideo } from "./videoService.js";
-import cloudinary from "../config/cloudinary.js";
+import cloudinary from "../config/cloudinary.config.js";
 import { generateVoiceover as oldGenerateVoiceover } from "./ttsService.js";
 
 // Simple timestamp + color logger
