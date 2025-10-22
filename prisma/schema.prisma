@@ -212,6 +212,7 @@ model Media {
   fileUrl  String
   fileType String
   publicId String?
+  metadata Json?
 
   workflow   Workflow? @relation(fields: [workflowId], references: [id])
   workflowId String?   @db.ObjectId
