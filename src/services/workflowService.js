@@ -131,28 +131,45 @@ export async function runWorkflow({
     });
 
     // 4️⃣ Generate Images
-    log("🖼️ Step 4: Generating scene images...");
-    const scenes = script.split(/\n{2,}/).filter(Boolean);
-    const imageResults = [];
+    // log("🖼️ Step 4: Generating scene images...");
+    // const scenes = script.split(/\n{2,}/).filter(Boolean);
+    // const imageResults = [];
 
-    for (let i = 0; i < scenes.length; i++) {
-      log(`🧩 Generating image for scene ${i + 1}/${scenes.length}...`);
-      const imageUrl = await generateImage(
-        `An artistic cinematic scene based on this description: ${scenes[i]}`,
-        i + 1
-      );
-      imageResults.push(imageUrl);
-      log(`✅ Scene ${i + 1} image generated.`);
+    // for (let i = 0; i < scenes.length; i++) {
+    //   log(`🧩 Generating image for scene ${i + 1}/${scenes.length}...`);
+    //   const imageUrl = await generateImage(
+    //     `An artistic cinematic scene based on this description: ${scenes[i]}`,
+    //     i + 1
+    //   );
+    //   imageResults.push(imageUrl);
+    //   log(`✅ Scene ${i + 1} image generated.`);
 
-      await prisma.media.create({
-        data: {
-          type: "IMAGE",
-          fileUrl: imageUrl,
-          fileType: "image/png",
-          workflowId: workflow.id,
-        },
-      });
-    }
+    //   await prisma.media.create({
+    //     data: {
+    //       type: "IMAGE",
+    //       fileUrl: imageUrl,
+    //       fileType: "image/png",
+    //       workflowId: workflow.id,
+    //     },
+    //   });
+    // }
+
+    // 4️⃣ Generate a single image for the whole story
+    log("🖼️ Step 4: Generating a single image for the entire story...");
+    const imagePrompt = `An artistic cinematic scene representing the entire story: ${script}`;
+    const singleImageUrl = await generateImage(imagePrompt, 1);
+    log(`✅ Single story image generated.`);
+
+    await prisma.media.create({
+      data: {
+        type: "IMAGE",
+        fileUrl: singleImageUrl,
+        fileType: "image/png",
+        workflowId: workflow.id,
+      },
+    });
+
+    const imageResults = [singleImageUrl];
 
     log(`🖼️ All ${imageResults.length} images generated successfully.`);
 
