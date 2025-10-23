@@ -8,7 +8,7 @@ export async function generateStory({
   textIdea,
   url,
   videoFile,
-  storyType,
+  storyType = "fiction",
   voiceTone = "neutral",
   storyLength = "medium",
 }) {
@@ -20,44 +20,67 @@ export async function generateStory({
     throw new Error("Insufficient or invalid input content.");
   }
 
+  // 🔪 Limit token size before prompt (trim or summarize)
+  if (inputText.length > 8000) {
+    console.log("🧹 Input too long, summarizing before story generation...");
+    const summaryPrompt = `Summarize the following text in under 800 words focusing only on the main ideas, tone, and narrative elements:\n\n${inputText.slice(
+      0,
+      15000
+    )}`;
+    const summary = await summarizeText(summaryPrompt);
+    inputText = summary;
+  }
+
   const prompt = `
-      You are a professional creative writer.
-      Create a ${storyLength}-length, immersive, and original **${storyType}** story.
-      Tone: ${voiceTone}.
+You are a professional creative writer.
+Create a ${storyLength}-length, immersive, and original **${storyType}** story.
+Tone: ${voiceTone}.
 
-      Input:
-      ${inputText}
+Input context:
+${inputText}
 
-      Format strictly as:
+Output Format (strictly):
+Outline:
+- bullet points
 
-      Outline:
-      - bullet points
-
-      Script:
-      Full story text
+Script:
+Full story text
 `;
 
-  let retries = 3,
-    text = "";
-  while (retries--) {
+  let retries = 3;
+  let text = "";
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
     try {
+      console.log(`🧠 Generating story (attempt ${attempt}/${retries})...`);
       const result = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           {
             role: "system",
-            content: "You are a disciplined creative storyteller.",
+            content:
+              "You are a disciplined creative storyteller. Be structured, clear, and vivid.",
           },
           { role: "user", content: prompt },
         ],
-        temperature: 0.85,
-        max_tokens: 2000,
+        temperature: 0.9,
+        max_tokens: 3000,
       });
-      text = result.choices[0].message.content?.trim();
-      if (text) break;
+
+      text = result.choices?.[0]?.message?.content?.trim();
+      if (!text) throw new Error("Empty response from model.");
+
+      break; // success
     } catch (err) {
-      if (!retries) throw new Error("Story generation failed after retries.");
-      await sleep(2000);
+      console.error(
+        `⚠️ Story generation attempt ${attempt} failed:`,
+        err.message
+      );
+      if (attempt === retries)
+        throw new Error(
+          `Story generation failed after ${retries} retries: ${err.message}`
+        );
+      await sleep(2000 * attempt);
     }
   }
 
@@ -68,4 +91,14 @@ export async function generateStory({
     outline: outlineMatch?.[1]?.trim() || "No outline generated.",
     script: scriptMatch?.[1]?.trim() || text,
   };
+}
+
+async function summarizeText(summaryPrompt) {
+  const result = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: summaryPrompt }],
+    temperature: 0.5,
+    max_tokens: 1500,
+  });
+  return result.choices?.[0]?.message?.content?.trim() || "";
 }
