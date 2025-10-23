@@ -7,6 +7,7 @@ import { generateStory } from "./storyService.js";
 import { createVideo } from "./videoService.js";
 import cloudinary from "../config/cloudinary.config.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
+import { transcribeWithTimestamps } from "./transcribeService.js"; // <-- NEW IMPORT
 
 const log = (msg, color = "\x1b[36m") => {
   const time = new Date().toISOString().split("T")[1].split(".")[0];
@@ -43,8 +44,10 @@ export async function runWorkflow({
   });
   log(`Workflow record created (ID: ${workflow.id})`);
 
+  let srtPath; // Define srtPath outside try/catch for cleanup
+
   try {
-    // 1️⃣ Prepare input
+    // 1️⃣ Prepare input (UNMODIFIED)
     log("Step 1: Preparing input text...");
     let inputText = textIdea || "";
     if (url) {
@@ -68,7 +71,7 @@ export async function runWorkflow({
       },
     });
 
-    // 2️⃣ Generate story
+    // 2️⃣ Generate story (UNMODIFIED)
     log("Step 2: Generating story...");
     const { outline, script } = await generateStory({
       textIdea: inputText,
@@ -86,7 +89,7 @@ export async function runWorkflow({
       data: { storyId: story.id },
     });
 
-    // 3️⃣ Voiceover
+    // 3️⃣ Voiceover (UNMODIFIED)
     log("Step 3: Generating voiceover...");
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
     const { url: voiceURL, localPath: voiceLocalPath } =
@@ -96,7 +99,7 @@ export async function runWorkflow({
       data: { script, audioURL: voiceURL, workflowId: workflow.id, adminId },
     });
 
-    // 4️⃣ Generate a single image
+    // 4️⃣ Generate a single image (UNMODIFIED)
     log("Step 4: Generating a single image for the entire story...");
     const storyPrompt = `Cinematic, detailed digital artwork representing the overall theme of the story titled "${title}". 
     The style should match ${storyType} genre, tone: ${voiceTone}.`;
@@ -118,24 +121,30 @@ export async function runWorkflow({
       throw new Error("Failed to generate main image: " + err.message);
     }
 
-    // 5️⃣ Prepare subtitles
-    const scenes =
-      outline && outline.length > 0
-        ? outline
-        : script.split(/\n\n|\r\n\r\n/).filter((s) => s.trim().length > 0);
-    log(`Found ${scenes.length} scenes. Generating subtitles.`);
+    // 5️⃣ Generate Subtitles (NEW LOGIC)
+    log("Step 5: Generating timed subtitles using Whisper API...");
 
-    // 6️⃣ Create video (single image + subtitles)
-    log("Step 6: Creating video with subtitles...");
+    const srtContent = await transcribeWithTimestamps(voiceLocalPath);
 
     const tempDir = path.join(process.cwd(), "temp");
     fs.mkdirSync(tempDir, { recursive: true });
+
+    srtPath = path.join(tempDir, `subtitles-${workflow.id}.srt`);
+    fs.writeFileSync(srtPath, srtContent);
+
+    log("✅ Subtitle (SRT) file generated successfully.");
+
+    // 6️⃣ Create video (single image + subtitles)
+    log("Step 6: Creating video with accurate subtitles...");
+
     const videoFilename = `${workflow.id}-${Date.now()}.mp4`;
     const videoPath = path.join(tempDir, videoFilename);
 
-    await createVideo(imageUrl, voiceLocalPath, videoPath, scenes);
+    // Pass the SRT file path instead of the 'scenes' array
+    await createVideo(imageUrl, voiceLocalPath, videoPath, srtPath); // <-- MODIFIED CALL
 
     if (fs.existsSync(voiceLocalPath)) fs.unlinkSync(voiceLocalPath);
+    if (fs.existsSync(srtPath)) fs.unlinkSync(srtPath); // Cleanup the srt file
 
     // 7️⃣ Upload final video
     const videoURL = await uploadVideoToCloud(videoPath, videoFilename);
@@ -155,12 +164,19 @@ export async function runWorkflow({
     return {
       success: true,
       workflowId: workflow.id,
-      story: { title: story.title, outline: story.outline, script: story.content },
+      story: {
+        title: story.title,
+        outline: story.outline,
+        script: story.content,
+      },
       voiceover: voiceURL,
       video: videoURL,
       image: imageUrl,
     };
   } catch (err) {
+    // Cleanup any remaining files on failure
+    if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
+
     log(`Workflow failed: ${err.message}`, "\x1b[31m");
     await prisma.workflow.update({
       where: { id: workflow.id },
