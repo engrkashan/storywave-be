@@ -19,22 +19,24 @@ export async function generatePodcastOutline({
   retries = 2,
 }) {
   const prompt = `
-You are a professional podcast writer.
-Create a detailed outline for a ${length || 40}-minute podcast on "${topic}".
-Tone: ${tone}.
-Audience: ${audience || "general"}.
-Break it into 6–8 major segments.
-Each segment should have 3–5 concise bullet points.
-Do NOT include:
-- greetings or welcomes
-- music cues
-- narration stage directions
-- filler or unrelated content
-Return ONLY valid JSON in this format:
-[
-  { "segment": "Segment Title", "points": ["Point 1", "Point 2", "..."] },
-  ...
-]
+      You are a professional podcast writer.
+      Create a detailed outline for a ${
+        length || 40
+      }-minute podcast on "${topic}".
+      Tone: ${tone}.
+      Audience: ${audience || "general"}.
+      Break it into 6–8 major segments.
+      Each segment should have 3–5 concise bullet points.
+      Do NOT include:
+      - greetings or welcomes
+      - music cues
+      - narration stage directions
+      - filler or unrelated content
+      Return ONLY valid JSON in this format:
+      [
+        { "segment": "Segment Title", "points": ["Point 1", "Point 2", "..."] },
+        ...
+      ]
 `;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -61,10 +63,7 @@ Return ONLY valid JSON in this format:
 
       return outline;
     } catch (err) {
-      console.warn(
-        `⚠️ Outline parsing failed (Attempt ${attempt}):`,
-        err.message
-      );
+      console.warn(`Outline parsing failed (Attempt ${attempt}):`, err.message);
       if (attempt === retries)
         throw new Error("Invalid outline format from model");
     }
@@ -81,21 +80,21 @@ export async function generateSegmentScript({
   segment,
 }) {
   const prompt = `
-You are a professional podcast writer.
-Write the narration script for the segment "${
-    segment.segment
-  }" of a podcast on "${topic}".
-Tone: ${tone}.
-Audience: ${audience}.
-Focus only on these ideas: ${segment.points.join(", ")}.
-Do NOT include:
-- greetings or welcomes
-- music cues or sound directions
-- narration stage directions
-- filler or unrelated content
-Start directly with the topic content.
-Length: ~900–1100 words.
-Return only the text content.
+    You are a professional podcast writer.
+    Write the narration script for the segment "${
+      segment.segment
+    }" of a podcast on "${topic}".
+    Tone: ${tone}.
+    Audience: ${audience}.
+    Focus only on these ideas: ${segment.points.join(", ")}.
+    Do NOT include:
+    - greetings or welcomes
+    - music cues or sound directions
+    - narration stage directions
+    - filler or unrelated content
+    Start directly with the topic content.
+    Length: ~900–1100 words.
+    Return only the text content.
 `;
 
   const res = await openai.chat.completions.create({
@@ -137,8 +136,6 @@ export async function mergeAudioFiles(tempDir, outputFile) {
       .on("error", reject)
       .save(outputFile);
   });
-
-  console.log(`✅ Merged into ${outputFile}`);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -152,10 +149,6 @@ export async function generateLongPodcastEpisode({
   voice = "onyx",
   episodeNo = 1,
 }) {
-  console.log(
-    `🎧 Generating long-form podcast: ${topic} (Episode ${episodeNo})`
-  );
-
   // Generate outline
   const outline = await generatePodcastOutline({
     topic,
@@ -170,7 +163,6 @@ export async function generateLongPodcastEpisode({
 
   for (let i = 0; i < outline.length; i++) {
     const segment = outline[i];
-    console.log(`📝 Segment ${i + 1}/${outline.length}: ${segment.segment}`);
 
     const script = await generateSegmentScript({
       topic,
@@ -194,7 +186,6 @@ export async function generateLongPodcastEpisode({
   const mergedFile = path.join(tempDir, `final_episode_${episodeNo}.mp3`);
   await mergeAudioFiles(tempDir, mergedFile);
 
-  console.log(`☁️ Uploading merged file to Cloudinary...`);
   const uploadRes = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
@@ -209,14 +200,13 @@ export async function generateLongPodcastEpisode({
   });
 
   const finalCloudinaryUrl = uploadRes.secure_url;
-  console.log(`✅ Uploaded final episode to Cloudinary: ${finalCloudinaryUrl}`);
 
   const totalDuration = segments.reduce((acc, s) => acc + (s.duration || 0), 0);
 
   try {
     fs.rmSync(tempDir, { recursive: true, force: true });
   } catch (err) {
-    console.warn("⚠️ Failed to clean temp dir:", err.message);
+    console.warn("Failed to clean temp dir:", err.message);
   }
 
   return {

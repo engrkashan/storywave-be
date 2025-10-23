@@ -8,29 +8,80 @@ export const getStories = async (req, res) => {
     const stories = await prisma.story.findMany({
       where: { adminId: userId },
       orderBy: { createdAt: "desc" },
+      include: {
+        Workflow: {
+          include: {
+            media: {
+              where: {
+                type: "VIDEO",
+                fileType: { contains: "mp4" },
+              },
+              select: {
+                id: true,
+                fileUrl: true,
+                fileType: true,
+                uploadedAt: true,
+              },
+            },
+          },
+        },
+      },
     });
 
-    return res.status(200).json(stories);
+    // Flatten the workflows and return only relevant story media
+    const result = stories.map((story) => ({
+      id: story.id,
+      title: story.title,
+      createdAt: story.createdAt,
+      media: story.Workflow.flatMap((wf) => wf.media || []),
+    }));
+
+    return res.status(200).json(result);
   } catch (error) {
     console.error("Get Stories Error:", error);
     return res.status(500).json({ error: "Failed to fetch stories" });
   }
 };
 
-// GET single Story
+// GET single Story with mp4 media only
 export const getStoryById = async (req, res) => {
   try {
     const { id } = req.params;
 
     const story = await prisma.story.findUnique({
       where: { id },
+      include: {
+        Workflow: {
+          include: {
+            media: {
+              where: {
+                type: "VIDEO",
+                fileType: { contains: "mp4" },
+              },
+              select: {
+                id: true,
+                fileUrl: true,
+                fileType: true,
+                uploadedAt: true,
+              },
+            },
+          },
+        },
+      },
     });
 
     if (!story) {
       return res.status(404).json({ error: "Story not found" });
     }
 
-    return res.status(200).json(story);
+    const media = story.Workflow.flatMap((wf) => wf.media || []);
+
+    return res.status(200).json({
+      id: story.id,
+      title: story.title,
+      createdAt: story.createdAt,
+      media,
+    });
   } catch (error) {
     console.error("Get Story Error:", error);
     return res.status(500).json({ error: "Failed to fetch story" });

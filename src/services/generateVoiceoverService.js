@@ -1,6 +1,6 @@
 import fs from "fs";
-import path from "path";
 import OpenAI from "openai";
+import path from "path";
 import cloudinary from "../config/cloudinary.config.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });

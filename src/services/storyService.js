@@ -12,7 +12,6 @@ export async function generateStory({
   voiceTone = "neutral",
   storyLength = "medium",
 }) {
-  // 1️⃣ Input assembly
   let inputText = textIdea || "";
   if (url) inputText = await extractFromUrl(url);
   if (videoFile) inputText = await transcribeVideo(videoFile);
@@ -21,7 +20,6 @@ export async function generateStory({
     throw new Error("Insufficient or invalid input content.");
   }
 
-  // 2️⃣ Prompt
   const prompt = `
       You are a professional creative writer.
       Create a ${storyLength}-length, immersive, and original **${storyType}** story.
@@ -39,7 +37,6 @@ export async function generateStory({
       Full story text
 `;
 
-  // 3️⃣ OpenAI with retry
   let retries = 3,
     text = "";
   while (retries--) {
@@ -64,7 +61,6 @@ export async function generateStory({
     }
   }
 
-  // 4️⃣ Parsing
   const outlineMatch = text.match(/Outline:\s*(.*?)\s*Script:/s);
   const scriptMatch = text.match(/Script:\s*(.*)/s);
 
