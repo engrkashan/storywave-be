@@ -43,11 +43,31 @@ export async function createVideo(imageUrl, audioPath, outputPath, scenes) {
   }
 
   // 4️⃣ FFmpeg command to merge static image + audio + subtitles
-  const cmd = `
-    ffmpeg -y -loop 1 -i "${imagePath}" -i "${audioPath}" \
-    -vf "subtitles='${srtPath}':force_style='FontName=Arial,FontSize=36,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,Alignment=2'" \
-    -c:v libx264 -t ${duration} -pix_fmt yuv420p -c:a aac -shortest "${outputPath}"
-  `;
+  const cmd = [
+    "ffmpeg",
+    "-y",
+    "-loop",
+    "1",
+    "-i",
+    `"${imagePath}"`,
+    "-i",
+    `"${audioPath}"`,
+    "-vf",
+    `"subtitles=${srtPath.replace(
+      /\\/g,
+      "/"
+    )}:force_style='FontName=Arial,FontSize=48,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,Alignment=2'"`,
+    "-c:v",
+    "libx264",
+    "-t",
+    duration,
+    "-pix_fmt",
+    "yuv420p",
+    "-c:a",
+    "aac",
+    "-shortest",
+    `"${outputPath}"`,
+  ].join(" ");
 
   execSync(cmd, { stdio: "inherit" });
 
