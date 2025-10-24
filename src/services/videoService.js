@@ -6,7 +6,6 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
   const tempDir = path.join(process.cwd(), "temp");
   fs.mkdirSync(tempDir, { recursive: true });
 
-  // Download image if it's a URL
   let imagePath = imageUrl;
   if (imageUrl.startsWith("http")) {
     const localImage = path.join(tempDir, `story-bg-${Date.now()}.png`);
@@ -16,7 +15,20 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
     imagePath = localImage;
   }
 
-  // Cleanly build one-liner FFmpeg command
+  const subtitleStyle = [
+    "FontName=Arial",
+    "FontSize=20",
+    "PrimaryColour=&H00FFFFFF&",
+    "OutlineColour=&H000000&",
+    "BorderStyle=4",
+    "BackColour=&HAAFF00FF&",
+    "Outline=1",
+    "Shadow=0",
+    "Bold=0",
+    "Alignment=2",
+    "MarginV=60",
+  ].join(",");
+
   const cmd = [
     `ffmpeg -y -loop 1`,
     `-i "${imagePath}"`,
@@ -24,21 +36,16 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
     `-vf "subtitles='${srtPath.replace(
       /'/g,
       "\\'"
-    )}':force_style='FontName=Arial,FontSize=14,PrimaryColour=&H00FFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,Alignment=2,MarginV=60'"`,
+    )}':force_style='${subtitleStyle}'"`,
     `-c:v libx264 -pix_fmt yuv420p -c:a aac -shortest`,
     `"${outputPath}"`,
   ].join(" ");
 
-  console.log("▶️ Running FFmpeg:\n", cmd, "\n");
-
   try {
     execSync(cmd, { stdio: "inherit" });
-    console.log(`🎬 Video created at ${outputPath}`);
   } catch (err) {
-    console.error("❌ FFmpeg failed:", err.message);
     throw new Error("Video creation failed. Check FFmpeg output above.");
   } finally {
-    // Cleanup downloaded image if temporary
     if (imagePath !== imageUrl && fs.existsSync(imagePath)) {
       fs.unlinkSync(imagePath);
     }

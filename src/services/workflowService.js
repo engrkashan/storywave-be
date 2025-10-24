@@ -7,7 +7,7 @@ import { generateStory } from "./storyService.js";
 import { createVideo } from "./videoService.js";
 import cloudinary from "../config/cloudinary.config.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
-import { transcribeWithTimestamps } from "./transcribeService.js"; // <-- NEW IMPORT
+import { transcribeWithTimestamps } from "./transcribeService.js"; 
 
 const log = (msg, color = "\x1b[36m") => {
   const time = new Date().toISOString().split("T")[1].split(".")[0];
