@@ -25,7 +25,7 @@ router.post("/", async (req, res) => {
       videoFile,
       storyType = "Story",
       voiceTone = "neutral",
-      storyLength = "medium",
+      storyLength = "30 minutes",
       admin,
     } = req.body;
 
@@ -68,7 +68,7 @@ router.post("/workflow", verifyToken, async (req, res) => {
       textIdea,
       storyType = "Story",
       voiceTone = "neutral",
-      storyLength = "medium",
+      storyLength = "30 minutes",
     } = req.body;
 
     if (!adminId) {
