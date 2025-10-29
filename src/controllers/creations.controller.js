@@ -13,6 +13,7 @@ export const getMyCreations = async (req, res) => {
       where: { adminId: userId },
       include: {
         story: true,
+        voiceover: true,
         video: true,
         podcast: {
           include: {
@@ -23,23 +24,34 @@ export const getMyCreations = async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
 
-    // STORIES 
+    // STORIES — Include voiceover (voice + audio)
     const stories = workflows
-      .filter((w) => w.story && w.video)
+      .filter((w) => w.story)
       .map((w) => ({
         id: w.story.id,
-        title: w.story.title || w.video.title || "Untitled Story",
+        title: w.story.title || w.video?.title || "Untitled Story",
         type: "STORY",
         createdAt: w.story.createdAt,
-        video: {
-          id: w.video.id,
-          url: w.video.fileURL || null,
-          duration: w.video.duration || null,
-          subtitles: w.video.subtitles || null,
-        },
+        content: w.story.content || null,
+        voiceover: w.voiceover
+          ? {
+              id: w.voiceover.id,
+              voice: w.voiceover.voice || "Default",
+              audioURL: w.voiceover.audioURL || null,
+              script: w.voiceover.script || null,
+            }
+          : null,
+        video: w.video
+          ? {
+              id: w.video.id,
+              url: w.video.fileURL || null,
+              duration: w.video.duration || null,
+              subtitles: w.video.subtitles || null,
+            }
+          : null,
       }));
 
-    // PODCASTS — only those that have a valid episode (.mp3)
+    // PODCASTS — Include episode info
     const podcasts = workflows
       .filter((w) => w.podcast)
       .map((w) => {
@@ -54,8 +66,9 @@ export const getMyCreations = async (req, res) => {
             ? {
                 id: firstEpisode.id,
                 title: firstEpisode.title,
-                audioURL: firstEpisode.audioURL,
-                duration: firstEpisode.duration,
+                script: firstEpisode.script || null,
+                audioURL: firstEpisode.audioURL || null,
+                duration: firstEpisode.duration || null,
                 episodeNo: firstEpisode.episodeNo,
               }
             : null,
