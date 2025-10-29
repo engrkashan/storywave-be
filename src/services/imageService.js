@@ -8,7 +8,8 @@ export async function generateImage(prompt, index) {
   const result = await openai.images.generate({
     model: "gpt-image-1",
     prompt,
-    size: "1024x1024",
+    size: "1536x1024",
+    quality:"high"
   });
 
   const imageBase64 = result.data?.[0]?.b64_json;

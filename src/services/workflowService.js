@@ -2,12 +2,12 @@ import fs from "fs";
 import path from "path";
 import prisma from "../config/prisma.client.js";
 import { generateImage } from "./imageService.js";
-import { extractFromUrl, transcribeVideo } from "./inputService.js";
+import { extractContentFromUrl, extractFromUrl, transcribeVideo } from "./inputService.js";
 import { generateStory } from "./storyService.js";
 import { createVideo } from "./videoService.js";
 import cloudinary from "../config/cloudinary.config.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
-import { transcribeWithTimestamps } from "./transcribeService.js"; 
+import { transcribeWithTimestamps } from "./transcribeService.js";
 
 const log = (msg, color = "\x1b[36m") => {
   const time = new Date().toISOString().split("T")[1].split(".")[0];
@@ -52,13 +52,14 @@ export async function runWorkflow({
     let inputText = textIdea || "";
     if (url) {
       log("Extracting text from URL...");
-      inputText = await extractFromUrl(url);
+      inputText = await extractContentFromUrl(url);
     }
+
     if (videoFile) {
       log("Transcribing video to text...");
       inputText = await transcribeVideo(videoFile);
     }
-
+    log(`Input text: ${inputText}`);
     if (!inputText || inputText.trim().length < 50)
       throw new Error("Invalid or empty input text.");
 
@@ -102,7 +103,7 @@ export async function runWorkflow({
     // 4️⃣ Generate a single image (UNMODIFIED)
     log("Step 4: Generating a single image for the entire story...");
     const storyPrompt = `Cinematic, detailed digital artwork representing the overall theme of the story titled "${title}". 
-    The style should match ${storyType} genre, tone: ${voiceTone}.`;
+    The style should match ${storyType} genre, tone: ${voiceTone}. No text or captions in the image.`;
 
     let imageUrl;
     try {
@@ -141,7 +142,7 @@ export async function runWorkflow({
     const videoPath = path.join(tempDir, videoFilename);
 
     // Pass the SRT file path instead of the 'scenes' array
-    await createVideo(imageUrl, voiceLocalPath, videoPath, srtPath); // <-- MODIFIED CALL
+    await createVideo(title, imageUrl, voiceLocalPath, videoPath, srtPath); // <-- MODIFIED CALL
 
     if (fs.existsSync(voiceLocalPath)) fs.unlinkSync(voiceLocalPath);
     if (fs.existsSync(srtPath)) fs.unlinkSync(srtPath); // Cleanup the srt file

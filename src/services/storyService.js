@@ -154,7 +154,7 @@ async function generateHook({
 }) {
   const moduleRule = moduleRules[storyType.toLowerCase()] || moduleRules['default'];
   const prompt = `
-      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (750–1,000 words per chapter)
+      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (3500-4000 words per chapter)
 
       GLOBAL BASE RULES
       * Voice: natural, simple, real-feeling. Short paragraphs (2–4 sentences). Active voice.
@@ -169,7 +169,7 @@ async function generateHook({
       GENRE MODULE: ${storyType}
       ${moduleRule}
 
-      Build Mode: Three-Chapter Limited Series — 750–1,000 words per chapter.
+      Build Mode: Three-Chapter Limited Series — 3500-4000 words per chapter.
 
       SERIES STRUCTURE (APPLIES TO ALL GENRES)
       * Chapter 1 – Setup & Stakes: clear goal, context, immediate pressure, first turn.
@@ -218,7 +218,7 @@ async function generateStoryOutline({
   const segmentCount = 3; // Fixed to 3 chapters as per UNIVERSAL MASTER PROMPT
   const moduleRule = moduleRules[storyType.toLowerCase()] || moduleRules['default'];
   const prompt = `
-      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (750–1,000 words per chapter)
+      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (3500-4000 words per chapter)
 
       GLOBAL BASE RULES
       * Voice: natural, simple, real-feeling. Short paragraphs (2–4 sentences). Active voice.
@@ -232,7 +232,7 @@ async function generateStoryOutline({
 
       WORKFLOW (INTAKE → OUTLINE → WRITE)
       Intake (defaults proposed if missing)
-      Genre: ${storyType}, Style Mode (by genre), Narrator (third person unless noted), Main emotional theme (inferred), Build mode (3-chapter), Hook length (120–180 words), Word target per chapter (750–1,000 words adjusted for ${minutes} minutes).
+      Genre: ${storyType}, Style Mode (by genre), Narrator (third person unless noted), Main emotional theme (inferred), Build mode (3-chapter), Hook length (120–180 words), Word target per chapter (3500-4000 words adjusted for ${minutes} minutes).
 
       OUTLINE (NO-OVERLAP GRID)
       Chapter | Unique facts or scenes | New question or stake | Cannot include
@@ -312,7 +312,7 @@ async function generateChapterScript({
 }) {
   const moduleRule = moduleRules[storyType.toLowerCase()] || moduleRules['default'];
   const prompt = `
-      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (750–1,000 words per chapter)
+      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (3500-4000 words per chapter)
 
       GLOBAL BASE RULES
       * Voice: natural, simple, real-feeling. Short paragraphs (2–4 sentences). Active voice.
