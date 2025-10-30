@@ -4,8 +4,10 @@ import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
-import ytdlp from "yt-dlp-exec";
+import { exec } from "child_process";
+import { promisify } from "util";
 
+const execAsync = promisify(exec);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // === CONFIG ===
@@ -58,44 +60,40 @@ function isVideoUrl(url) {
   );
 }
 
-// === SMART DOWNLOAD WITH COOKIES FALLBACK ===
+// === DOWNLOAD USING yt-dlp DIRECTLY (WITH COOKIES) ===
 async function downloadVideo(url) {
   const outputPath = path.join(UPLOADS_DIR, `video-${Date.now()}.mp4`);
 
-  const baseOptions = {
-    output: outputPath,
-    format: "best[ext=mp4]/best",
-    mergeOutputFormat: "mp4",
-    retries: 3,
-    sleepInterval: 5,
-    addHeader: "Referer: https://www.youtube.com/",
-  };
+  const command = [
+    "yt-dlp",
+    "--cookies", `"${COOKIES_PATH}"`,
+    "--output", `"${outputPath}"`,
+    "--format", '"best[ext=mp4]/best"',
+    "--merge-output-format", "mp4",
+    "--retries", "3",
+    "--sleep-interval", "5",
+    "--user-agent", '"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"',
+    "--add-header", '"Referer: https://www.youtube.com/"',
+    `"${url}"`
+  ].join(" ");
 
-  // Try without cookies first
+  console.log("Running yt-dlp:", command.replace(/\\"/g, '"').replace(/"/g, "'"));
+
   try {
-    console.log("Downloading (no cookies):", url);
-    await ytdlp(url, baseOptions);
-    console.log("Success (no cookies):", outputPath);
+    const { stdout, stderr } = await execAsync(command, {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 120000, // 2 min
+    });
+
+    if (stderr && !stderr.includes("[download]")) {
+      console.warn("yt-dlp warning:", stderr);
+    }
+
+    console.log("Download success:", outputPath);
     return outputPath;
   } catch (err) {
-    console.log("Failed without cookies:", err.message);
-
-    // Only retry with cookies if bot detection
-    if (err.message.includes("Sign in to confirm") && fs.existsSync(COOKIES_PATH)) {
-      console.log("Retrying with cookies...");
-      try {
-        await ytdlp(url, {
-          ...baseOptions,
-          cookies: COOKIES_PATH,
-        });
-        console.log("Success with cookies:", outputPath);
-        return outputPath;
-      } catch (cookieErr) {
-        throw new Error(`Download failed even with cookies: ${cookieErr.message}`);
-      }
-    } else {
-      throw new Error(`Download failed: ${err.message}`);
-    }
+    console.error("Download failed:", err.message);
+    throw new Error(`Video download failed: ${err.message}`);
   }
 }
 
