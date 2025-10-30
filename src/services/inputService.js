@@ -12,9 +12,8 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // === CONFIG ===
 const UPLOADS_DIR = path.join(process.cwd(), "tmp_uploads");
-const COOKIES_PATH = path.join(process.cwd(), "cookies.txt");
 
-// Ensure directories exist
+// Ensure directory exists
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 // Auto-clean files older than 2 hours
@@ -35,7 +34,7 @@ setInterval(() => {
       } catch (e) {}
     });
   });
-}, 30 * 60 * 1000); // Every 30 min
+}, 30 * 60 * 1000); // Every 30 minutes
 
 // === MAIN FUNCTION ===
 export async function extractContentFromUrl(url) {
@@ -43,7 +42,7 @@ export async function extractContentFromUrl(url) {
     console.log("Detected video URL, downloading and transcribing...");
     const videoPath = await downloadVideo(url);
     const transcript = await transcribeVideo(videoPath);
-    fs.unlinkSync(videoPath); // cleanup
+    fs.unlinkSync(videoPath); // cleanup video
     return transcript;
   } else {
     console.log("Detected webpage, scraping text content...");
@@ -60,29 +59,30 @@ function isVideoUrl(url) {
   );
 }
 
-// === DOWNLOAD USING yt-dlp DIRECTLY (WITH COOKIES) ===
+// === COOKIE-FREE DOWNLOAD (MOBILE CLIENT EMULATION) ===
 async function downloadVideo(url) {
   const outputPath = path.join(UPLOADS_DIR, `video-${Date.now()}.mp4`);
 
   const command = [
     "yt-dlp",
-    "--cookies", `"${COOKIES_PATH}"`,
+    "--user-agent", '"Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36"',
+    "--add-header", '"Referer: https://m.youtube.com/"',
+    "--extractor-args", '"youtube:player_client=android_sdk,tv,web"',
+    "--sleep-requests", "1",
+    "--retries", "3",
+    "--fragment-retries", "5",
     "--output", `"${outputPath}"`,
     "--format", '"best[ext=mp4]/best"',
     "--merge-output-format", "mp4",
-    "--retries", "3",
-    "--sleep-interval", "5",
-    "--user-agent", '"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"',
-    "--add-header", '"Referer: https://www.youtube.com/"',
     `"${url}"`
   ].join(" ");
 
-  console.log("Running yt-dlp:", command.replace(/\\"/g, '"').replace(/"/g, "'"));
+  console.log("Running yt-dlp (no cookies):", command.replace(/\\"/g, '"').replace(/"/g, "'"));
 
   try {
     const { stdout, stderr } = await execAsync(command, {
       maxBuffer: 10 * 1024 * 1024,
-      timeout: 120000, // 2 min
+      timeout: 180000, // 3 minutes
     });
 
     if (stderr && !stderr.includes("[download]")) {
@@ -115,13 +115,15 @@ export async function transcribeVideo(filePath) {
   const audioPath = path.join(audioDir, "source.wav");
 
   try {
+    // Convert to mono 16kHz WAV
     execSync(`ffmpeg -y -i "${filePath}" -ac 1 -ar 16000 -vn "${audioPath}"`, {
       stdio: "ignore",
     });
 
+    // Get total duration
     const durationCmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`;
     const totalDuration = parseFloat(execSync(durationCmd).toString().trim());
-    const chunkDuration = 25 * 60; // 25 min
+    const chunkDuration = 25 * 60; // 25 minutes
     let offset = 0;
     let allText = "";
 
@@ -129,6 +131,7 @@ export async function transcribeVideo(filePath) {
       const chunkFile = path.join(audioDir, `chunk-${offset}.wav`);
       const end = Math.min(offset + chunkDuration, totalDuration);
 
+      // Extract chunk
       execSync(
         `ffmpeg -y -i "${audioPath}" -ss ${offset} -to ${end} -c copy "${chunkFile}"`,
         { stdio: "ignore" }
@@ -147,7 +150,7 @@ export async function transcribeVideo(filePath) {
 
     return allText.trim();
   } finally {
-    // Always clean up
+    // Always clean up audio files
     if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
     if (fs.existsSync(audioDir)) fs.rmSync(audioDir, { recursive: true, force: true });
   }
