@@ -39,35 +39,55 @@ export async function extractContentFromUrl(url) {
 /**
  * Downloads YouTube or direct video using yt-dlp
  */
-async function downloadVideo(url) {
-  const outputPath = path.join(process.cwd(), `temp-${Date.now()}.mp4`);
-  console.log("⬇️ Downloading video with yt-dlp...");
 
+export const downloadVideo = async (url) => {
   try {
-    await ytdlp(url, {
-      exec: "/root/.local/bin/yt-dlp", // 👈 use your working yt-dlp
-      output: outputPath,
-      cookies: "/var/www/storywave-be/cookies.txt",
-      format: "bestvideo+bestaudio/best",
-      mergeOutputFormat: "mp4",
-      userAgent:
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-      addHeader: [
-        "Referer: https://www.youtube.com/",
-        "Accept-Language: en-US,en;q=0.9",
-      ],
-      extractorArgs: "youtube:player_client=ios",
-      noWarnings: true,
-      preferFreeFormats: true,
-    });
+    const outputPath = path.resolve(`temp-${Date.now()}.mp4`);
+    const cookiesPath = path.resolve("/var/www/storywave-be/cookies.txt");
+    const ytDlpPath = "/root/.local/bin/yt-dlp"; // system-wide yt-dlp
 
-    console.log("✅ Video downloaded:", outputPath);
+    // Command identical to terminal test
+    const command = `${ytDlpPath} "${url}" --cookies ${cookiesPath} -o "${outputPath}"`;
+
+    console.log("▶ Running command:", command);
+    execSync(command, { stdio: "inherit" }); // inherit to log live output
+
     return outputPath;
-  } catch (error) {
-    console.error("❌ Video download failed:", error.message);
+  } catch (err) {
+    console.error("❌ Video download failed:", err.message);
     throw new Error("Video download failed");
   }
-}
+};
+
+// async function downloadVideo(url) {
+//   const outputPath = path.join(process.cwd(), `temp-${Date.now()}.mp4`);
+//   console.log("⬇️ Downloading video with yt-dlp...");
+
+//   try {
+//     await ytdlp(url, {
+//       exec: "/root/.local/bin/yt-dlp", // 👈 use your working yt-dlp
+//       output: outputPath,
+//       cookies: "/var/www/storywave-be/cookies.txt",
+//       format: "bestvideo+bestaudio/best",
+//       mergeOutputFormat: "mp4",
+//       userAgent:
+//         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+//       addHeader: [
+//         "Referer: https://www.youtube.com/",
+//         "Accept-Language: en-US,en;q=0.9",
+//       ],
+//       extractorArgs: "youtube:player_client=ios",
+//       noWarnings: true,
+//       preferFreeFormats: true,
+//     });
+
+//     console.log("✅ Video downloaded:", outputPath);
+//     return outputPath;
+//   } catch (error) {
+//     console.error("❌ Video download failed:", error.message);
+//     throw new Error("Video download failed");
+//   }
+// }
 
 /**
  * Scrape plain text from HTML page
