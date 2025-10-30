@@ -46,14 +46,16 @@ async function downloadVideo(url) {
   try {
     await ytdlp(url, {
       output: outputPath,
-      format: "mp4",
-      // ✅ Ensures correct binary is used in production
+      format: "b[ext=mp4]/best", // ✅ safer than just mp4
       binaryPath:
         process.env.NODE_ENV === "production"
           ? "/root/.local/bin/yt-dlp"
           : undefined,
-      // optional: add cookies if you face "Sign in to confirm you're not a bot"
-      // cookies: "/var/www/storywave-be/cookies.txt",
+      cookies: "/var/www/storywave-be/cookies.txt", // ✅ Use your cookies
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.7444.59 Safari/537.36",
+      addHeader: ["Referer: https://www.youtube.com/"],
+      extractorArgs: "youtube:player_client=tv,web", // helps bypass nsig lock
     });
 
     console.log("✅ Video downloaded:", outputPath);
@@ -63,6 +65,7 @@ async function downloadVideo(url) {
     throw new Error("Video download failed");
   }
 }
+
 
 /**
  * Scrape plain text from HTML page
