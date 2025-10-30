@@ -61,81 +61,67 @@ function isVideoUrl(url) {
 
 // === COOKIE-FREE DOWNLOAD (MOBILE CLIENT EMULATION) ===
 async function downloadVideo(url) {
+  const YTDLP_PATH = "/root/.local/bin/yt-dlp"; // ✅ absolute path
   const outputPath = path.join(UPLOADS_DIR, `video-${Date.now()}.mp4`);
+  
   const baseCommand = [
-    "yt-dlp",
-    "--user-agent",
-    '"Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36"',
-    "--add-header",
-    '"Referer: https://m.youtube.com/"',
-    "--extractor-args",
-    '"youtube:player_client=android_sdk,tv,web"',
-    "--sleep-requests",
-    "1",
-    "--retries",
-    "3",
-    "--fragment-retries",
-    "5",
-    "--output",
-    `"${outputPath}"`,
-    "--format",
-    '"best[ext=mp4]/best"',
-    "--merge-output-format",
-    "mp4",
-    `"${url}"`,
+    YTDLP_PATH,
+    "--user-agent", '"Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36"',
+    "--add-header", '"Referer: https://m.youtube.com/"',
+    "--extractor-args", '"youtube:player_client=android_sdk,tv,web"',
+    "--sleep-requests", "1",
+    "--retries", "3",
+    "--fragment-retries", "5",
+    "--output", `"${outputPath}"`,
+    "--format", '"best[ext=mp4]/best"',
+    "--merge-output-format", "mp4",
+    `"${url}"`
   ];
 
-  // First attempt: Cookie-free
   let command = baseCommand.join(" ");
-  console.log(
-    "Running yt-dlp (no cookies):",
-    command.replace(/\\"/g, '"').replace(/"/g, "'")
-  );
+  console.log("Running yt-dlp (no cookies):", command);
 
   try {
     const { stdout, stderr } = await execAsync(command, {
       maxBuffer: 10 * 1024 * 1024,
       timeout: 180000,
     });
-    if (stderr && !stderr.includes("[download]")) {
-      console.warn("yt-dlp warning:", stderr);
-    }
-    console.log("Download success:", outputPath);
+    console.log(stdout);
+    if (stderr && !stderr.includes("[download]")) console.warn(stderr);
     return outputPath;
   } catch (err) {
-    console.warn(
-      "Cookie-free download failed, trying with cookies:",
-      err.message
-    );
+    console.warn("Cookie-free download failed, trying with cookies:", err.message);
 
-    // Fallback: Use cookies.txt if available
-    const cookiesPath = "/var/www/storywave-be/cookies.txt";
+    // 🔹 Use cookies.txt file instead of Chrome profile
     const cookieCommand = [
-      ...baseCommand.slice(0, -1),
-      "--cookies",
-      `"${cookiesPath}"`,
-      `"${url}"`,
+      YTDLP_PATH,
+      "--user-agent", '"Mozilla/5.0 (Linux; Android 13; SM-G991B)"',
+      "--add-header", '"Referer: https://m.youtube.com/"',
+      "--cookies", "/var/www/storywave-be/cookies.txt", // ✅ using cookies.txt
+      "--extractor-args", '"youtube:player_client=tv,web"',
+      "--sleep-requests", "1",
+      "--retries", "3",
+      "--fragment-retries", "5",
+      "--output", `"${outputPath}"`,
+      "--format", '"best[ext=mp4]/best"',
+      "--merge-output-format", "mp4",
+      `"${url}"`
     ].join(" ");
 
-    console.log(
-      "Running yt-dlp (with cookies.txt):",
-      cookieCommand.replace(/\\"/g, '"').replace(/"/g, "'")
-    );
+    console.log("Running yt-dlp (with cookies.txt):", cookieCommand);
 
-    const { stdout: cookieStdout, stderr: cookieStderr } = await execAsync(
-      cookieCommand,
-      {
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 180000,
-      }
-    );
-    if (cookieStderr && !cookieStderr.includes("[download]")) {
-      console.warn("yt-dlp cookie warning:", cookieStderr);
-    }
-    console.log("Fallback download success:", outputPath);
+    const { stdout: cookieStdout, stderr: cookieStderr } = await execAsync(cookieCommand, {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 180000,
+    });
+
+    console.log(cookieStdout);
+    if (cookieStderr && !cookieStderr.includes("[download]")) console.warn(cookieStderr);
+
     return outputPath;
   }
 }
+
 
 // === SCRAPE WEBPAGE ===
 export async function extractFromUrl(url) {
