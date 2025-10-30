@@ -45,6 +45,7 @@ async function downloadVideo(url) {
 
   try {
     await ytdlp(url, {
+      exec: "/root/.local/bin/yt-dlp", // 👈 use your working yt-dlp
       output: outputPath,
       format: "b[ext=mp4]/best", // ✅ safer than just mp4
       binaryPath:
@@ -65,7 +66,6 @@ async function downloadVideo(url) {
     throw new Error("Video download failed");
   }
 }
-
 
 /**
  * Scrape plain text from HTML page
@@ -104,7 +104,9 @@ export async function transcribeVideo(filePath) {
       { stdio: "ignore" }
     );
 
-    console.log(`🎙️ Transcribing chunk ${formatTime(offset)} → ${formatTime(end)}`);
+    console.log(
+      `🎙️ Transcribing chunk ${formatTime(offset)} → ${formatTime(end)}`
+    );
 
     const response = await openai.audio.transcriptions.create({
       file: fs.createReadStream(chunkFile),
@@ -125,8 +127,14 @@ export async function transcribeVideo(filePath) {
  * Helper: Format seconds to hh:mm:ss
  */
 function formatTime(seconds) {
-  const h = Math.floor(seconds / 3600).toString().padStart(2, "0");
-  const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, "0");
-  const s = Math.floor(seconds % 60).toString().padStart(2, "0");
+  const h = Math.floor(seconds / 3600)
+    .toString()
+    .padStart(2, "0");
+  const m = Math.floor((seconds % 3600) / 60)
+    .toString()
+    .padStart(2, "0");
+  const s = Math.floor(seconds % 60)
+    .toString()
+    .padStart(2, "0");
   return `${h}:${m}:${s}`;
 }
