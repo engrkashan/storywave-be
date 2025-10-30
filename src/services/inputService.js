@@ -4,25 +4,52 @@ import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
-import { execFile } from "child_process";
 import ytdlp from "yt-dlp-exec";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// === CONFIG ===
+const UPLOADS_DIR = path.join(process.cwd(), "tmp_uploads");
+const COOKIES_PATH = path.join(process.cwd(), "cookies.txt");
+
+// Ensure directories exist
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// Auto-clean files older than 2 hours
+setInterval(() => {
+  const now = Date.now();
+  const TWO_HOURS = 2 * 60 * 60 * 1000;
+
+  fs.readdir(UPLOADS_DIR, (err, files) => {
+    if (err) return;
+    files.forEach(file => {
+      const filePath = path.join(UPLOADS_DIR, file);
+      try {
+        const stats = fs.statSync(filePath);
+        if (now - stats.mtimeMs > TWO_HOURS) {
+          fs.rmSync(filePath, { recursive: true, force: true });
+          console.log("Cleaned old file:", file);
+        }
+      } catch (e) {}
+    });
+  });
+}, 30 * 60 * 1000); // Every 30 min
+
+// === MAIN FUNCTION ===
 export async function extractContentFromUrl(url) {
   if (isVideoUrl(url)) {
-    console.log("🎬 Detected video URL, downloading and transcribing...");
+    console.log("Detected video URL, downloading and transcribing...");
     const videoPath = await downloadVideo(url);
     const transcript = await transcribeVideo(videoPath);
     fs.unlinkSync(videoPath); // cleanup
     return transcript;
   } else {
-    console.log("📰 Detected webpage, scraping text content...");
+    console.log("Detected webpage, scraping text content...");
     return await extractFromUrl(url);
   }
 }
 
-// Detect if URL is video (YouTube or direct mp4, mov, etc.)
+// Detect video URLs
 function isVideoUrl(url) {
   return (
     url.includes("youtube.com") ||
@@ -31,66 +58,104 @@ function isVideoUrl(url) {
   );
 }
 
-// Download YouTube or direct video
+// === SMART DOWNLOAD WITH COOKIES FALLBACK ===
 async function downloadVideo(url) {
-  const outputPath = path.join(process.cwd(), `temp-${Date.now()}.mp4`);
-  await ytdlp(url, {
+  const outputPath = path.join(UPLOADS_DIR, `video-${Date.now()}.mp4`);
+
+  const baseOptions = {
     output: outputPath,
-    format: "mp4",
-  });
-  return outputPath;
+    format: "best[ext=mp4]/best",
+    mergeOutputFormat: "mp4",
+    retries: 3,
+    sleepInterval: 5,
+    addHeader: "Referer: https://www.youtube.com/",
+  };
+
+  // Try without cookies first
+  try {
+    console.log("Downloading (no cookies):", url);
+    await ytdlp(url, baseOptions);
+    console.log("Success (no cookies):", outputPath);
+    return outputPath;
+  } catch (err) {
+    console.log("Failed without cookies:", err.message);
+
+    // Only retry with cookies if bot detection
+    if (err.message.includes("Sign in to confirm") && fs.existsSync(COOKIES_PATH)) {
+      console.log("Retrying with cookies...");
+      try {
+        await ytdlp(url, {
+          ...baseOptions,
+          cookies: COOKIES_PATH,
+        });
+        console.log("Success with cookies:", outputPath);
+        return outputPath;
+      } catch (cookieErr) {
+        throw new Error(`Download failed even with cookies: ${cookieErr.message}`);
+      }
+    } else {
+      throw new Error(`Download failed: ${err.message}`);
+    }
+  }
 }
 
-
-// Scrape plain text from HTML page
+// === SCRAPE WEBPAGE ===
 export async function extractFromUrl(url) {
-  const { data } = await axios.get(url);
-  const $ = cheerio.load(data);
-  return $("body").text().replace(/\s+/g, " ").trim();
+  try {
+    const { data } = await axios.get(url, { timeout: 10000 });
+    const $ = cheerio.load(data);
+    return $("body").text().replace(/\s+/g, " ").trim();
+  } catch (err) {
+    throw new Error(`Failed to scrape ${url}: ${err.message}`);
+  }
 }
 
-// Transcribe long videos in chunks (modified to return only the plain text story)
+// === TRANSCRIBE VIDEO IN CHUNKS ===
 export async function transcribeVideo(filePath) {
-  const tempDir = path.join(process.cwd(), "temp_audio_chunks");
-  fs.mkdirSync(tempDir, { recursive: true });
+  const audioDir = path.join(UPLOADS_DIR, `audio-${Date.now()}`);
+  fs.mkdirSync(audioDir, { recursive: true });
+  const audioPath = path.join(audioDir, "source.wav");
 
-  const audioPath = path.join(tempDir, `source-${Date.now()}.wav`);
-  execSync(`ffmpeg -y -i "${filePath}" -ac 1 -ar 16000 -vn "${audioPath}"`, {
-    stdio: "ignore",
-  });
-
-  const durationCmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`;
-  const totalDuration = parseFloat(execSync(durationCmd).toString().trim());
-  const chunkDuration = 25 * 60;
-
-  let offset = 0;
-  let allText = "";
-
-  while (offset < totalDuration) {
-    const chunkFile = path.join(tempDir, `chunk-${offset}.wav`);
-    const end = Math.min(offset + chunkDuration, totalDuration);
-
-    execSync(
-      `ffmpeg -y -i "${audioPath}" -ss ${offset} -to ${end} -c copy "${chunkFile}"`,
-      { stdio: "ignore" }
-    );
-
-    console.log(`🎙️ Transcribing chunk ${formatTime(offset)} → ${formatTime(end)}`);
-    const response = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(chunkFile),
-      model: "whisper-1",
+  try {
+    execSync(`ffmpeg -y -i "${filePath}" -ac 1 -ar 16000 -vn "${audioPath}"`, {
+      stdio: "ignore",
     });
 
-    allText += response.text.trim() + " ";
-    fs.unlinkSync(chunkFile);
-    offset = end;
-  }
+    const durationCmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`;
+    const totalDuration = parseFloat(execSync(durationCmd).toString().trim());
+    const chunkDuration = 25 * 60; // 25 min
+    let offset = 0;
+    let allText = "";
 
-  fs.unlinkSync(audioPath);
-  fs.rmSync(tempDir, { recursive: true, force: true });
-  return allText.trim();
+    while (offset < totalDuration) {
+      const chunkFile = path.join(audioDir, `chunk-${offset}.wav`);
+      const end = Math.min(offset + chunkDuration, totalDuration);
+
+      execSync(
+        `ffmpeg -y -i "${audioPath}" -ss ${offset} -to ${end} -c copy "${chunkFile}"`,
+        { stdio: "ignore" }
+      );
+
+      console.log(`Transcribing chunk ${formatTime(offset)} → ${formatTime(end)}`);
+      const response = await openai.audio.transcriptions.create({
+        file: fs.createReadStream(chunkFile),
+        model: "whisper-1",
+      });
+
+      allText += response.text.trim() + " ";
+      fs.unlinkSync(chunkFile);
+      offset = end;
+    }
+
+    return allText.trim();
+  } finally {
+    // Always clean up
+    if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
+    if (fs.existsSync(audioDir)) fs.rmSync(audioDir, { recursive: true, force: true });
+  }
 }
 
+// === HELPER ===
 function formatTime(seconds) {
   const h = Math.floor(seconds / 3600).toString().padStart(2, "0");
   const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, "0");
