@@ -47,7 +47,7 @@ async function downloadVideo(url) {
     await ytdlp(url, {
       exec: "/root/.local/bin/yt-dlp", // 👈 use your working yt-dlp
       output: outputPath,
-      format: mp4, // ✅ safer than just mp4
+      format: "mp4", // ✅ safer than just mp4
       binaryPath:
         process.env.NODE_ENV === "production"
           ? "/root/.local/bin/yt-dlp"
