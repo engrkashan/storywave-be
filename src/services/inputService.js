@@ -59,7 +59,6 @@ async function downloadVideo(url) {
       extractorArgs: "youtube:player_client=ios",
       noWarnings: true,
       preferFreeFormats: true,
-      verbose: false,
     });
 
     console.log("✅ Video downloaded:", outputPath);
