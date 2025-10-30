@@ -23,7 +23,7 @@ setInterval(() => {
 
   fs.readdir(UPLOADS_DIR, (err, files) => {
     if (err) return;
-    files.forEach(file => {
+    files.forEach((file) => {
       const filePath = path.join(UPLOADS_DIR, file);
       try {
         const stats = fs.statSync(filePath);
@@ -64,21 +64,33 @@ async function downloadVideo(url) {
   const outputPath = path.join(UPLOADS_DIR, `video-${Date.now()}.mp4`);
   const baseCommand = [
     "yt-dlp",
-    "--user-agent", '"Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36"',
-    "--add-header", '"Referer: https://m.youtube.com/"',
-    "--extractor-args", '"youtube:player_client=android_sdk,tv,web"',
-    "--sleep-requests", "1",
-    "--retries", "3",
-    "--fragment-retries", "5",
-    "--output", `"${outputPath}"`,
-    "--format", '"best[ext=mp4]/best"',
-    "--merge-output-format", "mp4",
-    `"${url}"`
+    "--user-agent",
+    '"Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36"',
+    "--add-header",
+    '"Referer: https://m.youtube.com/"',
+    "--extractor-args",
+    '"youtube:player_client=android_sdk,tv,web"',
+    "--sleep-requests",
+    "1",
+    "--retries",
+    "3",
+    "--fragment-retries",
+    "5",
+    "--output",
+    `"${outputPath}"`,
+    "--format",
+    '"best[ext=mp4]/best"',
+    "--merge-output-format",
+    "mp4",
+    `"${url}"`,
   ];
 
   // First attempt: Cookie-free
   let command = baseCommand.join(" ");
-  console.log("Running yt-dlp (no cookies):", command.replace(/\\"/g, '"').replace(/"/g, "'"));
+  console.log(
+    "Running yt-dlp (no cookies):",
+    command.replace(/\\"/g, '"').replace(/"/g, "'")
+  );
 
   try {
     const { stdout, stderr } = await execAsync(command, {
@@ -91,16 +103,32 @@ async function downloadVideo(url) {
     console.log("Download success:", outputPath);
     return outputPath;
   } catch (err) {
-    console.warn("Cookie-free download failed, trying with cookies:", err.message);
+    console.warn(
+      "Cookie-free download failed, trying with cookies:",
+      err.message
+    );
 
-    // Fallback: Use cookies from Chrome profile (adjust path to your VPS setup)
-    const cookieCommand = [...baseCommand.slice(0, -1), "--cookies-from-browser", "chrome:/var/www/storywave-be/chrome-profile", `"${url}"`].join(" ");
-    console.log("Running yt-dlp (with cookies):", cookieCommand.replace(/\\"/g, '"').replace(/"/g, "'"));
+    // Fallback: Use cookies.txt if available
+    const cookiesPath = "/var/www/storywave-be/cookies.txt";
+    const cookieCommand = [
+      ...baseCommand.slice(0, -1),
+      "--cookies",
+      `"${cookiesPath}"`,
+      `"${url}"`,
+    ].join(" ");
 
-    const { stdout: cookieStdout, stderr: cookieStderr } = await execAsync(cookieCommand, {
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: 180000,
-    });
+    console.log(
+      "Running yt-dlp (with cookies.txt):",
+      cookieCommand.replace(/\\"/g, '"').replace(/"/g, "'")
+    );
+
+    const { stdout: cookieStdout, stderr: cookieStderr } = await execAsync(
+      cookieCommand,
+      {
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: 180000,
+      }
+    );
     if (cookieStderr && !cookieStderr.includes("[download]")) {
       console.warn("yt-dlp cookie warning:", cookieStderr);
     }
@@ -149,7 +177,9 @@ export async function transcribeVideo(filePath) {
         { stdio: "ignore" }
       );
 
-      console.log(`Transcribing chunk ${formatTime(offset)} → ${formatTime(end)}`);
+      console.log(
+        `Transcribing chunk ${formatTime(offset)} → ${formatTime(end)}`
+      );
       const response = await openai.audio.transcriptions.create({
         file: fs.createReadStream(chunkFile),
         model: "whisper-1",
@@ -164,14 +194,21 @@ export async function transcribeVideo(filePath) {
   } finally {
     // Always clean up audio files
     if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
-    if (fs.existsSync(audioDir)) fs.rmSync(audioDir, { recursive: true, force: true });
+    if (fs.existsSync(audioDir))
+      fs.rmSync(audioDir, { recursive: true, force: true });
   }
 }
 
 // === HELPER ===
 function formatTime(seconds) {
-  const h = Math.floor(seconds / 3600).toString().padStart(2, "0");
-  const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, "0");
-  const s = Math.floor(seconds % 60).toString().padStart(2, "0");
+  const h = Math.floor(seconds / 3600)
+    .toString()
+    .padStart(2, "0");
+  const m = Math.floor((seconds % 3600) / 60)
+    .toString()
+    .padStart(2, "0");
+  const s = Math.floor(seconds % 60)
+    .toString()
+    .padStart(2, "0");
   return `${h}:${m}:${s}`;
 }
