@@ -47,16 +47,19 @@ async function downloadVideo(url) {
     await ytdlp(url, {
       exec: "/root/.local/bin/yt-dlp", // 👈 use your working yt-dlp
       output: outputPath,
-      format: "mp4", // ✅ safer than just mp4
-      binaryPath:
-        process.env.NODE_ENV === "production"
-          ? "/root/.local/bin/yt-dlp"
-          : undefined,
-      cookies: "/var/www/storywave-be/cookies.txt", // ✅ Use your cookies
+      cookies: "/var/www/storywave-be/cookies.txt",
+      format: "bestvideo+bestaudio/best",
+      mergeOutputFormat: "mp4",
       userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.7444.59 Safari/537.36",
-      addHeader: ["Referer: https://www.youtube.com/"],
-      extractorArgs: "youtube:player_client=tv,web", // helps bypass nsig lock
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      addHeader: [
+        "Referer: https://www.youtube.com/",
+        "Accept-Language: en-US,en;q=0.9",
+      ],
+      extractorArgs: "youtube:player_client=ios",
+      noWarnings: true,
+      preferFreeFormats: true,
+      verbose: false,
     });
 
     console.log("✅ Video downloaded:", outputPath);
