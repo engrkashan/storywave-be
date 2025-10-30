@@ -62,8 +62,7 @@ function isVideoUrl(url) {
 // === COOKIE-FREE DOWNLOAD (MOBILE CLIENT EMULATION) ===
 async function downloadVideo(url) {
   const outputPath = path.join(UPLOADS_DIR, `video-${Date.now()}.mp4`);
-
-  const command = [
+  const baseCommand = [
     "yt-dlp",
     "--user-agent", '"Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36"',
     "--add-header", '"Referer: https://m.youtube.com/"',
@@ -75,25 +74,38 @@ async function downloadVideo(url) {
     "--format", '"best[ext=mp4]/best"',
     "--merge-output-format", "mp4",
     `"${url}"`
-  ].join(" ");
+  ];
 
+  // First attempt: Cookie-free
+  let command = baseCommand.join(" ");
   console.log("Running yt-dlp (no cookies):", command.replace(/\\"/g, '"').replace(/"/g, "'"));
 
   try {
     const { stdout, stderr } = await execAsync(command, {
       maxBuffer: 10 * 1024 * 1024,
-      timeout: 180000, // 3 minutes
+      timeout: 180000,
     });
-
     if (stderr && !stderr.includes("[download]")) {
       console.warn("yt-dlp warning:", stderr);
     }
-
     console.log("Download success:", outputPath);
     return outputPath;
   } catch (err) {
-    console.error("Download failed:", err.message);
-    throw new Error(`Video download failed: ${err.message}`);
+    console.warn("Cookie-free download failed, trying with cookies:", err.message);
+
+    // Fallback: Use cookies from Chrome profile (adjust path to your VPS setup)
+    const cookieCommand = [...baseCommand.slice(0, -1), "--cookies-from-browser", "chrome:/var/www/storywave-be/chrome-profile", `"${url}"`].join(" ");
+    console.log("Running yt-dlp (with cookies):", cookieCommand.replace(/\\"/g, '"').replace(/"/g, "'"));
+
+    const { stdout: cookieStdout, stderr: cookieStderr } = await execAsync(cookieCommand, {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 180000,
+    });
+    if (cookieStderr && !cookieStderr.includes("[download]")) {
+      console.warn("yt-dlp cookie warning:", cookieStderr);
+    }
+    console.log("Fallback download success:", outputPath);
+    return outputPath;
   }
 }
 
