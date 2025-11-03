@@ -159,14 +159,14 @@ export async function createVideo(
     : "";
 
   // ✅ Correct filter chain: image → (drawtext optional) → subtitles
-  const filterComplex = `[0:v]${titleOverlay}subtitles='${escapedAssPath}'[vout]`;
+  const filterComplex = `[0:v]${titleOverlay}subtitles='${escapedAssPath}'`;
 
   const cmd = [
     `ffmpeg -y -loop 1`,
     `-i "${imagePath}"`,
     `-i "${audioPath}"`,
     `-filter_complex "${filterComplex}"`,
-    `-map "[vout]" -map 1:a`,
+    `-map 0:v -map 1:a`,
     `-c:v libx264 -pix_fmt yuv420p -c:a aac -shortest`,
     `"${outputPath}"`,
   ].join(" ");
