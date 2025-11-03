@@ -41,7 +41,7 @@ export async function createVideo(
   // const filterComplex = `[0:v]${zoomEffect}${titleOverlay}[zoomed];[zoomed]subtitles='${escapedAssPath}'[vout]`;
   const filterComplex = `
   [0:v]${zoomEffect}${titleOverlay}[zoomed];
-  [zoomed]subtitles='${escapedAssPath}:force_style=OutlineColour=&H40000000&,BorderStyle=3'[vout]
+  [zoomed]subtitles='${escapedAssPath}':force_style='OutlineColour=&H40000000&,BorderStyle=3'[vout]
 `;
 
   const cmd = [
