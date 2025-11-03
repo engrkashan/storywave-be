@@ -1,3 +1,4 @@
+
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -38,18 +39,14 @@ export async function createVideo(
       )}':fontfile='Lucida Grande':fontcolor=white:fontsize=36:borderw=2:x=(w-text_w)/2:y=h-80`
     : "";
 
-  // const filterComplex = `[0:v]${zoomEffect}${titleOverlay}[zoomed];[zoomed]subtitles='${escapedAssPath}'[vout]`;
-  const filterComplex = `
-  [0:v]${zoomEffect}${titleOverlay}[zoomed];
-  [zoomed]subtitles='${escapedAssPath}':force_style='OutlineColour=&H40000000&,BorderStyle=3'[vout]
-`;
+  const filterComplex = `[0:v]${zoomEffect}${titleOverlay}[zoomed];[zoomed]subtitles='${escapedAssPath}'`;
 
   const cmd = [
     `ffmpeg -y -loop 1`,
     `-i "${imagePath}"`,
     `-i "${audioPath}"`,
     `-filter_complex "${filterComplex}"`,
-    `-map "[vout]" -map 1:a`,
+    `-map 0:v -map 1:a`,
     `-c:v libx264 -pix_fmt yuv420p -c:a aac -shortest`,
     `"${outputPath}"`,
   ].join(" ");
