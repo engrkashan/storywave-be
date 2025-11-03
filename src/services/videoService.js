@@ -1,3 +1,4 @@
+
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -73,7 +74,7 @@ function convertSrtToAss(srtPath, assPath) {
   const srtContent = fs.readFileSync(srtPath, "utf8");
   const blocks = srtContent.trim().split(/\n\s*\n/);
   let ass = `[Script Info]\nTitle: Karaoke Subs\nScriptType: v4.00+\nPlayResX: 1024\nPlayResY: 1024\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n`;
-  ass += `Style: Default,Times,44,&H00FFFFFF&,&H000000FF&,&H00000000&,&H00000000&,0,0,0,0,100,100,0,0,1,3,1,2,50,50,60,1\n\n`;
+  ass += `Style: Default,Times,60,&H0000FF00&,&H00FFFFFF&,&H00000000&,&H00000000&,0,0,0,0,100,100,0,0,1,3,1,2,50,50,80,1\n\n`;
   ass += `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
   for (const block of blocks) {
     const lines = block.split("\n");

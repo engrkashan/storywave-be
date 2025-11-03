@@ -5,6 +5,13 @@ import cloudinary from "../config/cloudinary.config.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// ✅ All temporary files stored in ./temp (works on Windows & VPS)
+const TEMP_DIR = path.join(process.cwd(), "temp");
+fs.mkdirSync(TEMP_DIR, { recursive: true });
+
+/**
+ * Clean unwanted characters from the script
+ */
 function cleanScript(script) {
   return script
     .replace(/\*\*/g, "")
@@ -21,10 +28,7 @@ function cleanScript(script) {
  * Returns: { url, localPath }
  */
 export async function generateVoiceover(script, filename, voice = "onyx") {
-  const tempDir = path.join(process.cwd(), "temp");
-  fs.mkdirSync(tempDir, { recursive: true });
-
-  const localPath = path.join(tempDir, filename);
+  const localPath = path.join(TEMP_DIR, filename);
   const text = cleanScript(script);
 
   const CHUNK_SIZE = 1000;
@@ -41,12 +45,11 @@ export async function generateVoiceover(script, filename, voice = "onyx") {
     buffers.push(Buffer.from(await res.arrayBuffer()));
   }
 
+  // ✅ Combine and save final audio file
   const fullBuffer = Buffer.concat(buffers);
-
-  // 1️⃣ Write to local temp file
   fs.writeFileSync(localPath, fullBuffer);
 
-  // 2️⃣ Upload to Cloudinary
+  // ✅ Upload to Cloudinary
   const uploadRes = await cloudinary.uploader.upload(localPath, {
     folder: "voiceovers",
     resource_type: "video",

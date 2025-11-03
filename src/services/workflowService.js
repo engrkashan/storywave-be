@@ -2,12 +2,20 @@ import fs from "fs";
 import path from "path";
 import prisma from "../config/prisma.client.js";
 import { generateImage } from "./imageService.js";
-import { extractContentFromUrl, extractFromUrl, transcribeVideo } from "./inputService.js";
+import {
+  extractContentFromUrl,
+  extractFromUrl,
+  transcribeVideo,
+} from "./inputService.js";
 import { generateStory } from "./storyService.js";
 import { createVideo } from "./videoService.js";
 import cloudinary from "../config/cloudinary.config.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
+import { deleteTempFiles } from "../utils/deleteTemp.js";
+
+const TEMP_DIR = path.resolve(process.cwd(), "temp");
+fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const log = (msg, color = "\x1b[36m") => {
   const time = new Date().toISOString().split("T")[1].split(".")[0];
@@ -102,8 +110,7 @@ export async function runWorkflow({
 
     // 4️⃣ Generate a single image (UNMODIFIED)
     log("Step 4: Generating a single image for the entire story...");
-    const storyPrompt = `Cinematic, detailed digital artwork representing the overall theme of the story titled "${title}". 
-    The style should match ${storyType} genre, tone: ${voiceTone}. No text or captions in the image.`;
+    const storyPrompt = `A breathtaking, cinematic digital illustration inspired by the story titled "${title}". Visually represent the main theme and emotional core of the story using rich detail, dramatic lighting, and a cohesive color palette. The style should reflect the ${storyType} genre with a tone that feels ${voiceTone}. Focus on atmosphere, storytelling depth, and dynamic composition — like a movie poster or story thumbnail. No text, no logos, no captions — only the artwork.`;
 
     let imageUrl;
     try {
@@ -127,10 +134,7 @@ export async function runWorkflow({
 
     const srtContent = await transcribeWithTimestamps(voiceLocalPath);
 
-    const tempDir = path.join(process.cwd(), "temp");
-    fs.mkdirSync(tempDir, { recursive: true });
-
-    srtPath = path.join(tempDir, `subtitles-${workflow.id}.srt`);
+    srtPath = path.join(TEMP_DIR, `subtitles-${workflow.id}.srt`);
     fs.writeFileSync(srtPath, srtContent);
 
     log("✅ Subtitle (SRT) file generated successfully.");
@@ -138,14 +142,13 @@ export async function runWorkflow({
     // 6️⃣ Create video (single image + subtitles)
     log("Step 6: Creating video with accurate subtitles...");
 
-    const videoFilename = `${workflow.id}-${Date.now()}.mp4`;
-    const videoPath = path.join(tempDir, videoFilename);
+    const timestamp = Date.now();
+    const videoFilename = `${workflow.id}-${timestamp}.mp4`;
+    const videoPath = path.join(TEMP_DIR, videoFilename);
 
+    console.log("Subtitles created at", srtPath);
     // Pass the SRT file path instead of the 'scenes' array
     await createVideo(title, imageUrl, voiceLocalPath, videoPath, srtPath); // <-- MODIFIED CALL
-
-    if (fs.existsSync(voiceLocalPath)) fs.unlinkSync(voiceLocalPath);
-    if (fs.existsSync(srtPath)) fs.unlinkSync(srtPath); // Cleanup the srt file
 
     // 7️⃣ Upload final video
     const videoURL = await uploadVideoToCloud(videoPath, videoFilename);
@@ -161,7 +164,7 @@ export async function runWorkflow({
     });
 
     log("🎉 Workflow completed successfully.");
-
+    deleteTempFiles(TEMP_DIR);
     return {
       success: true,
       workflowId: workflow.id,
@@ -175,10 +178,13 @@ export async function runWorkflow({
       image: imageUrl,
     };
   } catch (err) {
-    // Cleanup any remaining files on failure
-    if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
-
     log(`Workflow failed: ${err.message}`, "\x1b[31m");
+    try {
+      if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
+      deleteTempFiles(TEMP_DIR);
+    } catch (cleanupErr) {
+      log(`⚠️ Temp cleanup failed: ${cleanupErr.message}`);
+    }
     await prisma.workflow.update({
       where: { id: workflow.id },
       data: { status: "FAILED", metadata: { error: err.message } },
