@@ -6,14 +6,12 @@ import path from "path";
 import { execSync } from "child_process";
 import ytdlp from "yt-dlp-exec";
 
-const TEMP_DIR = path.join(process.cwd(), "temp");
-fs.mkdirSync(TEMP_DIR, { recursive: true });
-// ✅ Ensure yt-dlp is accessible on VPS
+// ✅ Ensure yt-dlp is accessible in all environments
 process.env.PATH = `${process.env.PATH}:/root/.local/bin`;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ✅ Detect if URL is a video
+// Detect if URL is a video (YouTube or direct file)
 function isVideoUrl(url) {
   return (
     url.includes("youtube.com") ||
@@ -30,11 +28,7 @@ export async function extractContentFromUrl(url) {
     console.log("🎬 Detected video URL — downloading and transcribing...");
     const videoPath = await downloadVideo(url);
     const transcript = await transcribeVideo(videoPath);
-    try {
-      fs.unlinkSync(videoPath);
-    } catch (e) {
-      console.warn("⚠️ Failed to delete video:", e.message);
-    }
+    fs.unlinkSync(videoPath); // cleanup
     return transcript;
   } else {
     console.log("📰 Detected webpage — scraping text content...");
@@ -45,10 +39,10 @@ export async function extractContentFromUrl(url) {
 /**
  * Downloads YouTube or direct video using yt-dlp
  */
-// SERVER
+
 export const downloadVideo = async (url) => {
   try {
-    const outputPath = path.join(TEMP_DIR, `temp-${Date.now()}.mp4`);
+    const outputPath = path.resolve(`temp-${Date.now()}.mp4`);
     const cookiesPath = path.resolve("/var/www/storywave-be/cookies.txt");
     const ytDlpPath = "/root/.local/bin/yt-dlp"; // system-wide yt-dlp
 
@@ -65,16 +59,26 @@ export const downloadVideo = async (url) => {
   }
 };
 
-// LOCAL
 // async function downloadVideo(url) {
-//   const outputPath = path.join(TEMP_DIR, `video-${Date.now()}.mp4`);
+//   const outputPath = path.join(process.cwd(), `temp-${Date.now()}.mp4`);
 //   console.log("⬇️ Downloading video with yt-dlp...");
 
 //   try {
 //     await ytdlp(url, {
+//       exec: "/root/.local/bin/yt-dlp", // 👈 use your working yt-dlp
 //       output: outputPath,
-//       format: "mp4",
-//       quiet: true,
+//       cookies: "/var/www/storywave-be/cookies.txt",
+//       format: "bestvideo+bestaudio/best",
+//       mergeOutputFormat: "mp4",
+//       userAgent:
+//         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+//       addHeader: [
+//         "Referer: https://www.youtube.com/",
+//         "Accept-Language: en-US,en;q=0.9",
+//       ],
+//       extractorArgs: "youtube:player_client=ios",
+//       noWarnings: true,
+//       preferFreeFormats: true,
 //     });
 
 //     console.log("✅ Video downloaded:", outputPath);
@@ -95,103 +99,50 @@ export async function extractFromUrl(url) {
 }
 
 /**
- * Transcribes large videos safely in 5-minute chunks using OpenAI Whisper
+ * Transcribes long videos in chunks using OpenAI Whisper
  */
 export async function transcribeVideo(filePath) {
-  const tempDir = path.join(TEMP_DIR, `audio_chunks_${Date.now()}`);
+  const tempDir = path.join(process.cwd(), "temp_audio_chunks");
   fs.mkdirSync(tempDir, { recursive: true });
 
-  const baseAudio = path.join(tempDir, `audio-${Date.now()}.wav`);
+  const audioPath = path.join(tempDir, `source-${Date.now()}.wav`);
+  execSync(`ffmpeg -y -i "${filePath}" -ac 1 -ar 16000 -vn "${audioPath}"`, {
+    stdio: "ignore",
+  });
 
-  // ✅ Step 1: Convert video to 16kHz mono WAV
-  console.log("🎧 Extracting audio...");
-  execSync(
-    `ffmpeg -y -i "${filePath}" -ac 1 -ar 16000 -vn -f wav "${baseAudio}"`,
-    { stdio: "ignore" }
-  );
+  const durationCmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`;
+  const totalDuration = parseFloat(execSync(durationCmd).toString().trim());
+  const chunkDuration = 25 * 60; // 25 minutes per chunk
 
-  // ✅ Step 2: Get total duration
-  const duration = parseFloat(
-    execSync(
-      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${baseAudio}"`
-    )
-      .toString()
-      .trim()
-  );
-
-  console.log(`🎞️ Audio duration: ${formatTime(duration)}`);
-
-  const chunkDuration = 300; // 5 minutes per chunk
   let offset = 0;
   let allText = "";
 
-  // ✅ Step 3: Split & transcribe each chunk with retry
-  while (offset < duration) {
-    const end = Math.min(offset + chunkDuration, duration);
+  while (offset < totalDuration) {
     const chunkFile = path.join(tempDir, `chunk-${offset}.wav`);
+    const end = Math.min(offset + chunkDuration, totalDuration);
 
     execSync(
-      `ffmpeg -y -i "${baseAudio}" -ss ${offset} -to ${end} -c copy "${chunkFile}"`,
+      `ffmpeg -y -i "${audioPath}" -ss ${offset} -to ${end} -c copy "${chunkFile}"`,
       { stdio: "ignore" }
     );
 
-    const sizeMB = fs.statSync(chunkFile).size / (1024 * 1024);
     console.log(
-      `🎙️ Transcribing chunk ${formatTime(offset)} → ${formatTime(
-        end
-      )} (${sizeMB.toFixed(2)} MB)`
+      `🎙️ Transcribing chunk ${formatTime(offset)} → ${formatTime(end)}`
     );
 
-    try {
-      const text = await safeTranscribe(chunkFile);
-      allText += text + " ";
-    } catch (err) {
-      console.error("❌ Skipping chunk due to repeated errors:", chunkFile);
-    }
+    const response = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(chunkFile),
+      model: "whisper-1",
+    });
 
-    try {
-      fs.unlinkSync(chunkFile);
-    } catch (e) {
-      console.warn("⚠️ Failed to delete chunk:", e.message);
-    }
-
+    allText += response.text.trim() + " ";
+    fs.unlinkSync(chunkFile);
     offset = end;
   }
 
-  // ✅ Step 4: Cleanup
-  try {
-    fs.unlinkSync(baseAudio);
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  } catch (e) {
-    console.warn("⚠️ Cleanup failed:", e.message);
-  }
-
+  fs.unlinkSync(audioPath);
+  fs.rmSync(tempDir, { recursive: true, force: true });
   return allText.trim();
-}
-
-/**
- * Retry wrapper for Whisper API
- */
-async function safeTranscribe(chunkFile) {
-  const maxRetries = 3;
-  let attempt = 0;
-
-  while (attempt < maxRetries) {
-    try {
-      const response = await openai.audio.transcriptions.create({
-        file: fs.createReadStream(chunkFile),
-        model: "whisper-1",
-      });
-      return response.text.trim();
-    } catch (err) {
-      attempt++;
-      console.warn(
-        `⚠️ Whisper API failed (attempt ${attempt}): ${err.message}`
-      );
-      if (attempt >= maxRetries) throw err;
-      await new Promise((r) => setTimeout(r, 2000 * attempt)); // exponential backoff
-    }
-  }
 }
 
 /**
