@@ -64,7 +64,7 @@ export async function generateVoiceover(script, filename, voice = "onyx") {
         overwrite: true,
       });
 
-      console.log(`✅ Voiceover uploaded to Cloudinary: ${uploadRes.secure_url}`);
+      console.log(`✅ Voiceover uploaded to Cloudinary: ${uploadRes}`);
     } catch (cloudErr) {
       console.error("❌ Cloudinary upload failed:");
       console.error(cloudErr);
