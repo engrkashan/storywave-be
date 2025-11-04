@@ -11,8 +11,8 @@ const app = express();
 
 // Middleware
 app.use(cors());
-app.use(express.json());
-app.use(morgan("dev"));
+app.use(express.json({ limit: '500mb' })); // Increase JSON body limit
+app.use(express.urlencoded({ extended: true, limit: '500mb' })); // For form dataapp.use(morgan("dev"));
 app.use("/static", express.static("public"));
 
 import mediaRoutes from "./routes/media.routes.js";

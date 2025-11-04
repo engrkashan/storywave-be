@@ -31,6 +31,8 @@ export async function generateVoiceover(script, filename, voice = "onyx") {
   const localPath = path.join(TEMP_DIR, filename);
   const text = cleanScript(script);
 
+  console.log(`🔊 Generating voiceover for: ${text.length} characters`);
+
   const CHUNK_SIZE = 1000;
   const chunks = text.match(new RegExp(`.{1,${CHUNK_SIZE}}(\\s|$)`, "g")) || [];
   const buffers = [];
@@ -50,7 +52,7 @@ export async function generateVoiceover(script, filename, voice = "onyx") {
   fs.writeFileSync(localPath, fullBuffer);
 
   // ✅ Upload to Cloudinary
-  const uploadRes = await cloudinary.uploader.upload(localPath, {
+  const uploadRes = await cloudinary.uploader.upload_chunked(localPath, {
     folder: "voiceovers",
     resource_type: "video",
     public_id: path.parse(filename).name,

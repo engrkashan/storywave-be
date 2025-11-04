@@ -89,6 +89,9 @@ export async function runWorkflow({
       storyLength,
     });
 
+    console.log("Generated Story Outline:", outline);
+    console.log("Generated Story Script:", script);
+
     const story = await prisma.story.create({
       data: { title, outline, content: script, adminId },
     });

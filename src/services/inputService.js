@@ -46,44 +46,44 @@ export async function extractContentFromUrl(url) {
  * Downloads YouTube or direct video using yt-dlp
  */
 // SERVER
-export const downloadVideo = async (url) => {
-  try {
-    const outputPath = path.join(TEMP_DIR, `temp-${Date.now()}.mp4`);
-    const cookiesPath = path.resolve("/var/www/storywave-be/cookies.txt");
-    const ytDlpPath = "/root/.local/bin/yt-dlp"; // system-wide yt-dlp
-
-    // Command identical to terminal test
-    const command = `${ytDlpPath} "${url}" --cookies ${cookiesPath} -o "${outputPath}"`;
-
-    console.log("▶ Running command:", command);
-    execSync(command, { stdio: "inherit" }); // inherit to log live output
-
-    return outputPath;
-  } catch (err) {
-    console.error("❌ Video download failed:", err.message);
-    throw new Error("Video download failed");
-  }
-};
-
-// LOCAL
-// async function downloadVideo(url) {
-//   const outputPath = path.join(TEMP_DIR, `video-${Date.now()}.mp4`);
-//   console.log("⬇️ Downloading video with yt-dlp...");
-
+// export const downloadVideo = async (url) => {
 //   try {
-//     await ytdlp(url, {
-//       output: outputPath,
-//       format: "mp4",
-//       quiet: true,
-//     });
+//     const outputPath = path.join(TEMP_DIR, `temp-${Date.now()}.mp4`);
+//     const cookiesPath = path.resolve("/var/www/storywave-be/cookies.txt");
+//     const ytDlpPath = "/root/.local/bin/yt-dlp"; // system-wide yt-dlp
 
-//     console.log("✅ Video downloaded:", outputPath);
+//     // Command identical to terminal test
+//     const command = `${ytDlpPath} "${url}" --cookies ${cookiesPath} -o "${outputPath}"`;
+
+//     console.log("▶ Running command:", command);
+//     execSync(command, { stdio: "inherit" }); // inherit to log live output
+
 //     return outputPath;
-//   } catch (error) {
-//     console.error("❌ Video download failed:", error.message);
+//   } catch (err) {
+//     console.error("❌ Video download failed:", err.message);
 //     throw new Error("Video download failed");
 //   }
-// }
+// };
+
+// LOCAL
+async function downloadVideo(url) {
+  const outputPath = path.join(TEMP_DIR, `video-${Date.now()}.mp4`);
+  console.log("⬇️ Downloading video with yt-dlp...");
+
+  try {
+    await ytdlp(url, {
+      output: outputPath,
+      format: "mp4",
+      quiet: true,
+    });
+
+    console.log("✅ Video downloaded:", outputPath);
+    return outputPath;
+  } catch (error) {
+    console.error("❌ Video download failed:", error.message);
+    throw new Error("Video download failed");
+  }
+}
 
 /**
  * Scrape plain text from HTML page

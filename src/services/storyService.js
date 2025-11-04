@@ -144,17 +144,18 @@ Style Mode: Cinematic_Movie_Storytelling (scene-driven, visual, emotive).
 };
 
 /* -------------------------------------------------------------------------- */
-/* 🧩 STEP 0 — Generate Hook                                                  */
+/* 🧩 STEP 0 — Generate Introduction (with characters and beginning)         */
 /* -------------------------------------------------------------------------- */
-async function generateHook({
+async function generateIntro({
   inputText,
   storyType,
   voiceTone,
+  words,
   retries = 2,
 }) {
   const moduleRule = moduleRules[storyType.toLowerCase()] || moduleRules['default'];
   const prompt = `
-      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (3500-4000 words per chapter)
+      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (adjusted for streaming generation)
 
       GLOBAL BASE RULES
       * Voice: natural, simple, real-feeling. Short paragraphs (2–4 sentences). Active voice.
@@ -169,14 +170,12 @@ async function generateHook({
       GENRE MODULE: ${storyType}
       ${moduleRule}
 
-      Build Mode: Three-Chapter Limited Series — 3500-4000 words per chapter.
+      Build Mode: Streaming Story Generation — Introduction with character intros and beginning.
 
       SERIES STRUCTURE (APPLIES TO ALL GENRES)
-      * Chapter 1 – Setup & Stakes: clear goal, context, immediate pressure, first turn.
-      * Chapter 2 – Escalation & Reversal: complications, midpoint shift, consequences, timer or trap.
-      * Chapter 3 – Resolution & Aftermath (or Action Plan): payoff, answer the core question, cost, resonant end.
+      * Introduction: Setup & Stakes: clear goal, context, immediate pressure, first turn. Introduce characters in a story tone.
 
-      Generate the HOOK: 120–180 words cold open before Chapter 1.
+      Generate the INTRODUCTION: ~${words} words, including the introduction of characters in a story tone and the beginning of the story.
       Tone: ${voiceTone}.
       Input context for the story: ${inputText}.
       Do NOT include:
@@ -184,7 +183,7 @@ async function generateHook({
       - music cues
       - narration directions
       - filler content
-      Return ONLY the plain text hook.
+      Return ONLY the plain text introduction.
   `;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -198,27 +197,28 @@ async function generateHook({
       let content = res.choices[0].message.content.trim();
       return content;
     } catch (err) {
-      console.warn(`Hook generation failed (Attempt ${attempt}):`, err.message);
+      console.warn(`Intro generation failed (Attempt ${attempt}):`, err.message);
       if (attempt === retries)
-        throw new Error("Failed to generate hook");
+        throw new Error("Failed to generate intro");
     }
   }
 }
 
 /* -------------------------------------------------------------------------- */
-/* 🧩 STEP 1 — Generate a structured outline (fixed 3 chapters)              */
+/* 🧩 STEP 1-3 — Generate Body Parts (continuations)                         */
 /* -------------------------------------------------------------------------- */
-async function generateStoryOutline({
+async function generateBodyPart({
   inputText,
   storyType,
   voiceTone,
-  minutes,
+  previous,
+  partNum,
+  words,
   retries = 2,
 }) {
-  const segmentCount = 3; // Fixed to 3 chapters as per UNIVERSAL MASTER PROMPT
   const moduleRule = moduleRules[storyType.toLowerCase()] || moduleRules['default'];
   const prompt = `
-      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (3500-4000 words per chapter)
+      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (adjusted for streaming generation)
 
       GLOBAL BASE RULES
       * Voice: natural, simple, real-feeling. Short paragraphs (2–4 sentences). Active voice.
@@ -230,40 +230,28 @@ async function generateStoryOutline({
       * Master Ban List enforced.
       * No audio cues.
 
-      WORKFLOW (INTAKE → OUTLINE → WRITE)
-      Intake (defaults proposed if missing)
-      Genre: ${storyType}, Style Mode (by genre), Narrator (third person unless noted), Main emotional theme (inferred), Build mode (3-chapter), Hook length (120–180 words), Word target per chapter (3500-4000 words adjusted for ${minutes} minutes).
-
-      OUTLINE (NO-OVERLAP GRID)
-      Chapter | Unique facts or scenes | New question or stake | Cannot include
-      * Each fact or scene belongs to one chapter.
-      * If a callback is vital, compress to one fresh line.
-
       GENRE MODULE: ${storyType}
       ${moduleRule}
 
-      SERIES STRUCTURE (APPLIES TO ALL GENRES)
-      * Chapter 1 – Setup & Stakes: clear goal, context, immediate pressure, first turn.
-      * Chapter 2 – Escalation & Reversal: complications, midpoint shift, consequences, timer or trap.
-      * Chapter 3 – Resolution & Aftermath (or Action Plan): payoff, answer the core question, cost, resonant end.
+      Build Mode: Streaming Story Generation — Body Part ${partNum} of 3.
 
-      You are a professional creative storyteller.
-      Create a detailed outline for a single, cohesive ${minutes}-minute ${storyType} story.
+      SERIES STRUCTURE (APPLIES TO ALL GENRES)
+      * Body Parts: Escalation & Reversal: complications, midpoint shift, consequences, timer or trap. Maintain overall arc.
+
+      Continue the story SEAMLESSLY from the following previous text, ensuring no breaks, gaps, or flaws in fluency:
+      ${previous}
+
+      Develop the plot step by step, building tension and character development.
       Tone: ${voiceTone}.
-      Break it into exactly ${segmentCount} major chapters to build engagement through rising tension, character development, twists, and cliffhangers at chapter ends.
-      Each chapter should have unique facts or scenes (3–5 concise bullet points), a new question or stake, and cannot include items.
-      Ensure the overall story arc maintains listener interest with pacing, suspense, and vivid elements.
       Input context for the story: ${inputText}.
       Do NOT include:
       - greetings or introductions
       - music cues
       - narration directions
       - filler content
-      Return ONLY valid JSON in this format:
-      [
-        { "chapter": "Chapter 1: Unique Title", "unique_facts_or_scenes": ["Point 1", "Point 2", "..."], "new_question_or_stake": "Question or stake", "cannot_include": ["Item 1", "..."] },
-        ...
-      ]
+      - repetitions of previous content
+      Return ONLY the plain text continuation for this body part.
+      Length: ~${words} words (adjust for pacing to keep interest high).
   `;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -271,48 +259,33 @@ async function generateStoryOutline({
       const res = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
-        temperature: 0.8,
+        temperature: 0.9,
       });
 
       let content = res.choices[0].message.content.trim();
-      content = content
-        .replace(/^```json\s*/i, "")
-        .replace(/```$/g, "")
-        .trim();
-      const outline = JSON.parse(content);
-
-      if (
-        !Array.isArray(outline) ||
-        outline.length !== segmentCount ||
-        !outline.every((s) => s.chapter && s.unique_facts_or_scenes && s.new_question_or_stake && s.cannot_include)
-      ) {
-        throw new Error("Invalid structure");
-      }
-
-      return outline;
+      return content;
     } catch (err) {
-      console.warn(`Outline parsing failed (Attempt ${attempt}):`, err.message);
+      console.warn(`Body part ${partNum} generation failed (Attempt ${attempt}):`, err.message);
       if (attempt === retries)
-        throw new Error("Invalid outline format from model");
+        throw new Error(`Failed to generate body part ${partNum}`);
     }
   }
 }
 
 /* -------------------------------------------------------------------------- */
-/* 🧠 STEP 2 — Generate script for each chapter                               */
+/* 🧩 STEP 4 — Generate Closing                                              */
 /* -------------------------------------------------------------------------- */
-async function generateChapterScript({
+async function generateClosing({
   inputText,
   storyType,
   voiceTone,
-  chapter,
-  chapterIndex,
-  totalChapters,
-  wordsPerChapter,
+  previous,
+  words,
+  retries = 2,
 }) {
   const moduleRule = moduleRules[storyType.toLowerCase()] || moduleRules['default'];
   const prompt = `
-      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (3500-4000 words per chapter)
+      Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (adjusted for streaming generation)
 
       GLOBAL BASE RULES
       * Voice: natural, simple, real-feeling. Short paragraphs (2–4 sentences). Active voice.
@@ -324,52 +297,46 @@ async function generateChapterScript({
       * Master Ban List enforced.
       * No audio cues.
 
-      CHAPTER BLUEPRINT (4 GATES)
-      1. Unique title and new opening beat.
-      2. Body uses only this chapter’s assigned items.
-      3. Strong exit line (cliffhanger, takeaway, or pivot).
-      4. Repetition audit (compress any recap to one line).
-
       GENRE MODULE: ${storyType}
       ${moduleRule}
 
-      SERIES STRUCTURE (APPLIES TO ALL GENRES)
-      * Chapter 1 – Setup & Stakes: clear goal, context, immediate pressure, first turn.
-      * Chapter 2 – Escalation & Reversal: complications, midpoint shift, consequences, timer or trap.
-      * Chapter 3 – Resolution & Aftermath (or Action Plan): payoff, answer the core question, cost, resonant end.
+      Build Mode: Streaming Story Generation — Closing.
 
-      You are a professional creative storyteller.
-      Write the full narrative script for chapter ${chapterIndex + 1} of ${totalChapters} in a single, lengthy ${storyType} story.
+      SERIES STRUCTURE (APPLIES TO ALL GENRES)
+      * Closing: Resolution & Aftermath (or Action Plan): payoff, answer the core question, cost, resonant end.
+
+      Continue and CONCLUDE the story SEAMLESSLY from the following previous text, ensuring no breaks, gaps, or flaws in fluency:
+      ${previous}
+
+      Provide a satisfying resolution, wrapping up the arc with emotional depth.
       Tone: ${voiceTone}.
-      Use only these unique facts or scenes: ${chapter.unique_facts_or_scenes.join(", ")}.
-      New question or stake: ${chapter.new_question_or_stake}.
-      Cannot include: ${chapter.cannot_include.join(", ")}.
-      Build on the overall story context: ${inputText}.
-      Ensure engagement with vivid descriptions, dialogue, internal thoughts, suspense, and a cliffhanger or hook to transition to the next chapter.
+      Input context for the story: ${inputText}.
       Do NOT include:
-      - chapter titles or headings (except the unique title at the start)
-      - greetings or stage directions
+      - greetings or introductions
       - music cues
+      - narration directions
       - filler content
-      Start directly with the unique title followed by the narrative.
-      Length: ~${wordsPerChapter} words (adjust for pacing to keep interest high).
-      Return only the plain text narrative.
+      - repetitions of previous content
+      Return ONLY the plain text closing.
+      Length: ~${words} words (adjust for pacing to keep interest high).
   `;
 
-  const res = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.9,
-  });
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.9,
+      });
 
-  // Clean up any stray elements
-  let script = res.choices[0].message.content.trim();
-  script = script
-    .split("\n")
-    .filter((line) => !/^[\[\🎙️]/.test(line) && !line.startsWith("Chapter"))
-    .join("\n");
-
-  return script;
+      let content = res.choices[0].message.content.trim();
+      return content;
+    } catch (err) {
+      console.warn(`Closing generation failed (Attempt ${attempt}):`, err.message);
+      if (attempt === retries)
+        throw new Error("Failed to generate closing");
+    }
+  }
 }
 
 export async function generateStory({
@@ -403,54 +370,76 @@ export async function generateStory({
   const minutes = Math.max(10, parseInt(storyLength) || 30); // Min 10
   console.log(`📝 Story length: ${minutes} minutes`);
 
-  // Calculate approximate words (assuming ~150 wpm for TTS)
-  const totalWords = minutes * 150;
-  const hookWords = 150; // Average for 120-180
-  const wordsPerChapter = Math.floor((totalWords - hookWords) / 3);
-  const adjustedWordsPerChapter = Math.max(750, Math.min(1000, wordsPerChapter)); // Clamp to prompt's range
+  // Calculate total minimum words based on user specification
+  let totalWords;
+  if (minutes <= 10) totalWords = 5000;
+  else if (minutes <= 20) totalWords = 10000;
+  else if (minutes <= 30) totalWords = 14000;
+  else if (minutes <= 40) totalWords = 18000;
+  else if (minutes <= 50) totalWords = 22000;
+  else totalWords = 25000; // For 60 or more
 
-  // Generate hook
-  const hook = await generateHook({
+  const parts = 5; // Intro + 3 body + closing
+  let wordsPerPart = Math.floor(totalWords / parts);
+
+  // If wordsPerPart > 4000, subdivide large parts with additional API hits
+  const maxWordsPerCall = 4000;
+  if (wordsPerPart > maxWordsPerCall) {
+    console.log(`Adjusting for large parts: subdividing to max ${maxWordsPerCall} words per call`);
+  }
+
+  async function generateSubdivided(contentFunc, params, targetWords) {
+    if (targetWords <= maxWordsPerCall) {
+      return await contentFunc({ ...params, words: targetWords });
+    } else {
+      let fullContent = '';
+      let remainingWords = targetWords;
+      let subPrevious = params.previous || '';
+      while (remainingWords > 0) {
+        const subWords = Math.min(maxWordsPerCall, remainingWords);
+        const subContent = await contentFunc({ ...params, previous: subPrevious, words: subWords });
+        fullContent += subContent + '\n\n';
+        subPrevious += '\n\n' + subContent;
+        remainingWords -= subWords;
+      }
+      return fullContent.trim();
+    }
+  }
+
+  // Generate intro
+  const intro = await generateSubdivided(generateIntro, {
     inputText,
     storyType,
     voiceTone,
-  });
+  }, wordsPerPart);
 
-  // Generate outline
-  const outline = await generateStoryOutline({
-    inputText,
-    storyType,
-    voiceTone,
-    minutes,
-  });
+  let previous = intro;
 
-  // Generate scripts for each chapter
-  let chapterScripts = [];
-  for (let i = 0; i < outline.length; i++) {
-    const chapter = outline[i];
-    const script = await generateChapterScript({
+  // Generate 3 body parts
+  let bodyParts = [];
+  for (let i = 1; i <= 3; i++) {
+    const bodyPart = await generateSubdivided(generateBodyPart, {
       inputText,
       storyType,
       voiceTone,
-      chapter,
-      chapterIndex: i,
-      totalChapters: outline.length,
-      wordsPerChapter: adjustedWordsPerChapter,
-    });
-    chapterScripts.push(script);
+      previous,
+      partNum: i,
+    }, wordsPerPart);
+    bodyParts.push(bodyPart);
+    previous += "\n\n" + bodyPart;
   }
 
-  const fullScript = [hook, ...chapterScripts].join("\n\n");
+  // Generate closing
+  const closing = await generateSubdivided(generateClosing, {
+    inputText,
+    storyType,
+    voiceTone,
+    previous,
+  }, wordsPerPart);
 
-  // Format outline as markdown string in grid-like format
-  const outlineText = outline
-    .map(
-      (ch) => `- **${ch.chapter}**\n  - Unique facts or scenes: ${ch.unique_facts_or_scenes.join("; ")}\n  - New question or stake: ${ch.new_question_or_stake}\n  - Cannot include: ${ch.cannot_include.join("; ")}`
-    )
-    .join("\n");
+  const fullScript = [intro, ...bodyParts, closing].join("\n\n");
 
   return {
-    outline: outlineText || "No outline generated.",
     script: fullScript.trim(),
   };
 }

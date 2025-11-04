@@ -3,8 +3,11 @@ import path from "path";
 import OpenAI from "openai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+
 const TEMP_DIR = path.join(process.cwd(), "temp", "images");
 fs.mkdirSync(TEMP_DIR, { recursive: true });
+
 
 // Simple prompt sanitizer: remove words likely to trigger safety system
 function sanitizePrompt(prompt) {
