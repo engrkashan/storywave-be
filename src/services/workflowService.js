@@ -31,7 +31,6 @@ async function uploadVideoToCloud(videoPath, filename) {
     overwrite: true,
   });
 
-  fs.unlinkSync(videoPath);
   return uploaded.secure_url;
 }
 
@@ -107,6 +106,7 @@ export async function runWorkflow({
     const { url: voiceURL, localPath: voiceLocalPath } =
       await generateVoiceover(script, voiceFilename);
 
+    console.log("VOICE URL", voiceURL);
     await prisma.voiceover.create({
       data: { script, audioURL: voiceURL, workflowId: workflow.id, adminId },
     });

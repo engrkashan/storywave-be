@@ -56,7 +56,7 @@ export async function generateVoiceover(script, filename, voice = "onyx") {
     // ✅ Upload to Cloudinary (official upload_large method)
     let uploadRes;
     try {
-      uploadRes = await cloudinary.uploader.upload_large(localPath, {
+      uploadRes = await cloudinary.uploader.upload(localPath, {
         folder: "voiceovers",
         resource_type: "video", // required for large audio
         public_id: path.parse(filename).name,
@@ -64,7 +64,7 @@ export async function generateVoiceover(script, filename, voice = "onyx") {
         overwrite: true,
       });
 
-      console.log(`✅ Voiceover uploaded to Cloudinary: ${uploadRes}`);
+      console.log(`✅ Voiceover uploaded to Cloudinary: ${uploadRes.secure_url}`);
     } catch (cloudErr) {
       console.error("❌ Cloudinary upload failed:");
       console.error(cloudErr);
