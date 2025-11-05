@@ -4,10 +4,8 @@ import OpenAI from "openai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-
 const TEMP_DIR = path.join(process.cwd(), "temp", "images");
 fs.mkdirSync(TEMP_DIR, { recursive: true });
-
 
 // Simple prompt sanitizer: remove words likely to trigger safety system
 function sanitizePrompt(prompt) {
@@ -55,6 +53,7 @@ export async function generateImage(prompt, index, maxRetries = 3) {
       const filePath = path.join(TEMP_DIR, filename);
 
       fs.writeFileSync(filePath, buffer);
+
       console.log(`🖼️ Image saved: ${filePath}`);
       return filePath;
 

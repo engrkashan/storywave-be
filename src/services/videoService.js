@@ -155,7 +155,7 @@ export async function createVideo(
   const titleOverlay = titleText
     ? `drawtext=text='${escapeFFmpegText(
         titleText
-      )}':font=DejaVuSans:fontcolor=white:fontsize=36:borderw=2:x=(w-text_w)/2:y=h-80,`
+      )}':font=DejaVuSans:fontcolor=white:fontsize=36:borderw=2:x=(w-text_w)/2:y=h-60,`
     : "";
 
   // ✅ Correct filter chain: image → (drawtext optional) → subtitles
@@ -170,8 +170,6 @@ export async function createVideo(
     `-c:v libx264 -pix_fmt yuv420p -c:a aac -shortest`,
     `"${outputPath}"`,
   ].join(" ");
-
-  console.log("▶ FFmpeg command:\n", cmd);
 
   try {
     execSync(cmd, { stdio: "inherit" });

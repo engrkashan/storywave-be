@@ -113,7 +113,8 @@ export async function runWorkflow({
 
     // 4️⃣ Generate a single image (UNMODIFIED)
     log("Step 4: Generating a single image for the entire story...");
-    const storyPrompt = `A breathtaking, cinematic digital illustration inspired by the story titled "${title}". Visually represent the main theme and emotional core of the story using rich detail, dramatic lighting, and a cohesive color palette. The style should reflect the ${storyType} genre with a tone that feels ${voiceTone}. Focus on atmosphere, storytelling depth, and dynamic composition — like a movie poster or story thumbnail. No text, no logos, no captions — only the artwork.`;
+    // const storyPrompt = `A breathtaking, cinematic digital illustration inspired by the story titled "${title}". Visually represent the main theme and emotional core of the story using rich detail, dramatic lighting, and a cohesive color palette. The style should reflect the ${storyType} genre with a tone that feels ${voiceTone}. Focus on atmosphere, storytelling depth, and dynamic composition — like a movie poster or story thumbnail. No text, no logos, no captions — only the artwork.`;
+    const storyPrompt = `A breathtaking, cinematic digital illustration inspired by the story titled "${title}". Visually represent the main theme and emotional core of the story in a compact, high-impact composition optimized for a thumbnail. Use rich detail, dramatic lighting, and a cohesive color palette to evoke intrigue and draw viewers in. The style should reflect the ${storyType} genre with a tone that feels ${voiceTone}. Focus on atmosphere, storytelling depth, and dynamic elements that work well at small sizes — like a movie poster or story thumbnail. No text, no logos, no captions — only the artwork.`;
 
     let imageUrl;
     try {
@@ -167,27 +168,27 @@ export async function runWorkflow({
     });
 
     log("🎉 Workflow completed successfully.");
-    deleteTempFiles(TEMP_DIR);
-    return {
-      success: true,
-      workflowId: workflow.id,
-      story: {
-        title: story.title,
-        outline: story.outline,
-        script: story.content,
-      },
-      voiceover: voiceURL,
-      video: videoURL,
-      image: imageUrl,
-    };
+    // deleteTempFiles(TEMP_DIR);
+    // return {
+    //   success: true,
+    //   workflowId: workflow.id,
+    //   story: {
+    //     title: story.title,
+    //     outline: story.outline,
+    //     script: story.content,
+    //   },
+    //   voiceover: voiceURL,
+    //   video: videoURL,
+    //   image: imageUrl,
+    // };
   } catch (err) {
     log(`Workflow failed: ${err.message}`, "\x1b[31m");
-    try {
-      if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
-      deleteTempFiles(TEMP_DIR);
-    } catch (cleanupErr) {
-      log(`⚠️ Temp cleanup failed: ${cleanupErr.message}`);
-    }
+    // try {
+    //   if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
+    //   deleteTempFiles(TEMP_DIR);
+    // } catch (cleanupErr) {
+    //   log(`⚠️ Temp cleanup failed: ${cleanupErr.message}`);
+    // }
     await prisma.workflow.update({
       where: { id: workflow.id },
       data: { status: "FAILED", metadata: { error: err.message } },
