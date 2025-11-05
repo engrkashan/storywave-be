@@ -51,12 +51,14 @@ export async function generateVoiceover(script, filename, voice = "onyx") {
     // ✅ Combine all chunks into one audio buffer
     const fullBuffer = Buffer.concat(buffers);
     fs.writeFileSync(localPath, fullBuffer);
-    console.log(`📦 Final audio size: ${(fullBuffer.length / 1024 / 1024).toFixed(2)} MB`);
+    console.log(
+      `📦 Final audio size: ${(fullBuffer.length / 1024 / 1024).toFixed(2)} MB`
+    );
 
     // ✅ Upload to Cloudinary (official upload_large method)
     let uploadRes;
     try {
-      uploadRes = await cloudinary.uploader.upload(localPath, {
+      uploadRes = await cloudinary.uploader.upload_large(localPath, {
         folder: "voiceovers",
         resource_type: "video", // required for large audio
         public_id: path.parse(filename).name,
@@ -64,7 +66,17 @@ export async function generateVoiceover(script, filename, voice = "onyx") {
         overwrite: true,
       });
 
-      console.log(`✅ Voiceover uploaded to Cloudinary: ${uploadRes.secure_url}`);
+      uploadRes.on("end", (result) => {
+        console.log("Upload completed:", result);
+      });
+
+      uploadRes.on("error", (error) => {
+        console.error("Upload failed:", error);
+      });
+
+      console.log(
+        `✅ Voiceover uploaded to Cloudinary: ${uploadRes.secure_url}`
+      );
     } catch (cloudErr) {
       console.error("❌ Cloudinary upload failed:");
       console.error(cloudErr);
