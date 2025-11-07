@@ -168,27 +168,27 @@ export async function runWorkflow({
     });
 
     log("🎉 Workflow completed successfully.");
-    // deleteTempFiles(TEMP_DIR);
-    // return {
-    //   success: true,
-    //   workflowId: workflow.id,
-    //   story: {
-    //     title: story.title,
-    //     outline: story.outline,
-    //     script: story.content,
-    //   },
-    //   voiceover: voiceURL,
-    //   video: videoURL,
-    //   image: imageUrl,
-    // };
+    deleteTempFiles(TEMP_DIR);
+    return {
+      success: true,
+      workflowId: workflow.id,
+      story: {
+        title: story.title,
+        outline: story.outline,
+        script: story.content,
+      },
+      voiceover: voiceURL,
+      video: videoURL,
+      image: imageUrl,
+    };
   } catch (err) {
     log(`Workflow failed: ${err.message}`, "\x1b[31m");
-    // try {
-    //   if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
-    //   deleteTempFiles(TEMP_DIR);
-    // } catch (cleanupErr) {
-    //   log(`⚠️ Temp cleanup failed: ${cleanupErr.message}`);
-    // }
+    try {
+      if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
+      deleteTempFiles(TEMP_DIR);
+    } catch (cleanupErr) {
+      log(`⚠️ Temp cleanup failed: ${cleanupErr.message}`);
+    }
     await prisma.workflow.update({
       where: { id: workflow.id },
       data: { status: "FAILED", metadata: { error: err.message } },
