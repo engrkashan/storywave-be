@@ -24,10 +24,18 @@ const log = (msg, color = "\x1b[36m") => {
 
 // Upload video to Cloudinary
 async function uploadVideoToCloud(videoPath, filename) {
-  const uploaded = await cloudinary.uploader.upload(videoPath, {
+  const stats = fs.statSync(videoPath);
+  console.log(
+    "📦 Video size before upload:",
+    (stats.size / 1024 / 1024).toFixed(2),
+    "MB"
+  );
+
+  const uploaded = await cloudinary.uploader.upload_large(videoPath, {
     resource_type: "video",
     folder: "videos",
     public_id: path.parse(filename).name,
+    chunk_size: 6000000, // 6 MB
     overwrite: true,
   });
 
