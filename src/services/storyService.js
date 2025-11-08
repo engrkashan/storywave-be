@@ -413,6 +413,8 @@ export async function generateStory({
     voiceTone,
   }, wordsPerPart);
 
+  console.log("Introduction of the story: ",intro)
+
   let previous = intro;
 
   // Generate 3 body parts
