@@ -20,7 +20,7 @@ function sanitizePrompt(prompt) {
   return sanitized;
 }
 
-export async function generateImage(prompt, index, maxRetries = 3) {
+export async function generateImage(prompt, index, maxRetries = Infinity) {
   let attempt = 0;
   let lastError = null;
   let currentPrompt = prompt;

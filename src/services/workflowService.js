@@ -119,27 +119,48 @@ export async function runWorkflow({
       data: { script, audioURL: voiceURL, workflowId: workflow.id, adminId },
     });
 
-    // 4️⃣ Generate a single image (UNMODIFIED)
     log("Step 4: Generating a single image for the entire story...");
-    // const storyPrompt = `A breathtaking, cinematic digital illustration inspired by the story titled "${title}". Visually represent the main theme and emotional core of the story using rich detail, dramatic lighting, and a cohesive color palette. The style should reflect the ${storyType} genre with a tone that feels ${voiceTone}. Focus on atmosphere, storytelling depth, and dynamic composition — like a movie poster or story thumbnail. No text, no logos, no captions — only the artwork.`;
-    const storyPrompt = `A breathtaking, cinematic digital illustration inspired by the story titled "${title}". Visually represent the main theme and emotional core of the story in a compact, high-impact composition optimized for a thumbnail. Use rich detail, dramatic lighting, and a cohesive color palette to evoke intrigue and draw viewers in. The style should reflect the ${storyType} genre with a tone that feels ${voiceTone}. Focus on atmosphere, storytelling depth, and dynamic elements that work well at small sizes — like a movie poster or story thumbnail. No text, no logos, no captions — only the artwork.`;
 
-    let imageUrl;
-    try {
-      imageUrl = await generateImage(storyPrompt, 1);
-      await prisma.media.create({
-        data: {
-          type: "IMAGE",
-          fileUrl: imageUrl,
-          fileType: "image/png",
-          workflow: { connect: { id: workflow.id } },
-          metadata: { prompt: storyPrompt },
-        },
-      });
-      log("✅ Single image generated successfully.");
-    } catch (err) {
-      throw new Error("Failed to generate main image: " + err.message);
+    const storyPrompt = `A breathtaking, cinematic digital illustration inspired by the story titled "${title}". Visually represent the...`;
+
+    let imageUrl = null;
+
+    while (!imageUrl) {
+      try {
+        imageUrl = await generateImage(storyPrompt, 1, 5);
+
+        if (!imageUrl || !fs.existsSync(imageUrl)) {
+          log("⚠️ Image file missing after generation. Retrying...");
+          imageUrl = null;
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
+
+        const size = fs.statSync(imageUrl).size;
+        if (size < 5000) {
+          log("⚠️ Image seems corrupted (too small). Retrying...");
+          imageUrl = null;
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
+
+        log("✅ Single image generated successfully.");
+      } catch (err) {
+        log(`❌ Image generation failed: ${err.message}`);
+        log("🔁 Retrying in 5 seconds...");
+        await new Promise((r) => setTimeout(r, 5000));
+      }
     }
+
+    await prisma.media.create({
+      data: {
+        type: "IMAGE",
+        fileUrl: imageUrl,
+        fileType: "image/png",
+        workflow: { connect: { id: workflow.id } },
+        metadata: { prompt: storyPrompt },
+      },
+    });
 
     // 5️⃣ Generate Subtitles (NEW LOGIC)
     log("Step 5: Generating timed subtitles using Whisper API...");
