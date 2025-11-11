@@ -3,6 +3,8 @@ import crypto from "crypto";
 import { generateStory } from "../services/storyService.js";
 import { runWorkflow } from "../services/workflowService.js";
 import { verifyToken } from "../middlewares/auth.js";
+import prisma from "../config/prisma.client.js";
+
 
 const router = express.Router();
 
@@ -98,6 +100,43 @@ router.post("/workflow", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("Error running workflow:", err);
     return res.status(500).json({ error: err.message || "Workflow failed" });
+  }
+});
+
+/**
+ * DELETE /api/story/:id
+ * Delete a story by ID (only if it belongs to the logged-in admin)
+ */
+router.delete("/:id", verifyToken, async (req, res) => {
+  try {
+    const storyId = req.params.id;
+    const adminId = req.user?.userId;
+
+    if (!adminId) {
+      return res.status(401).json({ error: "Unauthorized: missing user" });
+    }
+
+    // Check if story exists and belongs to this admin
+    const story = await prisma.story.findFirst({
+      where: {
+        id: storyId,
+        adminId: adminId
+      }
+    });
+
+    if (!story) {
+      return res.status(404).json({ error: "Story not found or not allowed" });
+    }
+
+    // Delete the story
+    await prisma.story.delete({
+      where: { id: storyId }
+    });
+
+    return res.status(200).json({ message: "Story deleted successfully" });
+  } catch (err) {
+    console.error("Error deleting story:", err);
+    return res.status(500).json({ error: err.message || "Failed to delete story" });
   }
 });
 
