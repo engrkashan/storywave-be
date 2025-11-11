@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import cloudinary from "../config/cloudinary.config.js";
+import {cloudinary} from "../config/cloudinary.config.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 

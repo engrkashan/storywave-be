@@ -166,6 +166,7 @@ async function generateIntro({
       * Dialect: Standard only; light slang allowed if it preserves clarity and respect.
       * Master Ban List enforced.
       * No audio cues.
+      * No complete story idea or summary.
 
       GENRE MODULE: ${storyType}
       ${moduleRule}
@@ -183,7 +184,8 @@ async function generateIntro({
       - music cues
       - narration directions
       - filler content
-      Return ONLY the plain text introduction.
+      - summary of the story
+      Return ONLY the plain text introduction of the story not the complete story.
   `;
 
   for (let attempt = 1; attempt <= retries; attempt++) {

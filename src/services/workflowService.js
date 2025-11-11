@@ -9,7 +9,7 @@ import {
 } from "./inputService.js";
 import { generateStory } from "./storyService.js";
 import { createVideo } from "./videoService.js";
-import cloudinary from "../config/cloudinary.config.js";
+import {cloudinary} from "../config/cloudinary.config.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { deleteTempFiles } from "../utils/deleteTemp.js";
@@ -22,6 +22,15 @@ const log = (msg, color = "\x1b[36m") => {
   console.log(`${color}[${time}] ${msg}\x1b[0m`);
 };
 
+function uploadLargePromise(filePath, options) {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.upload_large(filePath, options, (err, result) => {
+      if (err) return reject(err);
+      resolve(result);
+    });
+  });
+}
+
 // Upload video to Cloudinary
 async function uploadVideoToCloud(videoPath, filename) {
   const stats = fs.statSync(videoPath);
@@ -31,11 +40,11 @@ async function uploadVideoToCloud(videoPath, filename) {
     "MB"
   );
 
-  const uploaded = await cloudinary.uploader.upload_large(videoPath, {
+  const uploaded = await uploadLargePromise(videoPath, {
     resource_type: "video",
     folder: "videos",
     public_id: path.parse(filename).name,
-    chunk_size: 6000000, // 6 MB
+    chunk_size: 6000000,
     overwrite: true,
   });
 

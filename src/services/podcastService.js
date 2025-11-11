@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import fs from "fs";
-import cloudinary from "../config/cloudinary.config.js";
+import {cloudinary} from "../config/cloudinary.config.js";
 import path from "path";
 import ffmpeg from "fluent-ffmpeg";
 import { generateVoiceover } from "./ttsService.js";
