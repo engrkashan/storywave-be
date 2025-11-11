@@ -26,54 +26,6 @@ function sanitizePrompt(prompt) {
   return sanitized;
 }
 
-// export async function generateImage(prompt, index, maxRetries = Infinity) {
-//   let attempt = 0;
-//   let lastError = null;
-//   let currentPrompt = prompt;
-
-//   while (attempt < maxRetries) {
-//     attempt++;
-//     try {
-//       const result = await openai.images.generate({
-//         model: "gpt-image-1",
-//         prompt: currentPrompt,
-//         size: "1024x1024",
-//         quality: "high",
-//       });
-
-//       const imageBase64 = result.data?.[0]?.b64_json;
-
-//       if (!imageBase64) {
-//         const errorMessage = result.data?.[0]?.error?.message || "No image data returned";
-//         if (errorMessage.includes("safety system")) {
-//           console.log(`⚠️ Safety system triggered, sanitizing prompt and retrying (Attempt ${attempt})`);
-//           currentPrompt = sanitizePrompt(currentPrompt);
-//           continue; // retry
-//         }
-//         throw new Error("Image generation failed: " + errorMessage);
-//       }
-
-//       // Success
-//       const buffer = Buffer.from(imageBase64, "base64");
-//       const filename = `scene_${String(index).padStart(3, "0")}.png`;
-//       const filePath = path.join(TEMP_DIR, filename);
-
-//       fs.writeFileSync(filePath, buffer);
-
-//       console.log(`🖼️ Image saved: ${filePath}`);
-//       return filePath;
-
-//     } catch (err) {
-//       lastError = err;
-//       console.warn(`Attempt ${attempt} failed: ${err.message}`);
-//       currentPrompt = sanitizePrompt(currentPrompt);
-//     }
-//   }
-
-//   // If all retries fail
-//   throw new Error(`Image generation failed after ${maxRetries} attempts: ${lastError.message}`);
-// }
-
 async function rewritePrompt(prompt, level = 1) {
   const systemMessage = {
     1: "Rewrite the prompt to remove anything that violates image safety policies (violence, adult content, gore, minors in risky situations, political figures, hate, self-harm, drugs, weapons). Keep theme and mood.",
@@ -143,15 +95,20 @@ export async function generateImage(prompt, index, maxRetries = 10) {
       });
 
       const base64 = result.data?.[0]?.b64_json;
-      const err = result.data?.[0]?.error?.message;
+      const errorMessage = result.data?.[0]?.error?.message;
 
       if (!base64) {
-        if (err?.includes("safety")) {
-          console.log("⚠️ Safety triggered again. Forcing strict rewrite.");
-          safePrompt = await ensurePromptSafe(safePrompt);
-          continue;
+        if (errorMessage) {
+          const lowerMsg = errorMessage.toLowerCase();
+          if (lowerMsg.includes("safety") || lowerMsg.includes("content policy") || lowerMsg.includes("prompt")) {
+            console.log("⚠️ Prompt-related error triggered. Forcing strict rewrite.");
+            safePrompt = await ensurePromptSafe(safePrompt);
+            continue;
+          } else if (lowerMsg.includes("quota") || lowerMsg.includes("rate limit")) {
+            throw new Error(errorMessage);
+          }
         }
-        throw new Error(err || "No image data returned");
+        throw new Error(errorMessage || "No image data returned");
       }
 
       // Save file
@@ -164,8 +121,16 @@ export async function generateImage(prompt, index, maxRetries = 10) {
       return filePath;
     } catch (err) {
       lastError = err;
-      console.log(`Attempt ${attempt} failed: ${err.message}`);
-      safePrompt = await ensurePromptSafe(safePrompt);
+      const lowerMsg = err.message ? err.message.toLowerCase() : "";
+      if (lowerMsg.includes("safety") || lowerMsg.includes("content policy") || lowerMsg.includes("prompt")) {
+        console.log(`⚠️ Prompt-related error on attempt ${attempt}: ${err.message}. Retrying with rewrite.`);
+        safePrompt = await ensurePromptSafe(safePrompt);
+        continue;
+      } else if (lowerMsg.includes("quota") || lowerMsg.includes("rate limit") || err.status === 429) {
+        throw err;
+      } else {
+        throw err;
+      }
     }
   }
 
