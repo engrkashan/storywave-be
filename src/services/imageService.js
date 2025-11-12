@@ -104,7 +104,7 @@ export async function generateImage(prompt, index, maxRetries = 10) {
             console.log("⚠️ Prompt-related error triggered. Forcing strict rewrite.");
             safePrompt = await ensurePromptSafe(safePrompt);
             continue;
-          } else if (lowerMsg.includes("quota") || lowerMsg.includes("rate limit")) {
+          } else {
             throw new Error(errorMessage);
           }
         }
