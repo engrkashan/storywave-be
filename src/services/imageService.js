@@ -7,7 +7,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const TEMP_DIR = path.join(process.cwd(), "temp", "images");
 fs.mkdirSync(TEMP_DIR, { recursive: true });
 
-// Simple prompt sanitizer: remove words likely to trigger safety system
+// Simple prompt sanitizer
 function sanitizePrompt(prompt) {
   const blockedWords = [
     "sex",
@@ -44,41 +44,44 @@ async function rewritePrompt(prompt, level = 1) {
   return res.choices[0].message.content.trim();
 }
 
-async function ensurePromptSafe(prompt) {
-  // First moderation scan
-  let mod = await openai.moderations.create({
-    model: "omni-moderation-latest",
-    input: prompt,
-  });
+// Limit rewriting depth and detect when prompt stops changing
+async function ensurePromptSafe(prompt, maxDepth = 3) {
+  let currentPrompt = sanitizePrompt(prompt);
+  let lastPrompt = "";
 
-  if (!mod.results?.[0]?.flagged) return prompt;
+  for (let level = 1; level <= maxDepth; level++) {
+    const mod = await openai.moderations.create({
+      model: "omni-moderation-latest",
+      input: currentPrompt,
+    });
 
-  // Rewrite level 1
-  let rewritten = await rewritePrompt(prompt, 1);
+    if (!mod.results?.[0]?.flagged) {
+      return currentPrompt;
+    }
 
-  // Check again
-  mod = await openai.moderations.create({
-    model: "omni-moderation-latest",
-    input: rewritten,
-  });
-  if (!mod.results?.[0]?.flagged) return rewritten;
+    console.log(`⚠️ Prompt flagged at level ${level}, rewriting...`);
+    const rewritten = await rewritePrompt(currentPrompt, level);
 
-  // Rewrite level 2 (stricter)
-  rewritten = await rewritePrompt(rewritten, 2);
+    // If model produces same text again, stop looping
+    if (rewritten.trim() === lastPrompt.trim()) {
+      console.log("🚫 Prompt unchanged after rewrite, forcing safe fallback.");
+      return sanitizePrompt(rewritten);
+    }
 
-  mod = await openai.moderations.create({
-    model: "omni-moderation-latest",
-    input: rewritten,
-  });
-  if (!mod.results?.[0]?.flagged) return rewritten;
+    lastPrompt = currentPrompt;
+    currentPrompt = rewritten;
+  }
 
-  // Final rewrite level 3 (maximum safe)
-  rewritten = await rewritePrompt(rewritten, 3);
-
-  return rewritten; // guaranteed safe
+  console.log("✅ Returning maximum-safe sanitized prompt.");
+  return sanitizePrompt(currentPrompt);
 }
 
-export async function generateImage(prompt, index, maxRetries = 10) {
+// Small delay helper to avoid rapid looping
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function generateImage(prompt, index, maxRetries = 5) {
   let attempt = 0;
   let safePrompt = await ensurePromptSafe(prompt);
   let lastError = null;
@@ -100,15 +103,20 @@ export async function generateImage(prompt, index, maxRetries = 10) {
       if (!base64) {
         if (errorMessage) {
           const lowerMsg = errorMessage.toLowerCase();
-          if (lowerMsg.includes("safety") || lowerMsg.includes("content policy") || lowerMsg.includes("prompt")) {
-            console.log("⚠️ Prompt-related error triggered. Forcing strict rewrite.");
+          if (
+            lowerMsg.includes("safety") ||
+            lowerMsg.includes("content policy") ||
+            lowerMsg.includes("prompt")
+          ) {
+            console.log("⚠️ Prompt-related error triggered. Retrying safely...");
             safePrompt = await ensurePromptSafe(safePrompt);
+            await sleep(1000); // prevent tight retry loop
             continue;
           } else {
             throw new Error(errorMessage);
           }
         }
-        throw new Error(errorMessage || "No image data returned");
+        throw new Error("No image data returned");
       }
 
       // Save file
@@ -121,12 +129,22 @@ export async function generateImage(prompt, index, maxRetries = 10) {
       return filePath;
     } catch (err) {
       lastError = err;
-      const lowerMsg = err.message ? err.message.toLowerCase() : "";
-      if (lowerMsg.includes("safety") || lowerMsg.includes("content policy") || lowerMsg.includes("prompt")) {
-        console.log(`⚠️ Prompt-related error on attempt ${attempt}: ${err.message}. Retrying with rewrite.`);
+      const msg = err.message?.toLowerCase() || "";
+      if (
+        msg.includes("safety") ||
+        msg.includes("content policy") ||
+        msg.includes("prompt")
+      ) {
+        console.log(`⚠️ Attempt ${attempt}: safety issue, rewriting prompt.`);
         safePrompt = await ensurePromptSafe(safePrompt);
+        await sleep(1000);
         continue;
-      } else if (lowerMsg.includes("quota") || lowerMsg.includes("rate limit") || err.status === 429) {
+      } else if (
+        msg.includes("quota") ||
+        msg.includes("rate limit") ||
+        err.status === 429
+      ) {
+        console.log("⏳ Rate limit or quota issue, aborting retries.");
         throw err;
       } else {
         throw err;
