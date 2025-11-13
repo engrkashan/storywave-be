@@ -12,12 +12,57 @@ export const getOverview = async (req, res) => {
       ]);
 
     // Fetch all items directly from each table, ordered by creation date
-    const [stories, videos, voiceovers, podcasts] = await Promise.all([
-      prisma.story.findMany({ orderBy: { createdAt: "desc" } }),
+    const [ videos, voiceovers, podcasts] = await Promise.all([
       prisma.video.findMany({ orderBy: { createdAt: "desc" } }),
       prisma.voiceover.findMany({ orderBy: { createdAt: "desc" } }),
       prisma.podcast.findMany({ orderBy: { createdAt: "desc" } }),
     ]);
+
+    const userId = req?.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized: User not found" });
+    }
+
+    const workflows = await prisma.workflow.findMany({
+      where: { adminId: userId },
+      include: {
+        story: true,
+        voiceover: true,
+        video: true,
+        podcast: {
+          include: {
+            episodes: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const stories = workflows
+      .filter((w) => w.story)
+      .map((w) => ({
+        id: w.story.id,
+        title: w.story.title || w.video?.title || "Untitled Story",
+        type: "STORY",
+        createdAt: w.story.createdAt,
+        content: w.story.content || null,
+        voiceover: w.voiceover
+          ? {
+              id: w.voiceover.id,
+              voice: w.voiceover.voice || "Default",
+              audioURL: w.voiceover.audioURL || null,
+              script: w.voiceover.script || null,
+            }
+          : null,
+        video: w.video
+          ? {
+              id: w.video.id,
+              url: w.video.fileURL || null,
+              duration: w.video.duration || null,
+              subtitles: w.video.subtitles || null,
+            }
+          : null,
+      }));
 
     return res.status(200).json({
       totalStories: storiesCount,
@@ -27,7 +72,6 @@ export const getOverview = async (req, res) => {
       stories,
       videos,
       voiceovers,
-      podcasts,
     });
   } catch (error) {
     console.error("Overview Error:", error);

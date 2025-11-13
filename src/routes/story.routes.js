@@ -116,29 +116,86 @@ router.delete("/:id", verifyToken, async (req, res) => {
       return res.status(401).json({ error: "Unauthorized: missing user" });
     }
 
-    // Check if story exists and belongs to this admin
+    // 1️⃣ Check story ownership + fetch all related data
     const story = await prisma.story.findFirst({
-      where: {
-        id: storyId,
-        adminId: adminId
-      }
+      where: { id: storyId, adminId },
+      include: {
+        Workflow: {
+          include: {
+            inputs: true,
+            tasks: true,
+            media: true,
+            voiceover: true,
+            video: true,
+            podcast: {
+              include: { episodes: true },
+            },
+          },
+        },
+      },
     });
 
     if (!story) {
       return res.status(404).json({ error: "Story not found or not allowed" });
     }
 
-    // Delete the story
-    await prisma.story.delete({
-      where: { id: storyId }
+    // 2️⃣ Transactional deletion
+    await prisma.$transaction(async (tx) => {
+      for (const workflow of story.Workflow) {
+        const wid = workflow.id;
+
+        // Delete all related sub-entities
+        await tx.task.deleteMany({ where: { workflowId: wid } });
+        await tx.input.deleteMany({ where: { workflowId: wid } });
+        await tx.media.deleteMany({ where: { workflowId: wid } });
+
+        // Delete voiceover if exists
+        if (workflow.voiceover) {
+          await tx.voiceover.delete({
+            where: { id: workflow.voiceover.id },
+          });
+        }
+
+        // Delete video if exists
+        if (workflow.video) {
+          await tx.video.delete({
+            where: { id: workflow.video.id },
+          });
+        }
+
+        // Delete podcast + episodes if exist
+        if (workflow.podcast) {
+          await tx.episode.deleteMany({
+            where: { podcastId: workflow.podcast.id },
+          });
+          await tx.podcast.delete({
+            where: { id: workflow.podcast.id },
+          });
+        }
+
+        // Delete workflow itself
+        await tx.workflow.delete({
+          where: { id: wid },
+        });
+      }
+
+      // Finally delete the story itself
+      await tx.story.delete({
+        where: { id: storyId },
+      });
     });
 
-    return res.status(200).json({ message: "Story deleted successfully" });
+    return res.status(200).json({
+      message: "✅ Story and all related data deleted successfully",
+    });
   } catch (err) {
-    console.error("Error deleting story:", err);
-    return res.status(500).json({ error: err.message || "Failed to delete story" });
+    console.error("❌ Error deleting story transactionally:", err);
+    return res.status(500).json({
+      error: err.message || "Failed to delete story and related data",
+    });
   }
 });
+
 
 
 export default router;
