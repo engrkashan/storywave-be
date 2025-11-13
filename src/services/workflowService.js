@@ -47,7 +47,7 @@ async function uploadVideoToCloud(videoPath, filename) {
     chunk_size: 6000000,
     overwrite: true,
   });
-
+  log(`✅ Video uploaded to Cloudinary: ${uploaded}`);
   return uploaded.secure_url;
 }
 
