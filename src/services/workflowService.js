@@ -13,6 +13,7 @@ import { cloudinary } from "../config/cloudinary.config.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { deleteTempFiles } from "../utils/deleteTemp.js";
+import { script } from "googleapis/build/src/apis/script/index.js";
 
 const TEMP_DIR = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -231,6 +232,7 @@ export async function runWorkflow({
       log("Transcribing video to text...");
       inputText = await transcribeVideo(videoFile);
     }
+    
     log(`Input text: ${inputText}`);
     if (!inputText || inputText.trim().length < 50)
       throw new Error("Invalid or empty input text.");
@@ -244,17 +246,25 @@ export async function runWorkflow({
       },
     });
 
+    let outline, script;
     // 2️⃣ Generate story (UNMODIFIED)
-    log("Step 2: Generating story...");
-    const { outline, script } = await generateStory({
-      textIdea: inputText,
-      storyType,
-      voiceTone,
-      storyLength,
-    });
+    if(url || videoFile){
+      log("Step 2: Generating story...");
+      ({ outline, script } = await generateStory({
+        textIdea: inputText,
+        storyType,
+        voiceTone,
+        storyLength,
+      }));
+    }
 
     console.log("Generated Story Outline:", outline);
     console.log("Generated Story Script:", script);
+
+    if(textIdea)
+    {
+      script= textIdea;
+    }
 
     const story = await prisma.story.create({
       data: { title, outline, content: script, adminId },
