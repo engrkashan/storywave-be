@@ -90,8 +90,8 @@ fs.mkdirSync(IMAGE_DIR, { recursive: true });
 // Basic sanitizer
 function sanitizePrompt(prompt) {
   const blocked = [
-    "sex", "nudity", "violence", "gore", "abuse",
-    "drugs", "weapon", "blood", "kill", "murder"
+    // "sex", "nudity", "violence", "gore", "abuse",
+    // "drugs", "weapon", "blood", "kill", "murder"
   ];
   let sanitized = prompt;
   for (const w of blocked) {
