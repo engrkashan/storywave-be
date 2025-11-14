@@ -158,6 +158,7 @@ export async function generateImage(prompt, index = 1) {
     // Poll for completion
     let result;
     while (true) {
+      console.log(`Polling for taskId: ${taskId}`);
       const getResponse = await fetch(`${MIDJOURNEY_API_BASE}/record-info?taskId=${taskId}`, {
         headers: {
           Authorization: `Bearer ${process.env.MIDJOURNEY_API_KEY}`,
@@ -188,7 +189,7 @@ export async function generateImage(prompt, index = 1) {
     if (!imageUrl) {
       throw new Error("No image URL available");
     }
-
+    console.log("DEBUG RESULT POLLING:", JSON.stringify(result, null, 2));
     const filePath = path.join(
       IMAGE_DIR,
       `scene_${String(index).padStart(3, "0")}.png`
