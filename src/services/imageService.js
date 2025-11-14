@@ -80,7 +80,7 @@ import fs from "fs";
 import path from "path";
 
 // const MIDJOURNEY_API_ENDPOINT = "https://cl.imagineapi.dev/items/images/";
-const MIDJOURNEY_API_ENDPOINT = " https://api.midapi.ai/api/v1/mj/generate";
+const MIDJOURNEY_API_ENDPOINT = "https://api.midapi.ai/api/v1/mj/generate";
 
 // Ensure temp folders exist
 const TEMP_DIR = path.join(process.cwd(), "temp");
@@ -140,7 +140,15 @@ export async function generateImage(prompt, index = 1) {
     }
 
     const postData = await postResponse.json();
-    const imageId = postData.data.id;
+    console.log("DEBUG POST DATA:", JSON.stringify(postData, null, 2));
+    const imageId = postData?.data?.id || postData?.id;
+    if (!imageId) {
+      console.error(
+        "❌ No ID returned from API:",
+        JSON.stringify(postData, null, 2)
+      );
+      throw new Error("No image ID returned, cannot poll.");
+    }
 
     // Poll for completion
     let result;
