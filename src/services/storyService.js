@@ -375,13 +375,13 @@ export async function generateStory({
   // Calculate total minimum words based on user specification
   let totalWords;
   if (minutes <= 10) totalWords = 5000;
-  else if (minutes <= 20) totalWords = 10000;
-  else if (minutes <= 30) totalWords = 14000;
-  else if (minutes <= 40) totalWords = 18000;
-  else if (minutes <= 50) totalWords = 22000;
+  else if (minutes <= 20) totalWords = 1000;
+  else if (minutes <= 30) totalWords = 1400;
+  else if (minutes <= 40) totalWords = 1800;
+  else if (minutes <= 50) totalWords = 2200;
   else totalWords = 25000; // For 60 or more
 
-  const parts = 5; // Intro + 3 body + closing
+  const parts = 3; // Intro + 3 body + closing
   let wordsPerPart = Math.floor(totalWords / parts);
 
   // If wordsPerPart > 4000, subdivide large parts with additional API hits
@@ -421,7 +421,7 @@ export async function generateStory({
 
   // Generate 3 body parts
   let bodyParts = [];
-  for (let i = 1; i <= 3; i++) {
+  for (let i = 1; i <= 1; i++) {
     const bodyPart = await generateSubdivided(generateBodyPart, {
       inputText,
       storyType,

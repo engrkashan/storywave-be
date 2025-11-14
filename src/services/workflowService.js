@@ -9,7 +9,7 @@ import {
 } from "./inputService.js";
 import { generateStory } from "./storyService.js";
 import { createVideo } from "./videoService.js";
-import {cloudinary} from "../config/cloudinary.config.js";
+import { cloudinary } from "../config/cloudinary.config.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { deleteTempFiles } from "../utils/deleteTemp.js";
@@ -49,6 +49,105 @@ async function uploadVideoToCloud(videoPath, filename) {
   });
   log(`✅ Video uploaded to Cloudinary: ${uploaded}`);
   return uploaded.secure_url;
+}
+
+function generateThumbnailPrompt(title, storyType) {
+  const genres = {
+    true_crime_fiction_cinematic: {
+      style: "cinematic Netflix-style true-crime artwork",
+      elements: "dark alleys, blurred police lights, cryptic evidence objects",
+      colors: "moody reds, deep shadows, noir tones",
+      mood: "intense, dramatic, suspense-filled",
+    },
+
+    true_crime_nonfiction_forensic: {
+      style: "realistic forensic documentary visual",
+      elements:
+        "crime scene markers, fingerprint overlays, forensic tools, evidence closeups",
+      colors: "cool blues, sterile whites, forensic lab tones",
+      mood: "analytical, investigative, unbiased",
+    },
+
+    manipulation_sexual_manipulation: {
+      style: "mature psychological manipulation symbolism",
+      elements:
+        "broken masks, tangled strings, shadowy silhouettes, metaphorical tension",
+      colors: "dark purples, muted reds, deep dramatic contrasts",
+      mood: "intense, psychological, emotionally charged",
+    },
+
+    cultural_history_documentary: {
+      style: "National Geographic-style cultural documentary artwork",
+      elements:
+        "heritage artifacts, historical textures, symbolic cultural patterns",
+      colors: "earthy tones, warm natural hues",
+      mood: "educational, respectful, culturally rich",
+    },
+
+    homesteading_howto_field_guide: {
+      style: "rustic, practical homesteading field-guide illustration",
+      elements:
+        "tools, wooden textures, garden elements, simple natural objects",
+      colors: "greens, browns, softly lit outdoor tones",
+      mood: "practical, peaceful, self-sufficient",
+    },
+
+    work_and_trades_shop_manual: {
+      style: "technical how-to shop manual artwork",
+      elements: "tools, machinery diagrams, workshop parts, reference shapes",
+      colors: "industrial grays, metallic tones, clean technical colors",
+      mood: "instructive, clear, mechanical",
+    },
+
+    work_and_trades_shopfloordoc: {
+      style: "real-world shop-floor documentary style",
+      elements: "factory environment, tools, workbenches, mechanical details",
+      colors: "industrial tones, steel blues, warm highlights",
+      mood: "authentic, gritty, hands-on",
+    },
+
+    investigative_discovery_journalistic: {
+      style: "journalistic investigative documentary artwork",
+      elements:
+        "documents, maps, red string connections, headlines, evidence boards",
+      colors: "cool investigative blues with high contrast shadows",
+      mood: "urgent, analytical, truth-seeking",
+    },
+
+    storytelling_cinematic: {
+      style: "dramatic cinematic movie-style illustration",
+      elements:
+        "symbolic objects based on the title, dramatic lighting, atmospheric depth",
+      colors: "rich cinematic tones",
+      mood: "emotional, visual, immersive",
+    },
+
+    conversation_narrated_documentary: {
+      style: "blended narrated-documentary visual style",
+      elements:
+        "voice-wave graphics, symbolic objects from the story, soft documentary textures",
+      colors: "neutral documentary tones with warm highlights",
+      mood: "thoughtful, reflective, narrative-driven",
+    },
+
+    education_howto_trades: {
+      style: "clear instructional educational trades illustration",
+      elements: "tools, diagrams, step-by-step symbolic objects",
+      colors: "clean, bright educational palette",
+      mood: "practical, clear, helpful",
+    },
+  };
+
+  const g = genres[storyType];
+
+  return `
+Create a highly detailed, cinematic 16:9 digital illustration based on the story titled "${title}". 
+Style: ${g.style}. 
+Include elements such as: ${g.elements}. 
+Color palette: ${g.colors}. 
+Mood: ${g.mood}. 
+No text. Ultra-sharp, visually striking, thumbnail-quality artwork.
+  `.trim();
 }
 
 export async function runWorkflow({
@@ -130,13 +229,14 @@ export async function runWorkflow({
 
     log("Step 4: Generating a single image for the entire story...");
 
-    const storyPrompt = `A breathtaking, cinematic digital illustration inspired by the story titled "${title}". Visually represent the...`;
+    const storyPrompt = generateThumbnailPrompt(title, storyType);
+    console.log("Story Prompt: ",storyPrompt);
 
     let imageUrl = null;
 
     while (!imageUrl) {
       try {
-        imageUrl = await generateImage(storyPrompt, 1, 5);
+        imageUrl = await generateImage(storyPrompt, 1);
 
         if (!imageUrl || !fs.existsSync(imageUrl)) {
           log("⚠️ Image file missing after generation. Retrying...");
@@ -161,15 +261,16 @@ export async function runWorkflow({
       }
     }
 
-    await prisma.media.create({
-      data: {
-        type: "IMAGE",
-        fileUrl: imageUrl,
-        fileType: "image/png",
-        workflow: { connect: { id: workflow.id } },
-        metadata: { prompt: storyPrompt },
-      },
-    });
+    // await prisma.media.create({
+    //   data: {
+    //     type: "IMAGE",
+    //     fileUrl: imageUrl,
+    //     fileType: "image/png",
+    //     workflow: { connect: { id: workflow.id } },
+    //     metadata: { prompt: storyPrompt },
+    //   },
+    // });
+    
 
     // 5️⃣ Generate Subtitles (NEW LOGIC)
     log("Step 5: Generating timed subtitles using Whisper API...");
