@@ -79,7 +79,8 @@
 import fs from "fs";
 import path from "path";
 
-const MIDJOURNEY_API_ENDPOINT = "https://cl.imagineapi.dev/items/images/";
+// const MIDJOURNEY_API_ENDPOINT = "https://cl.imagineapi.dev/items/images/";
+const MIDJOURNEY_API_ENDPOINT = " https://api.midapi.ai/api/v1/mj/generate";
 
 // Ensure temp folders exist
 const TEMP_DIR = path.join(process.cwd(), "temp");
