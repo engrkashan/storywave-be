@@ -10,7 +10,7 @@ export const getMyCreations = async (req, res) => {
 
     // Fetch all workflows created by the current user
     const workflows = await prisma.workflow.findMany({
-      where: { adminId: userId },
+      where: { adminId: userId,status: "COMPLETED" },
       include: {
         story: true,
         voiceover: true,
@@ -33,6 +33,7 @@ export const getMyCreations = async (req, res) => {
         type: "STORY",
         createdAt: w.story.createdAt,
         content: w.story.content || null,
+        status:w.status,
         voiceover: w.voiceover
           ? {
               id: w.voiceover.id,
