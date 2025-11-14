@@ -76,7 +76,6 @@
 //   }
 // }
 
-
 import fs from "fs";
 import path from "path";
 
@@ -134,6 +133,8 @@ export async function generateImage(prompt, index = 1) {
     });
 
     if (!postResponse.ok) {
+      const text = await postResponse.text();
+      console.log("DEBUG BODY:", text);
       throw new Error(`Failed to start generation: ${postResponse.statusText}`);
     }
 
@@ -174,11 +175,13 @@ export async function generateImage(prompt, index = 1) {
       throw new Error("No upscaled image URL available");
     }
 
-    const filePath = path.join(IMAGE_DIR, `scene_${String(index).padStart(3, "0")}.png`);
+    const filePath = path.join(
+      IMAGE_DIR,
+      `scene_${String(index).padStart(3, "0")}.png`
+    );
     await downloadImage(imageUrl, filePath);
     console.log(`✅ Image saved: ${filePath}`);
     return filePath;
-
   } catch (err) {
     console.error("❌ Image generation failed:", err.message);
     throw err;
