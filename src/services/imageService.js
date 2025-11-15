@@ -82,8 +82,7 @@ const MIDJOURNEY_API_BASE = "https://api.midapi.ai/api/v1/mj";
 
 // Ensure temp folders exist
 const TEMP_DIR = path.join(process.cwd(), "temp");
-const IMAGE_DIR = path.join(TEMP_DIR, "images");
-fs.mkdirSync(IMAGE_DIR, { recursive: true });
+fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 // Basic sanitizer
 function sanitizePrompt(prompt) {
@@ -191,7 +190,7 @@ export async function generateImage(prompt, index = 1) {
     }
     console.log("DEBUG RESULT POLLING:", JSON.stringify(result, null, 2));
     const filePath = path.join(
-      IMAGE_DIR,
+      TEMP_DIR,
       `scene_${String(index).padStart(3, "0")}.png`
     );
     await downloadImage(imageUrl, filePath);
