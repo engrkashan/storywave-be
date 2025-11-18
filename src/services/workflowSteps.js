@@ -22,12 +22,13 @@ export async function runWorkflowSteps(workflow) {
 
   try {
     let inputText = textIdea || "";
-
-    if (url) inputText = await extractContentFromUrl(url);
+    console.log(incomingMeta)
+    if (url)
+       {inputText = await extractContentFromUrl(url);}
     if (videoFile) inputText = await transcribeVideo(videoFile);
 
-    if (!inputText || inputText.trim().length < 50)
-      throw new Error("Invalid or empty input text.");
+    // if (!inputText || inputText.trim().length < 50)
+    //   throw new Error("Invalid or empty input text.");
 
     await prisma.input.create({
       data: {

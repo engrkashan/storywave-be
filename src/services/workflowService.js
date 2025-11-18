@@ -406,7 +406,7 @@ export async function runWorkflow({
       status: isScheduled ? "SCHEDULED" : "PENDING",
       scheduledAt: isScheduled ? new Date(scheduledAt) : null,
       adminId,
-      metadata: {},
+      metadata: {url, videoFile, textIdea, storyType, voiceTone, storyLength},
     },
   });
 
