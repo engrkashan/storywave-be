@@ -26,12 +26,12 @@ app.get("/", (req, res) => {
   res.json({ message: "Hello, world!" });
 });
 
-import authRoutes from "./routes/auth.routes.js";
-import storyRoutes from "./routes/story.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
-import podcastRoutes from "./routes/podcast.routes.js";
+import authRoutes from "./routes/auth.routes.js";
 import creationsRoutes from "./routes/creations.route.js";
 import overviewRoutes from "./routes/overview.routes.js";
+import podcastRoutes from "./routes/podcast.routes.js";
+import storyRoutes from "./routes/story.routes.js";
 import voiceCloneRoutes from "./routes/voice.clone.routes.js";
 
 app.use("/api/auth", authRoutes);

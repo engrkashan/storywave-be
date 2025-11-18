@@ -108,6 +108,47 @@ router.post("/workflow", verifyToken, async (req, res) => {
 });
 
 /**
+ * GET /api/story/scheduled
+ * Returns only stories that are scheduled (status = SCHEDULED)
+ */
+router.get("/scheduled", verifyToken, async (req, res) => {
+  try {
+    const adminId = req.user?.userId;
+
+    if (!adminId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const workflows = await prisma.workflow.findMany({
+      where: {
+        adminId,
+        type: "STORY",
+        status: "SCHEDULED",
+        scheduledAt: {
+          gt: new Date(),
+        },
+      },
+      orderBy: { scheduledAt: "asc" },
+      include: {
+        story: true,
+      },
+    });
+
+    const formatted = workflows.map((wf) => ({
+      workflowId: wf.id,
+      title: wf.title,
+      scheduledAt: wf.scheduledAt,
+      storyId: wf.story?.id || null,
+    }));
+
+    return res.status(200).json(formatted);
+  } catch (err) {
+    console.error("Error fetching scheduled stories:", err);
+    return res.status(500).json({ error: "Failed to fetch scheduled stories" });
+  }
+});
+
+/**
  * DELETE /api/story/:id
  * Delete a story by ID (only if it belongs to the logged-in admin)
  */
