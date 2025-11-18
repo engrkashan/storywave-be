@@ -1,13 +1,10 @@
 import OpenAI from "openai";
 import { extractFromUrl, transcribeVideo } from "./inputService.js";
-import { log } from "console";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Define module rules based on the UNIVERSAL MASTER PROMPT genres/modules
 const moduleRules = {
-  'true_crime_fiction_cinematic': `
+  true_crime_fiction_cinematic: `
 Shared rules: third person. Short, speech-ready lines. Dates and times clear. Allegation vs proven kept distinct. Avoid gore. Keep human dignity.
 Style overlay (cinematic blockbuster): high-stakes momentum with scene-driven suspense, tight cuts, and cliffhanger end beats. Use concrete, visual action. Keep the “wanting more” pull without sensationalism.
 1) FICTION_CINEMATIC (Netflix-Style Drama)
@@ -21,7 +18,7 @@ Style overlay (cinematic blockbuster): high-stakes momentum with scene-driven su
 * Dialogue: minimal tags. Action beats carry tone.
 * Ethics: if inspired by real events, change names and identifiers unless you have permission.
   `,
-  'true_crime_nonfiction_forensic': `
+  true_crime_nonfiction_forensic: `
 Shared rules: third person. Short, speech-ready lines. Dates and times clear. Allegation vs proven kept distinct. Avoid gore. Keep human dignity.
 Style overlay (cinematic blockbuster): high-stakes momentum with scene-driven suspense, tight cuts, and cliffhanger end beats. Use concrete, visual action. Keep the “wanting more” pull without sensationalism.
 2) NONFICTION_FORENSIC (Forensic Files / First 48)
@@ -34,7 +31,7 @@ Style overlay (cinematic blockbuster): high-stakes momentum with scene-driven su
 * Cinematic tension (ethical): compress exposition; end segments with an open question; keep pace while staying factual.
 * No inline evidence tags.
   `,
-  'manipulation_sexual_manipulation': `
+  manipulation_sexual_manipulation: `
 Policy note: adult and intense, not pornographic. No explicit sexual description. Realistic language allowed. Light profanity only when it serves character. Consent boundaries must be clear. No minors. No sexual violence as titillation. Fade to black at explicit moments.
 Style overlay (cinematic blockbuster): suspense-first, sensual yet restrained. Cliffhangers at chapter ends. Tight, escalating stakes — always non-explicit and respectful.
 * Narration: third person, fixed.
@@ -45,7 +42,7 @@ Style overlay (cinematic blockbuster): suspense-first, sensual yet restrained. C
 * Drop-in helpers as plain prose: red flags, gaslight moments, reward/withdraw cycles, support routes, one clear boundary line per chapter.
 * Checklist: timeline clear; consent language plain; no explicit description; one boundary phrase per chapter.
   `,
-  'cultural_history_documentary': `
+  cultural_history_documentary: `
 Style target: National Geographic–style documentary — informative, field-based, authoritative. Vivid but precise. Respectful to sources and places. Teach clearly; avoid hype.
 * Voice: neutral third-person documentary. Calm, respectful, clear.
 * Three-chapter flow:
@@ -55,14 +52,14 @@ Style target: National Geographic–style documentary — informative, field-bas
 * Optional elements: archive lines with dates, expert interviews, brief field notes, context paragraphs, two-view debates, map anchors.
 * Checklist: dates anchored; one concrete place per chapter; terminology defined once.
   `,
-  'homesteading_howto_field_guide': `
+  homesteading_howto_field_guide: `
 * Voice: friendly instructor. Second person fits tasks well.
 * Each chapter: SCOPE → SAFETY → TOOLS/MATERIALS → STEPS → CHECKS/FIXES → CARE.
 * Include: time window, weather, steps (one action each), failsafe rules, yield in eggs/pounds/gallons.
 * Safety first: animal welfare and personal safety before risk steps.
 * Style Mode: Explainer_in_Detail (teaches so a careful beginner can succeed safely).
   `,
-  'work_and_trades_shop_manual': `
+  work_and_trades_shop_manual: `
 1) SHOP_MANUAL (How-to for tools and tasks; second person allowed)
 Structure: SCOPE → SAFETY → TOOLS/PARTS/SPECS → STEPS → TESTS/QA → TROUBLESHOOT → MAINTENANCE.
 * Ch. 1 – Fundamentals and setup.
@@ -70,12 +67,12 @@ Structure: SCOPE → SAFETY → TOOLS/PARTS/SPECS → STEPS → TESTS/QA → TRO
 * Ch. 3 – Troubleshooting patterns and maintenance plan.
 * Style Mode: Explainer_in_Detail (step-locked, spec-clean).
   `,
-  'work_and_trades_shopfloordoc': `
+  work_and_trades_shopfloordoc: `
 2) SHOPFLOOR_DOC (Workplace documentary or profile; neutral third person)
 Flow: present task → who is doing it → brief tool/process explainer → risk or safety moment → problem → fix or lesson → reflection on craft and training path.
 End each chapter with a learning takeaway.
   `,
-  'investigative_discovery_journalistic': `
+  investigative_discovery_journalistic: `
 Style Mode: Investigative_Journalism (truthful, detailed, source-aware).
 * Voice: neutral third person, factual and exact. Attribute claims; separate allegation vs proven.
 * Ethics: verify facts; avoid speculation; minimize harm; maintain dignity.
@@ -88,7 +85,7 @@ Style Mode: Investigative_Journalism (truthful, detailed, source-aware).
 * Alternate outline: Case → Evidence → Reflection.
 * End each chapter with precise open question or verified takeaway.
   `,
-  'storytelling_cinematic': `
+  storytelling_cinematic: `
 Style Mode: Cinematic_Movie_Storytelling (scene-driven, visual, emotive).
 * Voice: third person (default) or first if intake demands.
 * Pacing: filmic beats; enter late, leave early; show don’t tell.
@@ -100,7 +97,7 @@ Style Mode: Cinematic_Movie_Storytelling (scene-driven, visual, emotive).
     * Ch. 3 – Resolution & Aftermath with a cost or lingering question.
 * Alternate outline: Discovery → Confrontation → Consequence.
   `,
-  'conversation_narrated_documentary': `
+  conversation_narrated_documentary: `
 Style Mode: Blended_Docu_Host (third-person facts with conversational breaks).
 * Voice: third-person factual spine + short host reflections and questions.
 * Rhythm: fact block → brief host aside → return to narrative. Keep asides 1–2 lines.
@@ -112,7 +109,7 @@ Style Mode: Blended_Docu_Host (third-person facts with conversational breaks).
 * Alternate outline: Discovery → Conversation → Resolution.
 * Guardrails: no rambling; no filler; asides must move story or clarify a fact.
   `,
-  'education_howto_trades': `
+  education_howto_trades: `
 Style Mode: HOWTO_FIELD_MANUAL
 * Voice: plain, confident, second person “you.”
 * Dialect: Standard only.
@@ -131,7 +128,7 @@ Sentence Patterns for Audio:
 “Set the meter to volts A C. Confirm zero at the panel.”
   `,
   // Default fallback if storyType not matched
-  'default': `
+  default: `
 Style Mode: Cinematic_Movie_Storytelling (scene-driven, visual, emotive).
 * Voice: third person (default).
 * Pacing: filmic beats; enter late, leave early; show don’t tell.
@@ -140,7 +137,7 @@ Style Mode: Cinematic_Movie_Storytelling (scene-driven, visual, emotive).
     * Ch. 1 – Setup & Stakes with a vivid hook and inciting event.
     * Ch. 2 – Escalation & Reversal with midpoint turn.
     * Ch. 3 – Resolution & Aftermath with a cost or lingering question.
-  `
+  `,
 };
 
 /* -------------------------------------------------------------------------- */
@@ -153,7 +150,8 @@ async function generateIntro({
   words,
   retries = 2,
 }) {
-  const moduleRule = moduleRules[storyType.toLowerCase()] || moduleRules['default'];
+  const moduleRule =
+    moduleRules[storyType.toLowerCase()] || moduleRules["default"];
   const prompt = `
       Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (adjusted for streaming generation)
 
@@ -199,9 +197,11 @@ async function generateIntro({
       let content = res.choices[0].message.content.trim();
       return content;
     } catch (err) {
-      console.warn(`Intro generation failed (Attempt ${attempt}):`, err.message);
-      if (attempt === retries)
-        throw new Error("Failed to generate intro");
+      console.warn(
+        `Intro generation failed (Attempt ${attempt}):`,
+        err.message
+      );
+      if (attempt === retries) throw new Error("Failed to generate intro");
     }
   }
 }
@@ -218,7 +218,8 @@ async function generateBodyPart({
   words,
   retries = 2,
 }) {
-  const moduleRule = moduleRules[storyType.toLowerCase()] || moduleRules['default'];
+  const moduleRule =
+    moduleRules[storyType.toLowerCase()] || moduleRules["default"];
   const prompt = `
       Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (adjusted for streaming generation)
 
@@ -267,7 +268,10 @@ async function generateBodyPart({
       let content = res.choices[0].message.content.trim();
       return content;
     } catch (err) {
-      console.warn(`Body part ${partNum} generation failed (Attempt ${attempt}):`, err.message);
+      console.warn(
+        `Body part ${partNum} generation failed (Attempt ${attempt}):`,
+        err.message
+      );
       if (attempt === retries)
         throw new Error(`Failed to generate body part ${partNum}`);
     }
@@ -285,7 +289,8 @@ async function generateClosing({
   words,
   retries = 2,
 }) {
-  const moduleRule = moduleRules[storyType.toLowerCase()] || moduleRules['default'];
+  const moduleRule =
+    moduleRules[storyType.toLowerCase()] || moduleRules["default"];
   const prompt = `
       Follow the UNIVERSAL MASTER PROMPT — STREAMLINED (AUG 2025 • TTS-READY) — THREE-CHAPTER EDITION (adjusted for streaming generation)
 
@@ -334,9 +339,11 @@ async function generateClosing({
       let content = res.choices[0].message.content.trim();
       return content;
     } catch (err) {
-      console.warn(`Closing generation failed (Attempt ${attempt}):`, err.message);
-      if (attempt === retries)
-        throw new Error("Failed to generate closing");
+      console.warn(
+        `Closing generation failed (Attempt ${attempt}):`,
+        err.message
+      );
+      if (attempt === retries) throw new Error("Failed to generate closing");
     }
   }
 }
@@ -348,6 +355,7 @@ export async function generateStory({
   storyType = "storytelling_cinematic",
   voiceTone = "neutral",
   storyLength = "30 minutes",
+  voice
 }) {
   let inputText = textIdea || "";
   if (url) inputText = await extractFromUrl(url);
@@ -359,7 +367,7 @@ export async function generateStory({
 
   // 🔪 Limit token size before prompt (trim or summarize)
   if (inputText.length > 8000) {
-    console.log("🧹 Input too long, summarizing before story generation...");
+    console.log(" Input too long, summarizing before story generation...");
     const summaryPrompt = `Summarize the following text in under 800 words focusing only on the main ideas, tone, and narrative elements:\n\n${inputText.slice(
       0,
       15000
@@ -379,29 +387,35 @@ export async function generateStory({
   else if (minutes <= 30) totalWords = 1400;
   else if (minutes <= 40) totalWords = 1800;
   else if (minutes <= 50) totalWords = 2200;
-  else totalWords = 25000; // For 60 or more
+  else totalWords = 25000;
 
-  const parts = 3; // Intro + 3 body + closing
+  const parts = 3;
   let wordsPerPart = Math.floor(totalWords / parts);
 
   // If wordsPerPart > 4000, subdivide large parts with additional API hits
   const maxWordsPerCall = 4000;
   if (wordsPerPart > maxWordsPerCall) {
-    console.log(`Adjusting for large parts: subdividing to max ${maxWordsPerCall} words per call`);
+    console.log(
+      `Adjusting for large parts: subdividing to max ${maxWordsPerCall} words per call`
+    );
   }
 
   async function generateSubdivided(contentFunc, params, targetWords) {
     if (targetWords <= maxWordsPerCall) {
       return await contentFunc({ ...params, words: targetWords });
     } else {
-      let fullContent = '';
+      let fullContent = "";
       let remainingWords = targetWords;
-      let subPrevious = params.previous || '';
+      let subPrevious = params.previous || "";
       while (remainingWords > 0) {
         const subWords = Math.min(maxWordsPerCall, remainingWords);
-        const subContent = await contentFunc({ ...params, previous: subPrevious, words: subWords });
-        fullContent += subContent + '\n\n';
-        subPrevious += '\n\n' + subContent;
+        const subContent = await contentFunc({
+          ...params,
+          previous: subPrevious,
+          words: subWords,
+        });
+        fullContent += subContent + "\n\n";
+        subPrevious += "\n\n" + subContent;
         remainingWords -= subWords;
       }
       return fullContent.trim();
@@ -409,37 +423,49 @@ export async function generateStory({
   }
 
   // Generate intro
-  const intro = await generateSubdivided(generateIntro, {
-    inputText,
-    storyType,
-    voiceTone,
-  }, wordsPerPart);
+  const intro = await generateSubdivided(
+    generateIntro,
+    {
+      inputText,
+      storyType,
+      voiceTone,
+    },
+    wordsPerPart
+  );
 
-  console.log("Introduction of the story: ",intro)
+  console.log("Introduction of the story: ", intro);
 
   let previous = intro;
 
   // Generate 3 body parts
   let bodyParts = [];
   for (let i = 1; i <= 1; i++) {
-    const bodyPart = await generateSubdivided(generateBodyPart, {
-      inputText,
-      storyType,
-      voiceTone,
-      previous,
-      partNum: i,
-    }, wordsPerPart);
+    const bodyPart = await generateSubdivided(
+      generateBodyPart,
+      {
+        inputText,
+        storyType,
+        voiceTone,
+        previous,
+        partNum: i,
+      },
+      wordsPerPart
+    );
     bodyParts.push(bodyPart);
     previous += "\n\n" + bodyPart;
   }
 
   // Generate closing
-  const closing = await generateSubdivided(generateClosing, {
-    inputText,
-    storyType,
-    voiceTone,
-    previous,
-  }, wordsPerPart);
+  const closing = await generateSubdivided(
+    generateClosing,
+    {
+      inputText,
+      storyType,
+      voiceTone,
+      previous,
+    },
+    wordsPerPart
+  );
 
   const fullScript = [intro, ...bodyParts, closing].join("\n\n");
 

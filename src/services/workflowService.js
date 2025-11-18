@@ -1,19 +1,15 @@
 import fs from "fs";
 import path from "path";
-import prisma from "../config/prisma.client.js";
-import { generateImage } from "./imageService.js";
-import {
-  extractContentFromUrl,
-  extractFromUrl,
-  transcribeVideo,
-} from "./inputService.js";
-import { generateStory } from "./storyService.js";
-import { createVideo } from "./videoService.js";
 import { cloudinary } from "../config/cloudinary.config.js";
-import { generateVoiceover } from "./generateVoiceoverService.js";
-import { transcribeWithTimestamps } from "./transcribeService.js";
+import prisma from "../config/prisma.client.js";
 import { deleteTempFiles } from "../utils/deleteTemp.js";
-import { script } from "googleapis/build/src/apis/script/index.js";
+import { generateVoiceover } from "./generateVoiceoverService.js";
+import { generateImage } from "./imageService.js";
+import { extractContentFromUrl, transcribeVideo } from "./inputService.js";
+import { generateStory } from "./storyService.js";
+import { transcribeWithTimestamps } from "./transcribeService.js";
+import { createVideo } from "./videoService.js";
+import { runWorkflowSteps } from "./workflowSteps.js";
 
 const TEMP_DIR = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -32,7 +28,6 @@ function uploadLargePromise(filePath, options) {
   });
 }
 
-// Upload video to Cloudinary
 async function uploadVideoToCloud(videoPath, filename) {
   const stats = fs.statSync(videoPath);
   console.log(
@@ -48,7 +43,7 @@ async function uploadVideoToCloud(videoPath, filename) {
     chunk_size: 6000000,
     overwrite: true,
   });
-  log(`✅ Video uploaded to Cloudinary: ${uploaded}`);
+  log(`Video uploaded to Cloudinary: ${uploaded}`);
   return uploaded.secure_url;
 }
 
@@ -162,7 +157,6 @@ function generateThumbnailPrompt(title, storyType) {
       composition: "sequential layout, focal on instructional element",
     },
 
-    // New genre for sensitive adult content like blood/murder stories
     horror_murder: {
       style:
         "gruesome horror illustration with stylized gore and chiaroscuro shadows",
@@ -175,9 +169,8 @@ function generateThumbnailPrompt(title, storyType) {
     },
   };
 
-  const g = genres[storyType] || genres.storytelling_cinematic; // Default to cinematic if type not found
+  const g = genres[storyType] || genres.storytelling_cinematic;
 
-  // Dynamically incorporate title keywords for specificity
   const titleKeywords = title
     .toLowerCase()
     .split(" ")
@@ -190,15 +183,201 @@ function generateThumbnailPrompt(title, storyType) {
       : "";
 
   return `
-Create a highly detailed, cinematic 16:9 digital illustration based on the story titled "${title}". 
-Style: ${g.style}. 
-Include elements such as: ${g.elements}${customElements}. 
-Color palette: ${g.colors}. 
-Mood: ${g.mood}. 
-Composition: ${g.composition}, with high contrast and emotional hook. 
-Ultra-sharp, visually striking, thumbnail-quality artwork optimized for click-through. No text unless specified.
-  `.trim();
+    Create a highly detailed, cinematic 16:9 digital illustration based on the story titled "${title}". 
+    Style: ${g.style}. 
+    Include elements such as: ${g.elements}${customElements}. 
+    Color palette: ${g.colors}. 
+    Mood: ${g.mood}. 
+    Composition: ${g.composition}, with high contrast and emotional hook. 
+    Ultra-sharp, visually striking, thumbnail-quality artwork optimized for click-through. No text unless specified.
+      `.trim();
 }
+
+// export async function runWorkflow({
+//   adminId,
+//   title,
+//   url,
+//   videoFile,
+//   textIdea,
+//   storyType,
+//   voiceTone,
+//   storyLength,
+//   scheduledAt,
+// }) {
+//   log(`🚀 Starting workflow: "${title}"`);
+
+//   const workflow = await prisma.workflow.create({
+//     data: {
+//       title,
+//       type: "STORY",
+//       status: scheduledAt ? "SCHEDULED" : "PENDING",
+//       scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+//       adminId,
+//       metadata: {},
+//     },
+//   });
+//   log(`Workflow record created (ID: ${workflow.id})`);
+
+//   let srtPath;
+
+//   try {
+//     log("Step 1: Preparing input text...");
+//     let inputText = textIdea || "";
+//     if (url) {
+//       log("Extracting text from URL...");
+//       inputText = await extractContentFromUrl(url);
+//     }
+
+//     if (videoFile) {
+//       log("Transcribing video to text...");
+//       inputText = await transcribeVideo(videoFile);
+//     }
+
+//     log(`Input text: ${inputText}`);
+//     if (!inputText || inputText.trim().length < 50)
+//       throw new Error("Invalid or empty input text.");
+
+//     await prisma.input.create({
+//       data: {
+//         type: url ? "URL" : videoFile ? "VIDEO" : "TEXT",
+//         source: url || videoFile || "TEXT",
+//         processed: true,
+//         workflowId: workflow.id,
+//       },
+//     });
+
+//     let outline, script;
+
+//     if (url || videoFile) {
+//       log("Step 2: Generating story...");
+//       ({ outline, script } = await generateStory({
+//         textIdea: inputText,
+//         storyType,
+//         voiceTone,
+//         storyLength,
+//       }));
+//     }
+
+//     console.log("Generated Story Outline:", outline);
+//     console.log("Generated Story Script:", script);
+
+//     if (textIdea) {
+//       script = textIdea;
+//     }
+
+//     const story = await prisma.story.create({
+//       data: { title, outline, content: script, adminId },
+//     });
+
+//     await prisma.workflow.update({
+//       where: { id: workflow.id },
+//       data: { storyId: story.id },
+//     });
+
+//     log("Step 3: Generating voiceover...");
+//     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
+//     const { url: voiceURL, localPath: voiceLocalPath } =
+//       await generateVoiceover(script, voiceFilename);
+
+//     console.log("VOICE URL", voiceURL);
+//     await prisma.voiceover.create({
+//       data: { script, audioURL: voiceURL, workflowId: workflow.id, adminId },
+//     });
+
+//     log("Step 4: Generating a single image for the entire story...");
+
+//     const storyPrompt = generateThumbnailPrompt(title, storyType);
+//     console.log("Story Prompt: ", storyPrompt);
+
+//     let imageUrl = null;
+
+//     while (!imageUrl) {
+//       try {
+//         imageUrl = await generateImage(storyPrompt, 1);
+
+//         if (!imageUrl || !fs.existsSync(imageUrl)) {
+//           log("⚠️ Image file missing after generation. Retrying...");
+//           imageUrl = null;
+//           await new Promise((r) => setTimeout(r, 3000));
+//           continue;
+//         }
+
+//         const size = fs.statSync(imageUrl).size;
+//         if (size < 5000) {
+//           log("⚠️ Image seems corrupted (too small). Retrying...");
+//           imageUrl = null;
+//           await new Promise((r) => setTimeout(r, 3000));
+//           continue;
+//         }
+
+//         log("✅ Single image generated successfully.");
+//       } catch (err) {
+//         log(`❌ Image generation failed: ${err.message}`);
+//         log("🔁 Retrying in 5 seconds...");
+//         await new Promise((r) => setTimeout(r, 5000));
+//       }
+//     }
+
+//     log("Step 5: Generating timed subtitles using Whisper API...");
+
+//     const srtContent = await transcribeWithTimestamps(voiceLocalPath);
+
+//     srtPath = path.join(TEMP_DIR, `subtitles-${workflow.id}.srt`);
+//     fs.writeFileSync(srtPath, srtContent);
+
+//     log("✅ Subtitle (SRT) file generated successfully.");
+
+//     log("Step 6: Creating video with accurate subtitles...");
+
+//     const timestamp = Date.now();
+//     const videoFilename = `${workflow.id}-${timestamp}.mp4`;
+//     const videoPath = path.join(TEMP_DIR, videoFilename);
+
+//     console.log("Subtitles created at", srtPath);
+
+//     await createVideo(title, imageUrl, voiceLocalPath, videoPath, srtPath);
+
+//     const videoURL = await uploadVideoToCloud(videoPath, videoFilename);
+//     log(`✅ Video uploaded successfully: ${videoURL}`);
+
+//     const video = await prisma.video.create({
+//       data: { title, fileURL: videoURL, adminId },
+//     });
+
+//     await prisma.workflow.update({
+//       where: { id: workflow.id },
+//       data: { videoId: video.id, status: "COMPLETED" },
+//     });
+
+//     log("🎉 Workflow completed successfully.");
+//     deleteTempFiles(TEMP_DIR);
+//     return {
+//       success: true,
+//       workflowId: workflow.id,
+//       story: {
+//         title: story.title,
+//         outline: story.outline,
+//         script: story.content,
+//       },
+//       voiceover: voiceURL,
+//       video: videoURL,
+//       image: imageUrl,
+//     };
+//   } catch (err) {
+//     log(`Workflow failed: ${err.message}`, "\x1b[31m");
+//     try {
+//       if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
+//       deleteTempFiles(TEMP_DIR);
+//     } catch (cleanupErr) {
+//       log(`⚠️ Temp cleanup failed: ${cleanupErr.message}`);
+//     }
+//     await prisma.workflow.update({
+//       where: { id: workflow.id },
+//       data: { status: "FAILED", metadata: { error: err.message } },
+//     });
+//     throw err;
+//   }
+// }
 
 export async function runWorkflow({
   adminId,
@@ -209,18 +388,44 @@ export async function runWorkflow({
   storyType,
   voiceTone,
   storyLength,
+  scheduledAt,
 }) {
-  log(`🚀 Starting workflow: "${title}"`);
+  const isScheduled = scheduledAt && new Date(scheduledAt) > new Date();
 
+  log(
+    isScheduled
+      ? `🕒 Workflow "${title}" scheduled for ${scheduledAt}`
+      : `🚀 Starting workflow: "${title}"`
+  );
+
+  // Create workflow record first
   const workflow = await prisma.workflow.create({
-    data: { title, type: "STORY", status: "PENDING", adminId, metadata: {} },
+    data: {
+      title,
+      type: "STORY",
+      status: isScheduled ? "SCHEDULED" : "PENDING",
+      scheduledAt: isScheduled ? new Date(scheduledAt) : null,
+      adminId,
+      metadata: {},
+    },
   });
+
   log(`Workflow record created (ID: ${workflow.id})`);
 
-  let srtPath; // Define srtPath outside try/catch for cleanup
+  if (isScheduled) {
+    return {
+      success: true,
+      workflowId: workflow.id,
+      status: "SCHEDULED",
+    };
+  }
+
+  // Run immediately
+  await runWorkflowSteps(workflow);
+
+  let srtPath;
 
   try {
-    // 1️⃣ Prepare input (UNMODIFIED)
     log("Step 1: Preparing input text...");
     let inputText = textIdea || "";
     if (url) {
@@ -232,7 +437,7 @@ export async function runWorkflow({
       log("Transcribing video to text...");
       inputText = await transcribeVideo(videoFile);
     }
-    
+
     log(`Input text: ${inputText}`);
     if (!inputText || inputText.trim().length < 50)
       throw new Error("Invalid or empty input text.");
@@ -247,8 +452,8 @@ export async function runWorkflow({
     });
 
     let outline, script;
-    // 2️⃣ Generate story (UNMODIFIED)
-    if(url || videoFile){
+
+    if (url || videoFile) {
       log("Step 2: Generating story...");
       ({ outline, script } = await generateStory({
         textIdea: inputText,
@@ -258,13 +463,7 @@ export async function runWorkflow({
       }));
     }
 
-    console.log("Generated Story Outline:", outline);
-    console.log("Generated Story Script:", script);
-
-    if(textIdea)
-    {
-      script= textIdea;
-    }
+    if (textIdea) script = textIdea;
 
     const story = await prisma.story.create({
       data: { title, outline, content: script, adminId },
@@ -275,85 +474,49 @@ export async function runWorkflow({
       data: { storyId: story.id },
     });
 
-    // 3️⃣ Voiceover (UNMODIFIED)
     log("Step 3: Generating voiceover...");
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
     const { url: voiceURL, localPath: voiceLocalPath } =
       await generateVoiceover(script, voiceFilename);
 
-    console.log("VOICE URL", voiceURL);
     await prisma.voiceover.create({
       data: { script, audioURL: voiceURL, workflowId: workflow.id, adminId },
     });
 
     log("Step 4: Generating a single image for the entire story...");
-
     const storyPrompt = generateThumbnailPrompt(title, storyType);
-    console.log("Story Prompt: ", storyPrompt);
-
     let imageUrl = null;
 
     while (!imageUrl) {
       try {
         imageUrl = await generateImage(storyPrompt, 1);
-
-        if (!imageUrl || !fs.existsSync(imageUrl)) {
-          log("⚠️ Image file missing after generation. Retrying...");
+        if (
+          !imageUrl ||
+          !fs.existsSync(imageUrl) ||
+          fs.statSync(imageUrl).size < 5000
+        ) {
+          log("Image generation issue, retrying...");
           imageUrl = null;
           await new Promise((r) => setTimeout(r, 3000));
-          continue;
         }
-
-        const size = fs.statSync(imageUrl).size;
-        if (size < 5000) {
-          log("⚠️ Image seems corrupted (too small). Retrying...");
-          imageUrl = null;
-          await new Promise((r) => setTimeout(r, 3000));
-          continue;
-        }
-
-        log("✅ Single image generated successfully.");
       } catch (err) {
-        log(`❌ Image generation failed: ${err.message}`);
-        log("🔁 Retrying in 5 seconds...");
+        log(`Image generation failed: ${err.message}`, "\x1b[31m");
         await new Promise((r) => setTimeout(r, 5000));
       }
     }
 
-    // await prisma.media.create({
-    //   data: {
-    //     type: "IMAGE",
-    //     fileUrl: imageUrl,
-    //     fileType: "image/png",
-    //     workflow: { connect: { id: workflow.id } },
-    //     metadata: { prompt: storyPrompt },
-    //   },
-    // });
-
-    // 5️⃣ Generate Subtitles (NEW LOGIC)
-    log("Step 5: Generating timed subtitles using Whisper API...");
-
+    log("Step 5: Generating timed subtitles...");
     const srtContent = await transcribeWithTimestamps(voiceLocalPath);
-
     srtPath = path.join(TEMP_DIR, `subtitles-${workflow.id}.srt`);
     fs.writeFileSync(srtPath, srtContent);
 
-    log("✅ Subtitle (SRT) file generated successfully.");
-
-    // 6️⃣ Create video (single image + subtitles)
-    log("Step 6: Creating video with accurate subtitles...");
-
+    log("Step 6: Creating video...");
     const timestamp = Date.now();
     const videoFilename = `${workflow.id}-${timestamp}.mp4`;
     const videoPath = path.join(TEMP_DIR, videoFilename);
+    await createVideo(title, imageUrl, voiceLocalPath, videoPath, srtPath);
 
-    console.log("Subtitles created at", srtPath);
-    // Pass the SRT file path instead of the 'scenes' array
-    await createVideo(title, imageUrl, voiceLocalPath, videoPath, srtPath); // <-- MODIFIED CALL
-
-    // 7️⃣ Upload final video
     const videoURL = await uploadVideoToCloud(videoPath, videoFilename);
-    log(`✅ Video uploaded successfully: ${videoURL}`);
 
     const video = await prisma.video.create({
       data: { title, fileURL: videoURL, adminId },
@@ -366,6 +529,7 @@ export async function runWorkflow({
 
     log("🎉 Workflow completed successfully.");
     deleteTempFiles(TEMP_DIR);
+
     return {
       success: true,
       workflowId: workflow.id,
@@ -380,16 +544,14 @@ export async function runWorkflow({
     };
   } catch (err) {
     log(`Workflow failed: ${err.message}`, "\x1b[31m");
-    try {
-      if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
-      deleteTempFiles(TEMP_DIR);
-    } catch (cleanupErr) {
-      log(`⚠️ Temp cleanup failed: ${cleanupErr.message}`);
-    }
+    if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
+    deleteTempFiles(TEMP_DIR);
+
     await prisma.workflow.update({
       where: { id: workflow.id },
       data: { status: "FAILED", metadata: { error: err.message } },
     });
+
     throw err;
   }
 }

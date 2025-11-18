@@ -128,12 +128,13 @@ model Voiceover {
 }
 
 model Workflow {
-  id       String       @id @default(auto()) @map("_id") @db.ObjectId
-  title    String
-  type     CreationType
-  subType  String?
-  status   String?      @default("PENDING")
-  metadata Json?
+  id          String       @id @default(auto()) @map("_id") @db.ObjectId
+  title       String
+  type        CreationType
+  subType     String?
+  status      String       @default("PENDING")
+  scheduledAt DateTime?
+  metadata    Json?
 
   admin   AdminUser? @relation(fields: [adminId], references: [id])
   adminId String?    @db.ObjectId

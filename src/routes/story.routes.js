@@ -5,7 +5,6 @@ import { runWorkflow } from "../services/workflowService.js";
 import { verifyToken } from "../middlewares/auth.js";
 import prisma from "../config/prisma.client.js";
 
-
 const router = express.Router();
 
 // Helper — consistent random title
@@ -28,7 +27,7 @@ router.post("/", async (req, res) => {
       storyType = "Story",
       voiceTone = "neutral",
       storyLength = "30 minutes",
-      admin,
+      voice,
     } = req.body;
 
     if (!textIdea && !url && !videoFile) {
@@ -44,7 +43,7 @@ router.post("/", async (req, res) => {
       storyType,
       voiceTone,
       storyLength,
-      admin,
+      voice,
     });
 
     return res.status(200).json({ outline, script });
@@ -59,6 +58,7 @@ router.post("/", async (req, res) => {
 /**
  * POST /api/story/workflow
  * Full pipeline: story → DB → voiceover → images → video.
+ * Supports scheduling via "scheduledAt" (ISO datetime string).
  */
 router.post("/workflow", verifyToken, async (req, res) => {
   try {
@@ -71,6 +71,8 @@ router.post("/workflow", verifyToken, async (req, res) => {
       storyType = "Story",
       voiceTone = "neutral",
       storyLength = "30 minutes",
+      scheduledAt,
+      voice,
     } = req.body;
 
     if (!adminId) {
@@ -94,6 +96,8 @@ router.post("/workflow", verifyToken, async (req, res) => {
       storyType,
       voiceTone,
       storyLength,
+      scheduledAt,
+      voice,
     });
 
     return res.status(200).json(result);
@@ -195,7 +199,5 @@ router.delete("/:id", verifyToken, async (req, res) => {
     });
   }
 });
-
-
 
 export default router;

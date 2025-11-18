@@ -14050,3 +14050,4 @@ g.C.Mc=function(N){var H=this.api.isEmbedsShortsMode()?.5625:16/9,c=this.api.J3(
 g.C.onVideoDataChange=function(){var N=this.api.D(),H=this.api.getVideoData();this.S=H.Uc?!1:N.U;this.suggestionData=H.suggestions?g.WL(H.suggestions,function(c){return c&&!c.playlistId}):[];
 l_L(this);H.Uc?this.title.update({title:g.Df("More videos from $DNI_RELATED_CHANNEL",{DNI_RELATED_CHANNEL:H.author})}):this.title.update({title:this.api.isEmbedsShortsMode()?"More shorts":"More videos"})};
 g.C.scrollTo=function(N){N=g.Ae(N,this.containerWidth-this.suggestionData.length*(this.U+8),0);this.Y.start(this.scrollPosition,N,1E3);this.scrollPosition=N;g.um(this);EiL(this)};})(_yt_player);
+w

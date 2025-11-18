@@ -38,7 +38,7 @@ export async function mergeAudioFiles(files, outputFile) {
       .save(outputFile)
       .on("end", () => {
         console.log(`Audio merged successfully to ${outputFile}`);
-        fs.unlinkSync(listFile); 
+        fs.unlinkSync(listFile);
         resolve(outputFile);
       })
       .on("error", (err) => {
@@ -59,7 +59,7 @@ export async function getAudioDuration(filePath) {
         return reject(err);
       }
       const duration = metadata?.format?.duration || 0;
-      resolve(Math.round(duration)); 
+      resolve(Math.round(duration));
     });
   });
 }
