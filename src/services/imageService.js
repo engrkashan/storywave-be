@@ -50,7 +50,7 @@ async function downloadImage(url, filePath) {
 
 export async function generateImage(prompt, index = 1) {
   try {
-    const safePrompt = sanitizePrompt(prompt);
+    const safePrompt = await sanitizePrompt(prompt);
     console.log("✅ Safe prompt:", safePrompt);
 
     const data = {
