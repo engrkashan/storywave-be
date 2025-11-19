@@ -96,10 +96,10 @@ router.post("/workflow", verifyToken, async (req, res) => {
       textIdea,
       imagePrompt,
       storyType,
+      voice,
       voiceTone,
       storyLength,
       scheduledAt,
-      voice,
     });
 
     return res.status(200).json(result);

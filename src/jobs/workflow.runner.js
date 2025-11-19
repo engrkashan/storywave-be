@@ -1,45 +1,42 @@
-import prisma from "../config/prisma.client.js";
-import { runWorkflowSteps } from "../services/workflowSteps.js";
+import { processExistingWorkflow } from "../services/workflowService.js";
+import { prisma } from "../lib/prisma.js";
+
+let isProcessing = false;
 
 export async function runScheduledWorkflows() {
-  const now = new Date();
-
-  const dueWorkflows = await prisma.workflow.findMany({
-    where: {
-      status: "SCHEDULED",
-      scheduledAt: { lte: now }
-    }
-  });
-
-  if (dueWorkflows.length === 0) return;
-
-  console.log(`Found ${dueWorkflows.length} scheduled workflows to run.`);
-
-  for (const workflow of dueWorkflows) {
-    try {
-      await prisma.workflow.update({
-        where: { id: workflow.id },
-        data: { status: "PROCESSING" }
-      });
-
-      await runWorkflowSteps(workflow);
-
-      await prisma.workflow.update({
-        where: { id: workflow.id },
-        data: { status: "COMPLETED" }
-      });
-
-      console.log(`Workflow ${workflow.id} completed.`);
-    } catch (error) {
-      console.error(`Workflow ${workflow.id} failed:`, error.message);
-
-      await prisma.workflow.update({
-        where: { id: workflow.id },
-        data: {
-          status: "FAILED",
-          metadata: { error: error.message }
-        }
-      });
-    }
+  if (isProcessing) {
+    console.log("⏳ A workflow is already processing... skipping this tick.");
+    return;
   }
+
+  isProcessing = true;
+
+  try {
+    const now = new Date();
+
+    const workflow = await prisma.workflow.findFirst({
+      where: {
+        status: "SCHEDULED",
+        scheduledAt: { lte: now },
+      },
+      orderBy: { scheduledAt: "asc" }
+    });
+
+    if (!workflow) {
+      isProcessing = false;
+      return;
+    }
+
+    await prisma.workflow.update({
+      where: { id: workflow.id },
+      data: { status: "PROCESSING" },
+    });
+
+    await processExistingWorkflow(workflow);
+
+  } catch (err) {
+    console.error("Scheduler error:", err);
+  }
+
+  isProcessing = false;
 }
