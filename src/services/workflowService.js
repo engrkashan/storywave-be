@@ -385,6 +385,7 @@ export async function runWorkflow({
   url,
   videoFile,
   textIdea,
+  imagePrompt,
   storyType,
   voiceTone,
   storyLength,
@@ -484,7 +485,7 @@ export async function runWorkflow({
     });
 
     log("Step 4: Generating a single image for the entire story...");
-    const storyPrompt = generateThumbnailPrompt(title, storyType);
+    const storyPrompt = imagePrompt || generateThumbnailPrompt(title, storyType);
     let imageUrl = null;
 
     while (!imageUrl) {

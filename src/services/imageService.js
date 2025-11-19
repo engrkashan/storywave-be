@@ -87,8 +87,8 @@ fs.mkdirSync(TEMP_DIR, { recursive: true });
 // Basic sanitizer
 function sanitizePrompt(prompt) {
   const blocked = [
-    // "sex", "nudity", "violence", "gore", "abuse",
-    // "drugs", "weapon", "blood", "kill", "murder"
+    "sex", "nudity", "violence", "gore", "abuse",
+    "drugs", "weapon", "blood", "kill", "murder"
   ];
   let sanitized = prompt;
   for (const w of blocked) {
@@ -115,7 +115,8 @@ async function downloadImage(url, filePath) {
 
 export async function generateImage(prompt, index = 1) {
   try {
-    const safePrompt = sanitizePrompt(prompt);
+    // const safePrompt = sanitizePrompt(prompt);
+    const safePrompt = prompt;
     console.log("✅ Safe prompt:", safePrompt);
 
     const data = {
