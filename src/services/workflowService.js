@@ -422,7 +422,7 @@ export async function runWorkflow({
   }
 
   // Run immediately
-  await runWorkflowSteps(workflow);
+  // await runWorkflowSteps(workflow);
 
   let srtPath;
 
