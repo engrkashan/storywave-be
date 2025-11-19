@@ -1,5 +1,5 @@
 import { processExistingWorkflow } from "../services/workflowService.js";
-import { prisma } from "../lib/prisma.js";
+import prisma from "../config/prisma.client.js";
 
 let isProcessing = false;
 
