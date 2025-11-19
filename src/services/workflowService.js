@@ -18,6 +18,45 @@ const log = (msg, color = "\x1b[36m") => {
   console.log(`${color}[${time}] ${msg}\x1b[0m`);
 };
 
+let isProcessing = false;
+
+export async function runScheduledWorkflows() {
+  if (isProcessing) {
+    console.log("⏳ A workflow is already processing... skipping this tick.");
+    return;
+  }
+
+  isProcessing = true;
+
+  try {
+    const now = new Date();
+
+    const workflow = await prisma.workflow.findFirst({
+      where: {
+        status: "SCHEDULED",
+        scheduledAt: { lte: now },
+      },
+      orderBy: { scheduledAt: "asc" },
+    });
+
+    if (!workflow) {
+      isProcessing = false;
+      return;
+    }
+
+    await prisma.workflow.update({
+      where: { id: workflow.id },
+      data: { status: "PROCESSING" },
+    });
+
+    await processExistingWorkflow(workflow);
+  } catch (err) {
+    console.error("Scheduler error:", err);
+  }
+
+  isProcessing = false;
+}
+
 export async function processExistingWorkflow(workflow) {
   const meta = workflow.metadata || {};
 
@@ -279,6 +318,7 @@ export async function runWorkflow({
   let srtPath;
 
   try {
+    isProcessing = true;
     log("Step 1: Preparing input text...");
     let inputText = textIdea || "";
     if (url) {
@@ -383,7 +423,7 @@ export async function runWorkflow({
 
     log("🎉 Workflow completed successfully.");
     deleteTempFiles(TEMP_DIR);
-
+    isProcessing = false;
     return {
       success: true,
       workflowId: workflow.id,
@@ -405,7 +445,7 @@ export async function runWorkflow({
       where: { id: workflow.id },
       data: { status: "FAILED", metadata: { error: err.message } },
     });
-
+    isProcessing = false;
     throw err;
   }
 }

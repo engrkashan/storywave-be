@@ -3,7 +3,6 @@ import dns from "dns";
 import dotenv from "dotenv";
 import express from "express";
 import cron from "node-cron";
-import { runScheduledWorkflows } from "./jobs/workflow.runner.js";
 
 // Load environment variables
 dotenv.config();
@@ -33,6 +32,7 @@ import overviewRoutes from "./routes/overview.routes.js";
 import podcastRoutes from "./routes/podcast.routes.js";
 import storyRoutes from "./routes/story.routes.js";
 import voiceCloneRoutes from "./routes/voice.clone.routes.js";
+import { runScheduledWorkflows } from "./services/workflowService.js";
 
 app.use("/api/auth", authRoutes);
 app.use("/api/story", storyRoutes);
@@ -50,16 +50,6 @@ cron.schedule("* * * * *", async () => {
   await runScheduledWorkflows();
 });
 
-// cron.schedule(
-//   "*/30 * * * * *",
-//   async () => {
-//     console.log("⏰ Checking for scheduled workflows (every 30s)...");
-//     await runScheduledWorkflows();
-//   },
-//   {
-//     scheduled: true,
-//   }
-// );
 
 // Start Server
 const port = process.env.PORT || 4002;
