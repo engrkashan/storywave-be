@@ -30,7 +30,7 @@ export async function createVideo(
   const titleOverlay = titleText
     ? `drawtext=text='${escapeFFmpegText(
         titleText
-      )}':fontsize=40:borderw=2:fontcolor=white:x=(w-text_w)/2:y=50,`
+      )}':fontsize=84:borderw=2:fontcolor=white:x=(w-text_w)/2:y=50,`
     : "";
 
   // ✅ Correct filter chain: image → (drawtext optional) → subtitles
