@@ -27,14 +27,14 @@ export async function createVideo(
   const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
   // 🏷️ Title text overlay (no zoom)
-  const titleOverlay = titleText
-    ? `drawtext=text='${escapeFFmpegText(
-        titleText
-      )}':fontsize=84:borderw=2:fontcolor=white:x=(w-text_w)/2:y=50,`
-    : "";
+  // const titleOverlay = titleText
+  //   ? `drawtext=text='${escapeFFmpegText(
+  //       titleText
+  //     )}':fontsize=84:borderw=2:fontcolor=white:x=(w-text_w)/2:y=50,`
+  //   : "";
 
   // ✅ Correct filter chain: image → (drawtext optional) → subtitles
-  const filterComplex = `[0:v]${titleOverlay}subtitles='${escapedAssPath}'`;
+  const filterComplex = `[0:v]subtitles='${escapedAssPath}'`;
 
   const cmd = [
     `ffmpeg -y -loop 1`,
@@ -75,7 +75,7 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVuSans,80,&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H00000000&,0,0,0,0,100,100,0,0,1,4,2,2,60,60,100,1
+Style: Default,DejaVuSans,86,&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H00000000&,0,0,0,0,100,100,0,0,1,4,2,2,60,60,100,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
