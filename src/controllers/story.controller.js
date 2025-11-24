@@ -106,3 +106,29 @@ export const deleteStory = async (req, res) => {
     return res.status(500).json({ error: "Failed to delete story" });
   }
 };
+
+// DELETE Scheduled Story (Cancel)
+export const deleteScheduledStory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const adminId = req.user?.userId;
+
+    const workflow = await prisma.workflow.findFirst({
+      where: { id, adminId, status: "SCHEDULED" },
+    });
+
+    if (!workflow) {
+      return res.status(404).json({ error: "Scheduled story not found" });
+    }
+
+    await prisma.workflow.update({
+      where: { id },
+      data: { status: "CANCELLED" },
+    });
+
+    return res.status(200).json({ message: "Scheduled story cancelled successfully" });
+  } catch (error) {
+    console.error("Cancel Scheduled Story Error:", error);
+    return res.status(500).json({ error: "Failed to cancel scheduled story" });
+  }
+};

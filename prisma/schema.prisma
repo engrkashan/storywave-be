@@ -127,12 +127,21 @@ model Voiceover {
   updatedAt DateTime @updatedAt
 }
 
+enum WorkflowStatus {
+  PENDING
+  SCHEDULED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
 model Workflow {
-  id          String       @id @default(auto()) @map("_id") @db.ObjectId
+  id          String         @id @default(auto()) @map("_id") @db.ObjectId
   title       String
   type        CreationType
   subType     String?
-  status      String       @default("PENDING")
+  status      WorkflowStatus @default(PENDING)
   scheduledAt DateTime?
   metadata    Json?
 

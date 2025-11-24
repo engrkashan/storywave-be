@@ -4,6 +4,7 @@ import { generateStory } from "../services/storyService.js";
 import { runWorkflow } from "../services/workflowService.js";
 import { verifyToken } from "../middlewares/auth.js";
 import prisma from "../config/prisma.client.js";
+import { deleteScheduledStory } from "../controllers/story.controller.js";
 
 const router = express.Router();
 
@@ -149,6 +150,12 @@ router.get("/scheduled", verifyToken, async (req, res) => {
     return res.status(500).json({ error: "Failed to fetch scheduled stories" });
   }
 });
+
+/**
+ * DELETE /api/story/scheduled/:id
+ * Cancel a scheduled story
+ */
+router.delete("/scheduled/:id", verifyToken, deleteScheduledStory);
 
 /**
  * DELETE /api/story/:id
