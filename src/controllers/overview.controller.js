@@ -123,14 +123,15 @@ export const getOverview = async (req, res) => {
 
     // Build stories array
     const stories = workflows
-      .filter((w) => w.story)
       .map((w) => ({
-        id: w.story.id,
-        title: w.story.title || w.video?.title || "Untitled Story",
+        id: w.story?.id || w.id, // Fallback to workflow ID if story ID is missing
+        workflow: w.id,
+        title: w.story?.title || w.title || "Untitled Workflow",
         type: "STORY",
-        createdAt: w.story.createdAt,
-        content: w.story.content || null,
-        status: w.status, // <-- status added
+        createdAt: w.createdAt,
+        content: w.story?.content || null,
+        status: w.status,
+        error: w.metadata?.error || null, // Include error from metadata
         voiceover: w.voiceover
           ? {
             id: w.voiceover.id,
@@ -149,25 +150,48 @@ export const getOverview = async (req, res) => {
           : null,
       }));
 
-    // ⭐ NEW: Only take 3 completed stories
-    const completedStories = stories
-      .filter((s) => s.status === "COMPLETED")
-      .slice(0, 3);
+    // Take top 6 recent workflows (regardless of status)
+    const recentWorkflows = stories.slice(0, 6);
 
     return res.status(200).json({
       totalStories: storiesCount,
       totalVideos: videosCount,
       totalVoiceovers: voiceoversCount,
       totalPodcasts: podcastsCount,
-
-      stories: completedStories, // only 3 completed stories
-
-      videos,
-      voiceovers,
-      podcasts,
+      stories: recentWorkflows,
     });
   } catch (error) {
     console.error("Overview Error:", error);
     return res.status(500).json({ error: "Failed to fetch overview" });
+  }
+};
+
+export const cancelWorkflow = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const workflow = await prisma.workflow.findFirst({
+      where: { id, adminId: userId },
+    });
+
+    if (!workflow) {
+      return res.status(404).json({ error: "Workflow not found" });
+    }
+
+    // Update status to CANCELLED
+    await prisma.workflow.update({
+      where: { id },
+      data: { status: "CANCELLED" },
+    });
+
+    return res.status(200).json({ message: "Workflow cancelled successfully" });
+  } catch (error) {
+    console.error("Cancel Workflow Error:", error);
+    return res.status(500).json({ error: "Failed to cancel workflow" });
   }
 };

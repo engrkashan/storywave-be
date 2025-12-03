@@ -348,12 +348,16 @@ export async function runWorkflow({
 
     if (url || videoFile) {
       log("Step 2: Generating story...");
-      ({ outline, script } = await generateStory({
-        textIdea: inputText,
-        storyType,
-        voiceTone,
-        storyLength,
-      }));
+      try {
+        ({ outline, script } = await generateStory({
+          textIdea: inputText,
+          storyType,
+          voiceTone,
+          storyLength,
+        }));
+      } catch (error) {
+        throw new Error(`Story Generation Failed: ${error.message}`);
+      }
     }
 
     if (textIdea) script = textIdea;
@@ -369,48 +373,81 @@ export async function runWorkflow({
 
     log("Step 3: Generating voiceover...");
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
-    const { url: voiceURL, localPath: voiceLocalPath } =
-      await generateVoiceover(script, voiceFilename, voice);
+    let voiceURL, voiceLocalPath;
+    try {
+      ({ url: voiceURL, localPath: voiceLocalPath } = await generateVoiceover(
+        script,
+        voiceFilename,
+        voice
+      ));
+    } catch (error) {
+      throw new Error(`Voiceover Generation Failed: ${error.message}`);
+    }
 
     await prisma.voiceover.create({
       data: { script, audioURL: voiceURL, workflowId: workflow.id, adminId },
     });
 
     log("Step 4: Generating a single image for the entire story...");
-    const storyPrompt =
-      imagePrompt || generateThumbnailPrompt(title, storyType);
+    let storyPrompt = imagePrompt || generateThumbnailPrompt(title, storyType);
     let imageUrl = null;
+    let imageRetryCount = 0;
+    const MAX_IMAGE_RETRIES = 3;
 
-    while (!imageUrl) {
-      try {
-        imageUrl = await generateImage(storyPrompt, 1);
-        if (
-          !imageUrl ||
-          !fs.existsSync(imageUrl) ||
-          fs.statSync(imageUrl).size < 5000
-        ) {
-          log("Image generation issue, retrying...");
-          imageUrl = null;
-          await new Promise((r) => setTimeout(r, 3000));
+    try {
+      while (!imageUrl && imageRetryCount < MAX_IMAGE_RETRIES) {
+        try {
+          imageUrl = await generateImage(storyPrompt, 1);
+
+          if (!imageUrl || !fs.existsSync(imageUrl) || fs.statSync(imageUrl).size < 5000) {
+            throw new Error("Generated image file is invalid or too small");
+          }
+
+        } catch (err) {
+          imageRetryCount++;
+          log(`Image generation attempt ${imageRetryCount} failed: ${err.message}`, "\x1b[31m");
+
+          if (imageRetryCount >= MAX_IMAGE_RETRIES) {
+            throw new Error(`Failed to generate image after ${MAX_IMAGE_RETRIES} attempts. Last error: ${err.message}`);
+          }
+
+          // Handle Prompt Length Error
+          if (err.message.toLowerCase().includes("prompt length") || err.message.toLowerCase().includes("too long")) {
+            log("⚠️ Prompt too long, shortening it for next attempt...");
+            // Truncate prompt to safe limit (e.g., 1000 chars) to ensure it passes
+            storyPrompt = storyPrompt.substring(0, 1000) + "...";
+          } else {
+            // For other errors, wait a bit before retrying
+            await new Promise((r) => setTimeout(r, 5000));
+          }
         }
-      } catch (err) {
-        log(`Image generation failed: ${err.message}`, "\x1b[31m");
-        await new Promise((r) => setTimeout(r, 5000));
       }
+    } catch (error) {
+      // Show exact error message for better debugging/transparency as requested
+      throw new Error(`Image Generation Failed: ${error.message}`);
     }
 
     log("Step 5: Generating timed subtitles...");
-    const srtContent = await transcribeWithTimestamps(voiceLocalPath);
-    srtPath = path.join(TEMP_DIR, `subtitles-${workflow.id}.srt`);
-    fs.writeFileSync(srtPath, srtContent);
+    try {
+      const srtContent = await transcribeWithTimestamps(voiceLocalPath);
+      srtPath = path.join(TEMP_DIR, `subtitles-${workflow.id}.srt`);
+      fs.writeFileSync(srtPath, srtContent);
+    } catch (error) {
+      throw new Error(`Subtitle Generation Failed: ${error.message}`);
+    }
 
     log("Step 6: Creating video...");
     const timestamp = Date.now();
     const videoFilename = `${workflow.id}-${timestamp}.mp4`;
     const videoPath = path.join(TEMP_DIR, videoFilename);
-    await createVideo(title, imageUrl, voiceLocalPath, videoPath, srtPath);
 
-    const videoURL = await uploadVideoToCloud(videoPath, videoFilename);
+    let videoURL;
+    try {
+      await createVideo(title, imageUrl, voiceLocalPath, videoPath, srtPath);
+      videoURL = await uploadVideoToCloud(videoPath, videoFilename);
+    } catch (error) {
+      throw new Error(`Video Creation Failed: ${error.message}`);
+    }
 
     const video = await prisma.video.create({
       data: { title, fileURL: videoURL, adminId },
