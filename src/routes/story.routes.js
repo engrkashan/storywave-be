@@ -1,10 +1,80 @@
+// import express from "express";
+// import crypto from "crypto";
+// import { generateStory } from "../services/storyService.js";
+// import { runWorkflow } from "../services/workflowService.js";
+// import { verifyToken } from "../middlewares/auth.js";
+// import prisma from "../config/prisma.client.js";
+// import { deleteScheduledStory } from "../controllers/story.controller.js";
+
+// const router = express.Router();
+
+// // Helper — consistent random title
+// function generateRandomTitle(storyType = "Story") {
+//   const randomId = crypto.randomBytes(3).toString("hex");
+//   const timestamp = Date.now();
+//   return `${storyType}_${randomId}_${timestamp}`;
+// }
+
+// /**
+//  * POST /api/story/workflow
+//  * Full pipeline: story → DB → voiceover → images → video.
+//  * Supports scheduling via "scheduledAt" (ISO datetime string).
+//  */
+// router.post("/workflow", verifyToken, async (req, res) => {
+//   try {
+//     const adminId = req.user?.userId;
+//     const {
+//       title,
+//       url,
+//       videoFile,
+//       textIdea,
+//       imagePrompt,
+//       storyType = "Story",
+//       voiceTone = "neutral",
+//       storyLength = "30 minutes",
+//       scheduledAt,
+//       voice,
+//     } = req.body;
+
+//     if (!adminId) {
+//       return res.status(401).json({ error: "Unauthorized: missing user" });
+//     }
+
+//     if (!textIdea && !url && !videoFile) {
+//       return res
+//         .status(400)
+//         .json({ error: "You must provide textIdea, url, or videoFile." });
+//     }
+
+//     const finalTitle = title || generateRandomTitle(storyType);
+
+//     const result = await runWorkflow({
+//       adminId,
+//       title: finalTitle,
+//       url,
+//       videoFile,
+//       textIdea,
+//       imagePrompt,
+//       storyType,
+//       voice,
+//       voiceTone,
+//       storyLength,
+//       scheduledAt,
+//     });
+
+//     return res.status(200).json(result);
+//   } catch (err) {
+//     console.error("Error running workflow:", err);
+//     return res.status(500).json({ error: err.message || "Workflow failed" });
+//   }
+// });
+
 import express from "express";
 import crypto from "crypto";
-import { generateStory } from "../services/storyService.js";
-import { runWorkflow } from "../services/workflowService.js";
 import { verifyToken } from "../middlewares/auth.js";
 import prisma from "../config/prisma.client.js";
-import { deleteScheduledStory } from "../controllers/story.controller.js";
+import { fork } from "child_process";
+import path from "path";
 
 const router = express.Router();
 
@@ -14,6 +84,82 @@ function generateRandomTitle(storyType = "Story") {
   const timestamp = Date.now();
   return `${storyType}_${randomId}_${timestamp}`;
 }
+
+router.post("/workflow", verifyToken, async (req, res) => {
+  try {
+    const adminId = req.user?.userId;
+
+    const {
+      title,
+      url,
+      videoFile,
+      textIdea,
+      imagePrompt,
+      storyType = "Story",
+      voiceTone = "neutral",
+      storyLength = "30 minutes",
+      scheduledAt,
+      voice,
+    } = req.body;
+
+    if (!adminId) {
+      return res.status(401).json({ error: "Unauthorized: missing user" });
+    }
+
+    if (!textIdea && !url && !videoFile) {
+      return res
+        .status(400)
+        .json({ error: "You must provide textIdea, url, or videoFile." });
+    }
+
+    const finalTitle = title || generateRandomTitle(storyType);
+
+    // 👉 Build the payload for worker process
+    const workflowPayload = {
+      adminId,
+      title: finalTitle,
+      url,
+      videoFile,
+      textIdea,
+      imagePrompt,
+      storyType,
+      voice,
+      voiceTone,
+      storyLength,
+      scheduledAt,
+    };
+
+    // 👉 PATH to worker file
+    const workerPath = path.resolve("workers/storyWorker.js");
+
+    // 👉 Start worker
+    const worker = fork(workerPath);
+
+    // Send data to worker
+    worker.send(workflowPayload);
+
+    // Optional: log worker results (not sent to frontend)
+    worker.on("message", (msg) => {
+      if (msg.status === "success") {
+        console.log("Workflow finished:", msg.result);
+      } else {
+        console.error("Workflow worker error:", msg.error);
+      }
+    });
+
+    // Immediate response
+    return res.status(200).json({
+      message: "Workflow started in background",
+      title: finalTitle,
+      status: "processing",
+    });
+
+  } catch (err) {
+    console.error("Error running workflow:", err);
+    return res.status(500).json({ error: err.message || "Workflow failed" });
+  }
+});
+
 
 /**
  * POST /api/story
@@ -56,59 +202,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-/**
- * POST /api/story/workflow
- * Full pipeline: story → DB → voiceover → images → video.
- * Supports scheduling via "scheduledAt" (ISO datetime string).
- */
-router.post("/workflow", verifyToken, async (req, res) => {
-  try {
-    const adminId = req.user?.userId;
-    const {
-      title,
-      url,
-      videoFile,
-      textIdea,
-      imagePrompt,
-      storyType = "Story",
-      voiceTone = "neutral",
-      storyLength = "30 minutes",
-      scheduledAt,
-      voice,
-    } = req.body;
 
-    if (!adminId) {
-      return res.status(401).json({ error: "Unauthorized: missing user" });
-    }
-
-    if (!textIdea && !url && !videoFile) {
-      return res
-        .status(400)
-        .json({ error: "You must provide textIdea, url, or videoFile." });
-    }
-
-    const finalTitle = title || generateRandomTitle(storyType);
-
-    const result = await runWorkflow({
-      adminId,
-      title: finalTitle,
-      url,
-      videoFile,
-      textIdea,
-      imagePrompt,
-      storyType,
-      voice,
-      voiceTone,
-      storyLength,
-      scheduledAt,
-    });
-
-    return res.status(200).json(result);
-  } catch (err) {
-    console.error("Error running workflow:", err);
-    return res.status(500).json({ error: err.message || "Workflow failed" });
-  }
-});
 
 /**
  * GET /api/story/scheduled
