@@ -75,7 +75,8 @@ import { verifyToken } from "../middlewares/auth.js";
 import prisma from "../config/prisma.client.js";
 import { fork } from "child_process";
 import path from "path";
-
+import { runWorkflow } from "../services/workflowService.js";
+import { deleteScheduledStory } from "../controllers/story.controller.js";
 const router = express.Router();
 
 // Helper — consistent random title
@@ -146,6 +147,8 @@ router.post("/workflow", verifyToken, async (req, res) => {
         console.error("Workflow worker error:", msg.error);
       }
     });
+
+
 
     // Immediate response
     return res.status(200).json({
