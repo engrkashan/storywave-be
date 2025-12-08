@@ -151,7 +151,7 @@ export const getOverview = async (req, res) => {
       }));
 
     // Take top 6 recent workflows (regardless of status)
-    const recentWorkflows = stories.slice(0, 6);
+    const recentWorkflows = stories.slice(0, 20);
 
     return res.status(200).json({
       totalStories: storiesCount,
