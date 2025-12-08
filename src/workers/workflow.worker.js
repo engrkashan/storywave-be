@@ -1,17 +1,23 @@
 // workflow.worker.js
 import { runWorkflow } from "../services/workflowService.js";
 
-(async () => {
-    try {
-        const workflowData = JSON.parse(process.argv[2]);
-        console.log("Worker started for workflow:", workflowData);
+process.on("message", async (workflowData) => {
+  try {
+    console.log("Worker started for workflow:", workflowData.title);
 
-        await runWorkflow(workflowData);
+    const result = await runWorkflow(workflowData);
 
-        console.log("Worker completed successfully.");
-        process.exit(0);
-    } catch (err) {
-        console.error("Worker failed:", err.message);
-        process.exit(1);
+    if (process.send) {
+      process.send({ status: "success", result });
     }
-})();
+
+    console.log("Worker completed successfully.");
+    process.exit(0);
+  } catch (err) {
+    console.error("Worker failed:", err.message);
+    if (process.send) {
+      process.send({ status: "error", error: err.message });
+    }
+    process.exit(1);
+  }
+});

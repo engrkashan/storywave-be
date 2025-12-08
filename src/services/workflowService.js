@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { fork } from "child_process";
 import { cloudinary } from "../config/cloudinary.config.js";
 import prisma from "../config/prisma.client.js";
 import { deleteTempFiles } from "../utils/deleteTemp.js";
@@ -79,12 +80,44 @@ export async function runScheduledWorkflows() {
       data: { status: "PROCESSING" },
     });
 
-    await processExistingWorkflow(workflow);
+    // await processExistingWorkflow(workflow);
+
+    // 👉 Offload to worker process
+    const workerPath = path.resolve("src/workers/workflow.worker.js");
+    const worker = fork(workerPath);
+
+    // Prepare payload similar to what processExistingWorkflow does
+    const meta = workflow.metadata || {};
+    const payload = {
+      adminId: workflow.adminId,
+      title: workflow.title,
+      url: meta.url || null,
+      videoFile: meta.videoFile || null,
+      textIdea: meta.textIdea || null,
+      imagePrompt: meta.imagePrompt || null,
+      storyType: meta.storyType || null,
+      voice: meta.voice || null,
+      voiceTone: meta.voiceTone || null,
+      storyLength: meta.storyLength || null,
+      scheduledAt: null,
+      existingWorkflow: workflow,
+    };
+
+    worker.send(payload);
+
+    worker.on("message", (msg) => {
+      console.log(`Worker message for workflow ${workflow.id}:`, msg);
+    });
+
+    worker.on("exit", (code) => {
+      console.log(
+        `Worker for workflow ${workflow.id} exited with code ${code}`
+      );
+    });
   } catch (err) {
     console.error("Scheduler error:", err);
   }
 }
-
 
 export async function processExistingWorkflow(workflow) {
   const meta = workflow.metadata || {};
@@ -132,7 +165,6 @@ async function uploadVideoToCloud(videoPath, filename) {
   log(`Video uploaded to Cloudinary: ${uploaded}`);
   return uploaded.secure_url;
 }
-
 
 export async function runWorkflow({
   adminId,
@@ -283,20 +315,31 @@ export async function runWorkflow({
         try {
           imageUrl = await generateImage(storyPrompt, 1);
 
-          if (!imageUrl || !fs.existsSync(imageUrl) || fs.statSync(imageUrl).size < 5000) {
+          if (
+            !imageUrl ||
+            !fs.existsSync(imageUrl) ||
+            fs.statSync(imageUrl).size < 5000
+          ) {
             throw new Error("Generated image file is invalid or too small");
           }
-
         } catch (err) {
           imageRetryCount++;
-          log(`Image generation attempt ${imageRetryCount} failed: ${err.message}`, "\x1b[31m");
+          log(
+            `Image generation attempt ${imageRetryCount} failed: ${err.message}`,
+            "\x1b[31m"
+          );
 
           if (imageRetryCount >= MAX_IMAGE_RETRIES) {
-            throw new Error(`Failed to generate image after ${MAX_IMAGE_RETRIES} attempts. Last error: ${err.message}`);
+            throw new Error(
+              `Failed to generate image after ${MAX_IMAGE_RETRIES} attempts. Last error: ${err.message}`
+            );
           }
 
           // Handle Prompt Length Error
-          if (err.message.toLowerCase().includes("prompt length") || err.message.toLowerCase().includes("too long")) {
+          if (
+            err.message.toLowerCase().includes("prompt length") ||
+            err.message.toLowerCase().includes("too long")
+          ) {
             log("⚠️ Prompt too long, shortening it for next attempt...");
             // Truncate prompt to safe limit (e.g., 1000 chars) to ensure it passes
             storyPrompt = storyPrompt.substring(0, 1000) + "...";

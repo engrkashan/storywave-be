@@ -131,7 +131,7 @@ router.post("/workflow", verifyToken, async (req, res) => {
     };
 
     // 👉 PATH to worker file
-    const workerPath = path.resolve("workers/storyWorker.js");
+    const workerPath = path.resolve("src/workers/workflow.worker.js");
 
     // 👉 Start worker
     const worker = fork(workerPath);
@@ -148,21 +148,17 @@ router.post("/workflow", verifyToken, async (req, res) => {
       }
     });
 
-
-
     // Immediate response
     return res.status(200).json({
       message: "Workflow started in background",
       title: finalTitle,
       status: "processing",
     });
-
   } catch (err) {
     console.error("Error running workflow:", err);
     return res.status(500).json({ error: err.message || "Workflow failed" });
   }
 });
-
 
 /**
  * POST /api/story
@@ -204,8 +200,6 @@ router.post("/", async (req, res) => {
       .json({ error: err.message || "Failed to generate story" });
   }
 });
-
-
 
 /**
  * GET /api/story/scheduled
