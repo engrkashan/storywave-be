@@ -1,3 +1,4 @@
+// imageService.js
 import fs from "fs";
 import path from "path";
 import OpenAI from "openai";
@@ -5,10 +6,6 @@ import OpenAI from "openai";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const MIDJOURNEY_API_BASE = "https://api.midapi.ai/api/v1/mj";
-
-// Ensure temp folders exist
-const TEMP_DIR = path.join(process.cwd(), "temp");
-fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 // Basic sanitizer
 async function sanitizePrompt(prompt) {
@@ -18,8 +15,8 @@ async function sanitizePrompt(prompt) {
       {
         role: "system",
         content: "You are an AI assistant that rewrites prompts to fully comply with OpenAI content policies. " +
-                 "Keep the original idea, context, and creativity, but remove or reword anything that violates policy, " +
-                 "including graphic violence, gore, sexual content, or illegal activities."
+          "Keep the original idea, context, and creativity, but remove or reword anything that violates policy, " +
+          "including graphic violence, gore, sexual content, or illegal activities."
       },
       {
         role: "user",
@@ -48,7 +45,10 @@ async function downloadImage(url, filePath) {
   }
 }
 
-export async function generateImage(prompt, index = 1) {
+export async function generateImage(prompt, index = 1, tempDir) {
+  // Ensure temp folder exists
+  fs.mkdirSync(tempDir, { recursive: true });
+
   try {
     const safePrompt = await sanitizePrompt(prompt);
     console.log("✅ Safe prompt:", safePrompt);
@@ -125,7 +125,7 @@ export async function generateImage(prompt, index = 1) {
     }
     console.log("DEBUG RESULT POLLING:", JSON.stringify(result, null, 2));
     const filePath = path.join(
-      TEMP_DIR,
+      tempDir,
       `scene_${String(index).padStart(3, "0")}.png`
     );
     await downloadImage(imageUrl, filePath);

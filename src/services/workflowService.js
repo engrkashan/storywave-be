@@ -11,8 +11,8 @@ import { generateStory } from "./storyService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { createVideo } from "./videoService.js";
 
-const TEMP_DIR = path.resolve(process.cwd(), "temp");
-fs.mkdirSync(TEMP_DIR, { recursive: true });
+const TEMP_ROOT = path.resolve(process.cwd(), "temp");
+fs.mkdirSync(TEMP_ROOT, { recursive: true });
 
 const log = (msg, color = "\x1b[36m") => {
   const time = new Date().toISOString().split("T")[1].split(".")[0];
@@ -231,6 +231,9 @@ export async function runWorkflow({
     };
   }
 
+  // Create workflow-specific temp dir
+  const workflowTempDir = path.join(TEMP_ROOT, workflow.id.toString());
+  fs.mkdirSync(workflowTempDir, { recursive: true });
   let srtPath;
 
   try {
@@ -294,7 +297,8 @@ export async function runWorkflow({
       ({ url: voiceURL, localPath: voiceLocalPath } = await generateVoiceover(
         script,
         voiceFilename,
-        voice
+        voice,
+        workflowTempDir
       ));
     } catch (error) {
       throw new Error(`Voiceover Generation Failed: ${error.message}`);
@@ -313,7 +317,7 @@ export async function runWorkflow({
     try {
       while (!imageUrl && imageRetryCount < MAX_IMAGE_RETRIES) {
         try {
-          imageUrl = await generateImage(storyPrompt, 1);
+          imageUrl = await generateImage(storyPrompt, 1, workflowTempDir);
 
           if (
             !imageUrl ||
@@ -357,7 +361,7 @@ export async function runWorkflow({
     log("Step 5: Generating timed subtitles...");
     try {
       const srtContent = await transcribeWithTimestamps(voiceLocalPath);
-      srtPath = path.join(TEMP_DIR, `subtitles-${workflow.id}.srt`);
+      srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);
       fs.writeFileSync(srtPath, srtContent);
     } catch (error) {
       throw new Error(`Subtitle Generation Failed: ${error.message}`);
@@ -366,7 +370,7 @@ export async function runWorkflow({
     log("Step 6: Creating video...");
     const timestamp = Date.now();
     const videoFilename = `${workflow.id}-${timestamp}.mp4`;
-    const videoPath = path.join(TEMP_DIR, videoFilename);
+    const videoPath = path.join(workflowTempDir, videoFilename);
 
     let videoURL;
     try {
@@ -386,7 +390,7 @@ export async function runWorkflow({
     });
 
     log("🎉 Workflow completed successfully.");
-    deleteTempFiles(TEMP_DIR);
+    deleteTempFiles(workflowTempDir); // Delete only this workflow's dir
     // isProcessing = false;
     return {
       success: true,
@@ -403,7 +407,7 @@ export async function runWorkflow({
   } catch (err) {
     log(`Workflow failed: ${err.message}`, "\x1b[31m");
     if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
-    deleteTempFiles(TEMP_DIR);
+    deleteTempFiles(workflowTempDir); // Delete only this workflow's dir
 
     await prisma.workflow.update({
       where: { id: workflow.id },
