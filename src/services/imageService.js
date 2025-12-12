@@ -137,187 +137,237 @@
 //   }
 // }
 
+
 // imageService.js
 import fs from "fs";
 import path from "path";
 import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai"; // 1. Add Google Gen AI SDK
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }); // Initialize Gemini Client
+
 const MIDJOURNEY_API_BASE = "https://api.midapi.ai/api/v1/mj";
+const MAX_RETRIES = 3; // Maximum retries for Midjourney before falling back
+const MIDJOURNEY_QUOTA_ERROR_CODES = [403, 429]; // Example error codes for quota/rate limit
 
-// --------------------------
-// UNIVERSAL FETCH (RETRY + TIMEOUT)
-// --------------------------
-async function fetchSafe(url, options = {}, retries = 3, timeout = 20000) {
-  for (let i = 1; i <= retries; i++) {
-    try {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), timeout);
-
-      const res = await fetch(url, { ...options, signal: controller.signal });
-      clearTimeout(id);
-
-      if (res.ok) return res;
-      throw new Error(`Status ${res.status}`);
-    } catch (err) {
-      console.log(`⚠️ fetchSafe attempt ${i} failed:`, err.message);
-      if (i === retries) return null;
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-  }
-}
-
-// --------------------------
-// SANITIZE PROMPT (OPTIONAL, OpenAI GPT-4O-mini)
-// --------------------------
+// Basic sanitizer (Remains the same)
 async function sanitizePrompt(prompt) {
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "Rewrite prompts safely, remove disallowed content but keep original intent.",
-        },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.6,
-    });
-
-    return response.choices[0].message.content;
-  } catch (err) {
-    console.log("⚠️ Prompt sanitization failed, using original prompt.");
-    return prompt;
-  }
-}
-
-// --------------------------
-// TIER 1 — MIDJOURNEY
-// --------------------------
-async function generateViaMidjourney(prompt, tempPath) {
-  try {
-    const postRes = await fetchSafe(`${MIDJOURNEY_API_BASE}/generate`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.MIDJOURNEY_API_KEY}`,
-        "Content-Type": "application/json",
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: "You are an AI assistant that rewrites prompts to fully comply with OpenAI content policies. " +
+          "Keep the original idea, context, and creativity, but remove or reword anything that violates policy, " +
+          "including graphic violence, gore, sexual content, or illegal activities."
       },
-      body: JSON.stringify({
-        taskType: "mj_txt2img",
-        prompt,
-        speed: "fast",
-        version: "7",
-        aspectRatio: "16:9",
-        stylization: 500,
-      }),
+      {
+        role: "user",
+        content: `Please rewrite this prompt safely while keeping its intent intact: "${prompt}"`
+      }
+    ],
+    temperature: 0.7
+  });
+
+  return response.choices[0].message.content;
+}
+
+// Download helper (Remains the same)
+async function downloadImage(url, filePath) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to download image: ${response.statusText}`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    fs.writeFileSync(filePath, buffer);
+  } catch (err) {
+    console.error("❌ Image download failed:", err.message);
+    throw err;
+  }
+}
+
+// 3. New Function for Gemini (Imagen) Fallback
+async function generateImageWithGemini(safePrompt, index, tempDir) {
+  console.log("➡️ Falling back to Gemini image generation...");
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-image", // Model for image generation
+      contents: [safePrompt],
+      config: {
+        responseMimeType: "image/png",
+        // Optional: Aspect ratio is often controlled via prompt for Gemini image models,
+        // but you can try to influence it here if the SDK supports a config for it.
+      }
     });
 
-    if (!postRes) throw new Error("MJ POST failed");
-
-    const postData = await postRes.json();
-    const taskId = postData?.data?.taskId;
-    if (!taskId) throw new Error("No taskId returned from MJ");
-
-    console.log("🟦 MJ Task ID:", taskId);
-
-    // Polling
-    const start = Date.now();
-    const MAX_TIME = 1000 * 60 * 2; // 2 mins
-
-    let result = null;
-    while (Date.now() - start < MAX_TIME) {
-      const pollRes = await fetchSafe(
-        `${MIDJOURNEY_API_BASE}/record-info?taskId=${taskId}`,
-        { headers: { Authorization: `Bearer ${process.env.MIDJOURNEY_API_KEY}` } }
-      );
-      if (!pollRes) {
-        await new Promise((r) => setTimeout(r, 4000));
-        continue;
-      }
-
-      const pollData = await pollRes.json();
-      const flag = pollData?.data?.successFlag;
-
-      if (flag === 1) {
-        result = pollData.data.resultInfoJson;
-        break;
-      }
-      if (flag === 2 || flag === 3) {
-        throw new Error(pollData?.data?.errorMessage || "MJ failed");
-      }
-
-      await new Promise((r) => setTimeout(r, 4000));
+    const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+    if (!part || !part.inlineData) {
+      throw new Error("Gemini image generation failed: No image data returned.");
     }
 
-    const imageUrl = result?.resultUrls?.[0]?.resultUrl;
-    if (!imageUrl) throw new Error("MJ result missing URL");
+    const { data: base64Data, mimeType } = part.inlineData;
+    const buffer = Buffer.from(base64Data, 'base64');
 
-    const img = await fetchSafe(imageUrl, {}, 3);
-    if (!img) throw new Error("MJ image download failed");
+    // Determine file extension
+    const ext = mimeType.split('/')[1] || 'png';
+    const filePath = path.join(
+      tempDir,
+      `scene_${String(index).padStart(3, "0")}_gemini.${ext}`
+    );
 
-    fs.writeFileSync(tempPath, Buffer.from(await img.arrayBuffer()));
-    return tempPath;
+    fs.writeFileSync(filePath, buffer);
+    console.log(`✅ Image saved from Gemini: ${filePath}`);
+    return filePath;
+
   } catch (err) {
-    console.log("⚠️ MidJourney failed:", err.message);
-    return null;
+    console.error("❌ Gemini image generation failed:", err.message);
+    throw new Error(`Fallback failed: ${err.message}`); // Final failure
   }
 }
 
-// --------------------------
-// TIER 2 — OPENAI FALLBACK (16:9, MJ-style prompt enhancer)
-// --------------------------
-async function generateViaOpenAI(prompt, tempPath) {
-  const enhancedPrompt = `
-Cinematic ultra-detailed ${prompt}, midjourney v6 style,
-16:9 aspect ratio, 8K resolution, hyper-realistic, dramatic lighting,
-volumetric lighting, octane render, ultra sharp details, atmospheric depth,
-global illumination, highly stylized composition.
-`;
 
-  for (let i = 1; i <= 5; i++) {
-    try {
-      console.log(`🟩 OpenAI fallback try ${i}`);
-      const response = await openai.images.generate({
-        model: "gpt-image-1",
-        prompt: enhancedPrompt,
-        size: "1024x576", // 16:9 for YouTube thumbnail
-      });
-
-      const url = response.data[0].url;
-      const img = await fetchSafe(url);
-      if (!img) throw new Error("OpenAI download failed");
-
-      fs.writeFileSync(tempPath, Buffer.from(await img.arrayBuffer()));
-      return tempPath;
-    } catch (err) {
-      console.log("⚠️ OpenAI fallback error:", err.message);
-      if (i === 5) throw new Error("OpenAI fallback failed completely");
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-  }
-}
-
-// --------------------------
-// MAIN FUNCTION
-// --------------------------
+// 4. Main function with Retry and Fallback Logic
 export async function generateImage(prompt, index = 1, tempDir) {
+  // Ensure temp folder exists
   fs.mkdirSync(tempDir, { recursive: true });
-  const tempPath = path.join(tempDir, `scene_${String(index).padStart(3, "0")}.png`);
 
   const safePrompt = await sanitizePrompt(prompt);
+  console.log("✅ Safe prompt:", safePrompt);
 
-  // 1️⃣ Try MidJourney
-  const mj = await generateViaMidjourney(safePrompt, tempPath);
-  if (mj) {
-    console.log("✅ Final: MidJourney Success");
-    return mj;
+  let midjourneyError = null;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+    try {
+      console.log(`\nAttempt ${attempt}/${MAX_RETRIES + 1}: Starting Midjourney generation...`);
+
+      const data = {
+        taskType: "mj_txt2img",
+        prompt: safePrompt,
+        speed: "fast",
+        aspectRatio: "16:9",
+        version: "7",
+        stylization: 500
+      };
+
+      // --- Start generation ---
+      const postResponse = await fetch(`${MIDJOURNEY_API_BASE}/generate`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.MIDJOURNEY_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(data),
+      });
+
+      if (!postResponse.ok) {
+        const status = postResponse.status;
+        const text = await postResponse.text();
+        console.log("DEBUG BODY:", text);
+
+        const error = new Error(`Midjourney: Failed to start generation (Status ${status}): ${postResponse.statusText}`);
+        error.isQuotaError = MIDJOURNEY_QUOTA_ERROR_CODES.includes(status);
+        error.midjourneyResponseText = text;
+
+        if (error.isQuotaError) {
+          midjourneyError = error; // Store the quota error for UX
+          break; // Break the loop immediately for quota/rate limit error
+        }
+
+        throw error; // Throw other errors to trigger retry
+      }
+
+      const postData = await postResponse.json();
+      const taskId = postData?.data?.taskId;
+      if (!taskId) {
+        throw new Error("Midjourney: No taskId returned, cannot poll.");
+      }
+
+      // --- Poll for completion ---
+      let result;
+      const MAX_POLL_ATTEMPTS = 60; // Max polling for 5 mins (60 * 5s)
+      for (let pollAttempt = 0; pollAttempt < MAX_POLL_ATTEMPTS; pollAttempt++) {
+        console.log(`Polling for taskId: ${taskId}`);
+        const getResponse = await fetch(`${MIDJOURNEY_API_BASE}/record-info?taskId=${taskId}`, {
+          headers: {
+            Authorization: `Bearer ${process.env.MIDJOURNEY_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (!getResponse.ok) {
+          throw new Error(`Midjourney: Failed to get status: ${getResponse.statusText}`);
+        }
+
+        const getData = await getResponse.json();
+        const successFlag = getData?.data?.successFlag;
+
+        if (successFlag === 1) {
+          result = getData.data.resultInfoJson;
+          break; // Generation complete
+        } else if (successFlag === 2 || successFlag === 3) {
+          throw new Error(`Midjourney: Generation failed: ${getData?.data?.errorMessage || 'Unknown error'}`);
+        }
+
+        // Wait 5 seconds before next poll
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+
+      if (!result) {
+        throw new Error("Midjourney: Polling timed out. Image not generated within expected time.");
+      }
+
+      // --- Download image ---
+      const imageUrl = result.resultUrls?.[0]?.resultUrl;
+      if (!imageUrl) {
+        throw new Error("Midjourney: No image URL available");
+      }
+
+      const filePath = path.join(
+        tempDir,
+        `scene_${String(index).padStart(3, "0")}_midjourney.png`
+      );
+      await downloadImage(imageUrl, filePath);
+      console.log(`✅ Image saved: ${filePath}`);
+
+      return { filePath, source: 'Midjourney', midjourneyError: null };
+
+    } catch (err) {
+      midjourneyError = err; // Store the error from this attempt
+      console.error(`❌ Midjourney attempt ${attempt} failed:`, err.message);
+
+      if (attempt <= MAX_RETRIES) {
+        // Retry logic: wait for exponential backoff before next attempt (simple: wait 5s * attempt)
+        const delay = attempt * 5000;
+        console.log(`Retrying Midjourney in ${delay / 1000}s...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      } else {
+        // Max retries reached or immediate break (quota error)
+        break;
+      }
+    }
   }
 
-  // 2️⃣ Fallback → OpenAI
-  console.log("🔄 Switching to OpenAI fallback...");
-  const dalle = await generateViaOpenAI(safePrompt, tempPath);
+  // --- Fallback to Gemini if Midjourney failed (after retries or on quota error) ---
+  if (midjourneyError) {
+    console.warn("⚠️ Midjourney failed after all retries or due to a quota error. Falling back to Gemini...");
 
-  console.log("🟢 Final: OpenAI Success (Fallback)");
-  return dalle;
+    // Call the new Gemini function
+    const geminiFilePath = await generateImageWithGemini(safePrompt, index, tempDir);
+
+    // Return the Gemini result along with the Midjourney error for better UX messaging
+    return {
+      filePath: geminiFilePath,
+      source: 'Gemini',
+      midjourneyError: midjourneyError.isQuotaError
+        ? `Midjourney Quota Exceeded (Status ${midjourneyError.status}): ${midjourneyError.midjourneyResponseText}`
+        : midjourneyError.message,
+    };
+  }
+
+  // This line should be unreachable if the logic is correct, but added as a final safeguard
+  throw new Error("Image generation failed with both Midjourney (no retries left) and Gemini.");
 }
