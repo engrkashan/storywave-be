@@ -1,10 +1,9 @@
 import fs from "fs";
 import path from "path";
 import OpenAI from "openai";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MIDJOURNEY_API_BASE = "https://api.midapi.ai/api/v1/mj";
 
@@ -50,34 +49,32 @@ async function downloadImage(url, filePath) {
 // -----------------------------------
 // GEMINI IMAGE GENERATOR
 // -----------------------------------
-async function generateWithGemini(prompt, index, tempDir) {
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash-image-generation",
-  });
+
+export async function generateWithImagen(prompt, index = 1, tempDir) {
+  fs.mkdirSync(tempDir, { recursive: true });
 
   const enhancedPrompt = `
-High quality, cinematic, ultra-detailed image.
-Aspect ratio 16:9.
+High quality, cinematic, ultra-detailed.
+Wide horizontal composition, 16:9 aspect ratio.
 ${prompt}
-`;
+`.trim();
 
-  const result = await model.generateContent([
-    {
-      role: "user",
-      parts: [{ text: enhancedPrompt }],
+  const response = await ai.models.generateImages({
+    model: "imagen-4.0-generate-001",
+    prompt: enhancedPrompt,
+    config: {
+      numberOfImages: 1,
+      aspectRatio: "16:9",
     },
-  ]);
+  });
 
-  const imagePart = result.response.candidates[0].content.parts.find(
-    (p) => p.inlineData
-  );
-
-  if (!imagePart) {
-    throw new Error("Gemini did not return an image");
+  const generatedImage = response.generatedImages?.[0];
+  if (!generatedImage?.image?.imageBytes) {
+    throw new Error("Imagen returned no image bytes");
   }
 
   const buffer = Buffer.from(
-    imagePart.inlineData.data,
+    generatedImage.image.imageBytes,
     "base64"
   );
 
@@ -88,6 +85,7 @@ ${prompt}
 
   fs.writeFileSync(filePath, buffer);
 
+  console.log("✅ Imagen image saved:", filePath);
   return filePath;
 }
 
@@ -202,11 +200,11 @@ export async function generateImage(prompt, index = 1, tempDir) {
       console.error(`❌ Attempt ${attempt} failed:`, err.message);
 
       if (attempt === MAX_RETRIES) {
-        console.log("⚠️ MidJourney failed completely. Switching to Gemini...");
-        return await generateWithGemini(prompt, index, tempDir);
+        console.log("⚠️ MidJourney failed. Switching to Imagen...");
+        return await generateWithImagen(prompt, index, tempDir);
       }
 
-      await new Promise((r) => setTimeout(r, 30000));
+      await new Promise((resolve) => setTimeout(resolve, 30000));
     }
   }
 }
