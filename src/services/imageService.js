@@ -379,30 +379,33 @@ async function generateWithMidjourney(prompt, index, tempDir) {
    MAIN ORCHESTRATOR
 -------------------------------------------------- */
 export async function generateImage(prompt, index = 1, tempDir) {
-  const GEMINI_RETRIES = 3;
-  const MJ_RETRIES = 3;
+  let imageUrl = null;
+  let imageError = null;
 
-  /* ---------- GEMINI FIRST ---------- */
-  for (let i = 1; i <= GEMINI_RETRIES; i++) {
+  // GEMINI attempts
+  for (let i = 1; i <= 3; i++) {
     try {
-      console.log(`🌈 Gemini attempt ${i}/${GEMINI_RETRIES}`);
-      return await generateWithImagen(prompt, index, tempDir);
+      console.log(`🌈 Gemini attempt ${i}/3`);
+      imageUrl = await generateWithImagen(prompt, index, tempDir);
+      return { imageUrl, error: null };
     } catch (err) {
-      console.error(`❌ Gemini attempt ${i} failed:`, err.message);
+      console.error(`❌ Gemini attempt ${i} failed:`, err);
+      imageError = err; // Save the exact error
     }
   }
 
-  /* ---------- FALLBACK TO MIDJOURNEY ---------- */
-  for (let i = 1; i <= MJ_RETRIES; i++) {
+  // MIDJOURNEY fallback
+  for (let i = 1; i <= 3; i++) {
     try {
-      console.log(`🎨 MidJourney attempt ${i}/${MJ_RETRIES}`);
-      return await generateWithMidjourney(prompt, index, tempDir);
+      console.log(`🎨 MidJourney attempt ${i}/3`);
+      imageUrl = await generateWithMidjourney(prompt, index, tempDir);
+      return { imageUrl, error: null };
     } catch (err) {
-      console.error(`❌ MidJourney attempt ${i} failed:`, err.message);
+      console.error(`❌ MidJourney attempt ${i} failed:`, err);
+      imageError = err;
     }
   }
 
-  /* ---------- TOTAL FAILURE ---------- */
   console.warn("⚠️ All image generation attempts failed. Skipping scene.");
-  return null;
+  return { imageUrl: null, error: imageError }; // Return the exact error
 }

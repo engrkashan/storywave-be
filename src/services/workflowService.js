@@ -335,51 +335,24 @@ export async function runWorkflow({
     //   throw new Error(`Image Generation Failed: ${error.message}`);
     // }
 
+
+
     log("Step 4: Generating a single image for the entire story...");
 
-    let storyPrompt = imagePrompt || generateThumbnailPrompt(title, storyType);
-    let imageUrl = null;
-    let imageError = null;
+    const storyPrompt = imagePrompt || generateThumbnailPrompt(title, storyType);
+    const { imageUrl, error: imageError } = await generateImage(storyPrompt, 1, workflowTempDir);
 
-    const MAX_IMAGE_RETRIES = 3;
-    let imageRetryCount = 0;
-
-    while (!imageUrl && imageRetryCount < MAX_IMAGE_RETRIES) {
-      try {
-        imageUrl = await generateImage(storyPrompt, 1, workflowTempDir);
-
-        if (
-          !imageUrl ||
-          !fs.existsSync(imageUrl) ||
-          fs.statSync(imageUrl).size < 5000
-        ) {
-          throw new Error("Generated image file is invalid or too small");
-        }
-      } catch (err) {
-        imageRetryCount++;
-        log(
-          `⚠️ Image generation attempt ${imageRetryCount} failed: ${err.message}`,
-          "\x1b[33m"
-        );
-
-        imageError = err;
-
-        if (
-          err.message.toLowerCase().includes("prompt length") ||
-          err.message.toLowerCase().includes("too long")
-        ) {
-          storyPrompt = storyPrompt.substring(0, 800) + "...";
-        } else {
-          await new Promise((r) => setTimeout(r, 3000));
-        }
-      }
-    }
-
-    // 🚨 DO NOT THROW — record & continue
     if (!imageUrl) {
-      log("🚧 Image generation failed — continuing workflow without image.", "\x1b[33m");
+      log(
+        "🚧 Image generation failed — continuing workflow without image.",
+        "\x1b[33m"
+      );
 
-      await recordWorkflowWarning(workflow.id, "IMAGE_GENERATION", imageError);
+      // Record the exact error in DB
+      await recordWorkflowWarning(workflow.id, "IMAGE_GENERATION", {
+        message: imageError?.message,
+        fullError: JSON.stringify(imageError, Object.getOwnPropertyNames(imageError)),
+      });
     }
 
     let videoURL = null;
@@ -438,6 +411,7 @@ export async function runWorkflow({
         storyType,
         imagePrompt,
         voiceTone,
+        imageError: imageError ? imageError.message : null, // <-- frontend can show this
         voice,
       },
     };
@@ -448,7 +422,11 @@ export async function runWorkflow({
 
     await prisma.workflow.update({
       where: { id: workflow.id },
-      data: { status: "FAILED", metadata: { title, storyType, imagePrompt, voiceTone, voice, error: err.message } },
+      data: {
+        status: "FAILED", metadata: {
+          title, storyType, imagePrompt, imageError: imageError ? imageError.message : null, voiceTone, voice, error: err.message
+        }
+      },
     });
     // isProcessing = false;
     throw err;
