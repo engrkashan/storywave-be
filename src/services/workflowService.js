@@ -389,6 +389,10 @@ export async function runWorkflow({
       });
     }
     else {
+      await prisma.workflow.update({
+        where: { id: workflow.id },
+        data: { status: "COMPLETED" },
+      });
       log("Image generation failed — workflow completed without image.", "\x1b[33m");
     }
 
