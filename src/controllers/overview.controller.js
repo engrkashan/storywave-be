@@ -1,4 +1,4 @@
-// import prisma from "../config/prisma.client.js";
+import prisma from "../config/prisma.client.js";
 
 // export const getOverview = async (req, res) => {
 //   try {
@@ -11,18 +11,12 @@
 //         prisma.podcast.count(),
 //       ]);
 
-//     // Fetch all items directly from each table, ordered by creation date
-//     const [ videos, voiceovers, podcasts] = await Promise.all([
-//       prisma.video.findMany({ orderBy: { createdAt: "desc" } }),
-//       prisma.voiceover.findMany({ orderBy: { createdAt: "desc" } }),
-//       prisma.podcast.findMany({ orderBy: { createdAt: "desc" } }),
-//     ]);
-
 //     const userId = req?.user?.userId;
 //     if (!userId) {
 //       return res.status(401).json({ error: "Unauthorized: User not found" });
 //     }
 
+//     // Fetch workflows for this admin
 //     const workflows = await prisma.workflow.findMany({
 //       where: { adminId: userId },
 //       include: {
@@ -38,40 +32,44 @@
 //       orderBy: { createdAt: "desc" },
 //     });
 
+//     // Build stories array
 //     const stories = workflows
-//       .filter((w) => w.story)
 //       .map((w) => ({
-//         id: w.story.id,
-//         title: w.story.title || w.video?.title || "Untitled Story",
+//         id: w.story?.id || w.id, // Fallback to workflow ID if story ID is missing
+//         workflow: w.id,
+//         title: w.story?.title || w.title || "Untitled Workflow",
 //         type: "STORY",
-//         createdAt: w.story.createdAt,
-//         content: w.story.content || null,
+//         createdAt: w.createdAt,
+//         content: w.story?.content || null,
+//         status: w.status,
+//         error: w.metadata?.error || null, // Include error from metadata
 //         voiceover: w.voiceover
 //           ? {
-//               id: w.voiceover.id,
-//               voice: w.voiceover.voice || "Default",
-//               audioURL: w.voiceover.audioURL || null,
-//               script: w.voiceover.script || null,
-//             }
+//             id: w.voiceover.id,
+//             voice: w.voiceover.voice || "Default",
+//             audioURL: w.voiceover.audioURL || null,
+//             script: w.voiceover.script || null,
+//           }
 //           : null,
 //         video: w.video
 //           ? {
-//               id: w.video.id,
-//               url: w.video.fileURL || null,
-//               duration: w.video.duration || null,
-//               subtitles: w.video.subtitles || null,
-//             }
+//             id: w.video.id,
+//             url: w.video.fileURL || null,
+//             duration: w.video.duration || null,
+//             subtitles: w.video.subtitles || null,
+//           }
 //           : null,
 //       }));
+
+//     // Take top 20 recent workflows (regardless of status)
+//     const recentWorkflows = stories.slice(0, 20);
 
 //     return res.status(200).json({
 //       totalStories: storiesCount,
 //       totalVideos: videosCount,
 //       totalVoiceovers: voiceoversCount,
 //       totalPodcasts: podcastsCount,
-//       stories,
-//       videos,
-//       voiceovers,
+//       stories: recentWorkflows,
 //     });
 //   } catch (error) {
 //     console.error("Overview Error:", error);
@@ -80,85 +78,51 @@
 // };
 
 
-import prisma from "../config/prisma.client.js";
-
 export const getOverview = async (req, res) => {
   try {
-    // Fetch counts directly from each table
-    const [storiesCount, videosCount, voiceoversCount, podcastsCount] =
-      await Promise.all([
-        prisma.story.count(),
-        prisma.video.count(),
-        prisma.voiceover.count(),
-        prisma.podcast.count(),
-      ]);
+    const userId = req?.user?.userId;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-    // Fetch other items directly from each table, ordered by creation date
-    const [videos, voiceovers, podcasts] = await Promise.all([
-      prisma.video.findMany({ orderBy: { createdAt: "desc" } }),
-      prisma.voiceover.findMany({ orderBy: { createdAt: "desc" } }),
-      prisma.podcast.findMany({ orderBy: { createdAt: "desc" } }),
+    // Fetch counts in parallel
+    const [totalStories, videosCreated, voiceovers, podcasts] = await Promise.all([
+      prisma.story.count(),
+      prisma.video.count(),
+      prisma.voiceover.count(),
+      prisma.podcast.count(),
     ]);
 
-    const userId = req?.user?.userId;
-    if (!userId) {
-      return res.status(401).json({ error: "Unauthorized: User not found" });
-    }
-
-    // Fetch workflows for this admin
+    // Fetch last 20 workflows with only required fields
     const workflows = await prisma.workflow.findMany({
       where: { adminId: userId },
-      include: {
-        story: true,
-        voiceover: true,
-        video: true,
-        podcast: {
-          include: {
-            episodes: true,
-          },
-        },
-      },
       orderBy: { createdAt: "desc" },
+      take: 20,
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        metadata: true,
+        createdAt: true,
+        video: { select: { fileURL: true } },
+      },
     });
 
-    // Build stories array
-    const stories = workflows
-      .map((w) => ({
-        id: w.story?.id || w.id, // Fallback to workflow ID if story ID is missing
-        workflow: w.id,
-        title: w.story?.title || w.title || "Untitled Workflow",
-        type: "STORY",
-        createdAt: w.createdAt,
-        content: w.story?.content || null,
-        status: w.status,
-        error: w.metadata?.error || null, // Include error from metadata
-        voiceover: w.voiceover
-          ? {
-            id: w.voiceover.id,
-            voice: w.voiceover.voice || "Default",
-            audioURL: w.voiceover.audioURL || null,
-            script: w.voiceover.script || null,
-          }
-          : null,
-        video: w.video
-          ? {
-            id: w.video.id,
-            url: w.video.fileURL || null,
-            duration: w.video.duration || null,
-            subtitles: w.video.subtitles || null,
-          }
-          : null,
-      }));
-
-    // Take top 6 recent workflows (regardless of status)
-    const recentWorkflows = stories.slice(0, 20);
+    // Map workflows for frontend
+    const stories = workflows.map((w) => ({
+      id: w.id,
+      workflow: w.id,
+      title: w.title || "Untitled Workflow",
+      status: w.status,
+      createdAt: w.createdAt,
+      error: w.metadata?.error || null,
+      video: w.video ? { url: w.video.fileURL || null } : null,
+    }));
 
     return res.status(200).json({
-      totalStories: storiesCount,
-      totalVideos: videosCount,
-      totalVoiceovers: voiceoversCount,
-      totalPodcasts: podcastsCount,
-      stories: recentWorkflows,
+      totalStories,
+      videosCreated,
+      voiceovers,
+      podcasts,
+      stories,
     });
   } catch (error) {
     console.error("Overview Error:", error);
