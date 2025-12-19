@@ -380,7 +380,7 @@ export async function generateImage(prompt, index = 1, tempDir) {
   let imageUrl = null;
   let imageError = null;
 
-  const safePrompt = prompt;
+  let safePrompt = prompt;
 
   // GEMINI attempts
   for (let i = 1; i <= 3; i++) {
