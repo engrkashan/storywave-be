@@ -298,11 +298,9 @@ ${prompt}
 async function generateWithMidjourney(prompt, index, tempDir) {
   fs.mkdirSync(tempDir, { recursive: true });
 
-  const safePrompt = await sanitizePrompt(prompt);
-
   const payload = {
     taskType: "mj_txt2img",
-    prompt: safePrompt,
+    prompt: prompt,
     speed: "fast",
     aspectRatio: "16:9",
     version: "6.1",
@@ -382,14 +380,17 @@ export async function generateImage(prompt, index = 1, tempDir) {
   let imageUrl = null;
   let imageError = null;
 
+  const safePrompt = prompt;
+
   // GEMINI attempts
   for (let i = 1; i <= 3; i++) {
     try {
       console.log(`🌈 Gemini attempt ${i}/3`);
-      imageUrl = await generateWithImagen(prompt, index, tempDir);
+      imageUrl = await generateWithImagen(safePrompt, index, tempDir);
       return { imageUrl, error: null };
     } catch (err) {
       console.error(`❌ Gemini attempt ${i} failed:`, err);
+      safePrompt = await sanitizePrompt(safePrompt);
       imageError = err; // Save the exact error
     }
   }
@@ -398,10 +399,11 @@ export async function generateImage(prompt, index = 1, tempDir) {
   for (let i = 1; i <= 3; i++) {
     try {
       console.log(`🎨 MidJourney attempt ${i}/3`);
-      imageUrl = await generateWithMidjourney(prompt, index, tempDir);
+      imageUrl = await generateWithMidjourney(safePrompt, index, tempDir);
       return { imageUrl, error: null };
     } catch (err) {
       console.error(`❌ MidJourney attempt ${i} failed:`, err);
+      safePrompt = await sanitizePrompt(safePrompt);
       imageError = err;
     }
   }
