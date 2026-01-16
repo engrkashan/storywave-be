@@ -1,4 +1,3 @@
-// workflow.worker.js
 import { runWorkflow } from "../services/workflowService.js";
 
 process.on("message", async (workflowData) => {

@@ -57,7 +57,6 @@ export async function runScheduledWorkflows() {
       data: { status: "PROCESSING" },
     });
 
-    // await processExistingWorkflow(workflow);
 
     // 👉 Offload to worker process
     const workerPath = path.resolve("src/workers/workflow.worker.js");
@@ -214,7 +213,6 @@ export async function runWorkflow({
   let srtPath;
 
   try {
-    // isProcessing = true;
     log("Step 1: Preparing input text...");
     let inputText = textIdea || "";
     if (url) {
@@ -285,58 +283,6 @@ export async function runWorkflow({
       data: { script, audioURL: voiceURL, workflowId: workflow.id, adminId },
     });
 
-    // log("Step 4: Generating a single image for the entire story...");
-    // let storyPrompt = imagePrompt || generateThumbnailPrompt(title, storyType);
-    // let imageUrl = null;
-    // let imageRetryCount = 0;
-    // const MAX_IMAGE_RETRIES = 3;
-
-    // try {
-    //   while (!imageUrl && imageRetryCount < MAX_IMAGE_RETRIES) {
-    //     try {
-    //       imageUrl = await generateImage(storyPrompt, 1, workflowTempDir);
-
-    //       if (
-    //         !imageUrl ||
-    //         !fs.existsSync(imageUrl) ||
-    //         fs.statSync(imageUrl).size < 5000
-    //       ) {
-    //         throw new Error("Generated image file is invalid or too small");
-    //       }
-    //     } catch (err) {
-    //       imageRetryCount++;
-    //       log(
-    //         `Image generation attempt ${imageRetryCount} failed: ${err.message}`,
-    //         "\x1b[31m"
-    //       );
-
-    //       if (imageRetryCount >= MAX_IMAGE_RETRIES) {
-    //         throw new Error(
-    //           `Failed to generate image after ${MAX_IMAGE_RETRIES} attempts. Last error: ${err.message}`
-    //         );
-    //       }
-
-    //       // Handle Prompt Length Error
-    //       if (
-    //         err.message.toLowerCase().includes("prompt length") ||
-    //         err.message.toLowerCase().includes("too long")
-    //       ) {
-    //         log("⚠️ Prompt too long, shortening it for next attempt...");
-    //         // Truncate prompt to safe limit (e.g., 1000 chars) to ensure it passes
-    //         storyPrompt = storyPrompt.substring(0, 1000) + "...";
-    //       } else {
-    //         // For other errors, wait a bit before retrying
-    //         await new Promise((r) => setTimeout(r, 5000));
-    //       }
-    //     }
-    //   }
-    // } catch (error) {
-    //   // Show exact error message for better debugging/transparency as requested
-    //   throw new Error(`Image Generation Failed: ${error.message}`);
-    // }
-
-
-
     log("Step 4: Generating a single image for the entire story...");
 
     const storyPrompt = imagePrompt || generateThumbnailPrompt(title, storyType);
@@ -397,8 +343,7 @@ export async function runWorkflow({
     }
 
     log("🎉 Workflow completed successfully.");
-    deleteTempFiles(workflowTempDir); // Delete only this workflow's dir
-    // isProcessing = false;
+    deleteTempFiles(workflowTempDir);
     return {
       success: true,
       workflowId: workflow.id,
@@ -415,14 +360,14 @@ export async function runWorkflow({
         storyType,
         imagePrompt,
         voiceTone,
-        imageError: imageError ? imageError.message : null, // <-- frontend can show this
+        imageError: imageError ? imageError.message : null,
         voice,
       },
     };
   } catch (err) {
     log(`Workflow failed: ${err.message}`, "\x1b[31m");
     if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
-    deleteTempFiles(workflowTempDir); // Delete only this workflow's dir
+    deleteTempFiles(workflowTempDir);
 
     await prisma.workflow.update({
       where: { id: workflow.id },
@@ -432,7 +377,6 @@ export async function runWorkflow({
         }
       },
     });
-    // isProcessing = false;
     throw err;
   }
 }
