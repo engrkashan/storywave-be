@@ -99,6 +99,7 @@ router.post("/workflow", verifyToken, async (req, res) => {
       storyType = "Story",
       voiceTone = "neutral",
       storyLength = "30 minutes",
+      shouldGenerateImage,
       scheduledAt,
       voice,
     } = req.body;
@@ -125,6 +126,7 @@ router.post("/workflow", verifyToken, async (req, res) => {
       imagePrompt,
       storyType,
       voice,
+      shouldGenerateImage,
       voiceTone,
       storyLength,
       scheduledAt,

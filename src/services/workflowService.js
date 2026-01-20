@@ -321,7 +321,7 @@ export async function runWorkflow({
         const videoFilename = `${workflow.id}-${timestamp}.mp4`;
         const videoPath = path.join(workflowTempDir, videoFilename);
 
-        await createVideo(title, imageUrl, voiceLocalPath, videoPath, srtPath);
+        await createVideo(imageUrl, voiceLocalPath, videoPath, srtPath);
 
         videoURL = await uploadVideoToCloud(videoPath, videoFilename);
 

@@ -2,13 +2,7 @@ import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
-export async function createVideo(
-  titleText = "",
-  imageUrl,
-  audioPath,
-  outputPath,
-  srtPath
-) {
+export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -25,15 +19,6 @@ export async function createVideo(
   convertSrtToAss(srtPath, assPath);
 
   const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
-
-  // 🏷️ Title text overlay (no zoom)
-  // const titleOverlay = titleText
-  //   ? `drawtext=text='${escapeFFmpegText(
-  //       titleText
-  //     )}':fontsize=84:borderw=2:fontcolor=white:x=(w-text_w)/2:y=50,`
-  //   : "";
-
-  // ✅ Correct filter chain: image → (drawtext optional) → subtitles
   const filterComplex = `[0:v]subtitles='${escapedAssPath}'`;
 
   const cmd = [
@@ -55,11 +40,6 @@ export async function createVideo(
       fs.unlinkSync(imagePath);
     if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
   }
-}
-
-// 🧩 Escape special characters for FFmpeg drawtext
-function escapeFFmpegText(text) {
-  return text.replace(/[:'"]/g, "\\$&");
 }
 
 function convertSrtToAss(srtPath, assPath) {
