@@ -47,15 +47,18 @@ function convertSrtToAss(srtPath, assPath) {
   const blocks = srtContent.trim().split(/\n\s*\n/);
 
   let ass = `[Script Info]
-Title: Karaoke Subs
+Title: Cinematic Shorts Subs
 ScriptType: v4.00+
 PlayResX: 1920
 PlayResY: 1080
-
+WrapStyle: 0
+ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVuSans,86,&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H00000000&,0,0,0,0,100,100,0,0,1,4,2,2,60,60,100,1
+
+; ---- GOLD GRADIENT FILL WITH BRIGHT STROKE & GLOW ----
+Style: GoldGlow,Bebas Neue Bold,130,&H0000B8E6&,&H0000BFFF&,&H00FFFFFF&,&H64000000&,1,0,0,0,100,100,2,0,1,12,5,3,2,60,60,120,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -64,15 +67,32 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   for (const block of blocks) {
     const lines = block.split("\n");
     if (lines.length < 3) continue;
-    const timeLine = lines[1].trim();
-    const [startStr, endStr] = timeLine.split(" --> ");
-    const text = lines.slice(2).join("\\N").trim();
-    if (!text) continue;
+
+    const [startStr, endStr] = lines[1].split(" --> ");
+    const fullText = lines.slice(2).join(" ").trim();
+    if (!fullText) continue;
+
+    const words = fullText.split(/\s+/);
+
     const startSec = parseSrtTime(startStr);
     const endSec = parseSrtTime(endStr);
-    const startAss = secToAssTime(startSec);
-    const endAss = secToAssTime(endSec);
-    ass += `Dialogue: 0,${startAss},${endAss},Default,,0,0,0,,${text}\n`;
+    const totalDuration = endSec - startSec;
+
+    // 🔥 3–4 words per screen
+    const chunkSize = 3;
+    const chunks = [];
+    for (let i = 0; i < words.length; i += chunkSize) {
+      chunks.push(words.slice(i, i + chunkSize).join(" "));
+    }
+
+    const chunkDuration = totalDuration / chunks.length;
+
+    chunks.forEach((chunk, index) => {
+      const s = startSec + index * chunkDuration;
+      const e = s + chunkDuration;
+
+      ass += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(960,900)\\bord12\\shad5\\be4}${chunk}\n`;
+    });
   }
 
   fs.writeFileSync(assPath, ass);

@@ -1,4 +1,3 @@
-
 import fs from "fs";
 import path from "path";
 import OpenAI from "openai";
@@ -17,8 +16,8 @@ function cleanScript(script) {
     .trim();
 }
 
-/**  
- * 🔑 Generate Hume authentication header  
+/**
+ * 🔑 Generate Hume authentication header
  */
 function getHumeAuthHeaders() {
   const appId = process.env.HUME_API_KEY;
@@ -37,9 +36,6 @@ function getHumeAuthHeaders() {
   };
 }
 
-/**
- * 🔊 HUME TTS API CALL (FULL AUDIO BUFFER)
- */
 /**
  * 🔊 HUME TTS API CALL (NON-STREAM)
  * Correct JSON schema
@@ -110,7 +106,9 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
   const humeVoiceId = isHume ? voiceObj.id : null;
   const openAiVoice = !isHume ? voiceObj.id : null;
 
-  console.log(`🔊 Generating voiceover using: ${isHume ? "HUME" : "OPENAI"} (${voiceObj.label})`);
+  console.log(
+    `🔊 Generating voiceover using: ${isHume ? "HUME" : "OPENAI"} (${voiceObj.label})`,
+  );
 
   const CHUNK_SIZE = 800;
   const chunks = text.match(new RegExp(`.{1,${CHUNK_SIZE}}(\\s|$)`, "g")) || [];
@@ -119,7 +117,9 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
 
   try {
     for (let i = 0; i < chunks.length; i++) {
-      console.log(`🎙️ TTS chunk ${i + 1}/${chunks.length} (${isHume ? "HUME" : "OPENAI"})`);
+      console.log(
+        `🎙️ TTS chunk ${i + 1}/${chunks.length} (${isHume ? "HUME" : "OPENAI"})`,
+      );
 
       let buffer;
 
@@ -149,4 +149,3 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
     throw err;
   }
 }
-
