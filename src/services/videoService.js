@@ -1,6 +1,7 @@
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import { getAudioDuration } from "./audioService.js";
 
 export async function createVideo(
   titleText = "",
@@ -36,13 +37,18 @@ export async function createVideo(
   // ✅ Correct filter chain: image → (drawtext optional) → subtitles
   const filterComplex = `[0:v]subtitles='${escapedAssPath}'`;
 
+  // Get exact audio duration to prevent video from being longer
+  const audioDuration = await getAudioDuration(audioPath);
+  console.log(`⏱️ Force-limiting video to ${audioDuration} seconds`);
+
   const cmd = [
     `ffmpeg -y -loop 1`,
     `-i "${imagePath}"`,
     `-i "${audioPath}"`,
     `-filter_complex "${filterComplex}"`,
     `-map 0:v -map 1:a`,
-    `-c:v libx264 -pix_fmt yuv420p -c:a aac -shortest`,
+    `-c:v libx264 -pix_fmt yuv420p -c:a aac`,
+    `-t ${audioDuration}`,
     `"${outputPath}"`,
   ].join(" ");
 
