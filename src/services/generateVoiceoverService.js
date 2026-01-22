@@ -5,6 +5,7 @@ import OpenAI from "openai";
 import { cloudinary } from "../config/cloudinary.config.js";
 import axios from "axios";
 import crypto from "crypto";
+import { mergeAudioFiles } from "./audioService.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -115,7 +116,7 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
   const CHUNK_SIZE = 800;
   const chunks = text.match(new RegExp(`.{1,${CHUNK_SIZE}}(\\s|$)`, "g")) || [];
 
-  const buffers = [];
+  const chunkFiles = [];
 
   try {
     for (let i = 0; i < chunks.length; i++) {
@@ -129,11 +130,18 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
         buffer = await generateOpenAIChunk(chunks[i], openAiVoice);
       }
 
-      buffers.push(buffer);
+      const chunkPath = path.join(tempDir, `${path.parse(filename).name}_part_${i}.mp3`);
+      fs.writeFileSync(chunkPath, buffer);
+      chunkFiles.push(chunkPath);
     }
 
-    const combined = Buffer.concat(buffers);
-    fs.writeFileSync(localPath, combined);
+    // Merge chunks using ffmpeg to ensure smooth transitions
+    await mergeAudioFiles(chunkFiles, localPath);
+
+    // Cleanup temporary chunk files
+    chunkFiles.forEach((file) => {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    });
 
     // Upload to Cloudinary
     const uploadRes = await cloudinary.uploader.upload(localPath, {

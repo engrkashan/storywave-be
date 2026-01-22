@@ -26,6 +26,9 @@ export async function mergeAudioFiles(files, outputFile) {
       "podcasts",
       `merge_list_${Date.now()}.txt`
     );
+    // Ensure directory exists
+    fs.mkdirSync(path.dirname(listFile), { recursive: true });
+
     const fileContent = files
       .map((f) => `file '${path.resolve(f)}'`)
       .join("\n");
