@@ -39,7 +39,11 @@ export async function createVideo(
 
   // Get exact audio duration to prevent video from being longer
   const audioDuration = await getAudioDuration(audioPath);
-  console.log(`⏱️ Force-limiting video to ${audioDuration} seconds`);
+  console.log(`⏱️ AUDIO DURATION DETECTED: ${audioDuration} seconds`);
+
+  if (!audioDuration || isNaN(audioDuration)) {
+    console.warn("⚠️ Could not detect audio duration. Fallback to -shortest only.");
+  }
 
   const cmd = [
     `ffmpeg -y -loop 1`,
@@ -47,8 +51,8 @@ export async function createVideo(
     `-i "${audioPath}"`,
     `-filter_complex "${filterComplex}"`,
     `-map 0:v -map 1:a`,
-    `-c:v libx264 -pix_fmt yuv420p -c:a aac`,
-    `-t ${audioDuration}`,
+    `-c:v libx264 -pix_fmt yuv420p -c:a copy -shortest`,
+    audioDuration ? `-t ${audioDuration}` : "",
     `"${outputPath}"`,
   ].join(" ");
 

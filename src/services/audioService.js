@@ -37,7 +37,7 @@ export async function mergeAudioFiles(files, outputFile) {
     ffmpeg()
       .input(listFile)
       .inputOptions(["-f concat", "-safe 0"])
-      .outputOptions(["-c copy"])
+      // .outputOptions(["-c copy"]) // Removed to force re-encode and fix duration metadata
       .save(outputFile)
       .on("end", () => {
         console.log(`Audio merged successfully to ${outputFile}`);
@@ -62,7 +62,7 @@ export async function getAudioDuration(filePath) {
         return reject(err);
       }
       const duration = metadata?.format?.duration || 0;
-      resolve(Math.round(duration));
+      resolve(duration); // Return float for precision
     });
   });
 }
