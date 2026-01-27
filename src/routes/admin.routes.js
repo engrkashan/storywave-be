@@ -1,17 +1,17 @@
 import express from "express";
 import {
-  changeAdminUserPassword,
-  deleteAdminUser,
-  getAdminUserProfile,
-  updateAdminUser,
+  changeUserPassword,
+  deleteUser,
+  getUserProfile,
+  updateUser,
 } from "../controllers/admin.controller.js";
 import { verifyToken } from "../middlewares/auth.js";
 
 const router = express.Router();
 
-router.get("/profile", verifyToken, getAdminUserProfile);
-router.patch("/profile", verifyToken, updateAdminUser);
-router.patch("/change-password", verifyToken, changeAdminUserPassword);
-router.delete("/:id", verifyToken, deleteAdminUser);
+router.get("/profile", verifyToken, getUserProfile);
+router.patch("/profile", verifyToken, updateUser);
+router.patch("/change-password", verifyToken, changeUserPassword);
+router.delete("/:id", verifyToken, deleteUser);
 
 export default router;

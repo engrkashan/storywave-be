@@ -3,20 +3,27 @@ import prisma from "../config/prisma.client.js";
 export const getOverview = async (req, res) => {
   try {
     const userId = req?.user?.userId;
-    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const role = req?.user?.role;
 
-    // Fetch counts in parallel
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    // Role-based access
+    const whereByRole = role === "CREATOR" ? { userId } : {}; 
+
+    // Counts (parallel)
     const [totalStories, videosCreated, voiceovers, podcasts] =
       await Promise.all([
-        prisma.story.count(),
-        prisma.video.count(),
-        prisma.voiceover.count(),
-        prisma.podcast.count(),
+        prisma.story.count({ where: whereByRole }),
+        prisma.video.count({ where: whereByRole }),
+        prisma.voiceover.count({ where: whereByRole }),
+        prisma.podcast.count({ where: whereByRole }),
       ]);
 
-    // Fetch last 20 workflows with only required fields
+    //  Recent workflows
     const workflows = await prisma.workflow.findMany({
-      where: { adminId: userId },
+      where: whereByRole,
       orderBy: { createdAt: "desc" },
       take: 20,
       select: {
@@ -25,11 +32,19 @@ export const getOverview = async (req, res) => {
         status: true,
         metadata: true,
         createdAt: true,
-        video: { select: { fileURL: true } },
+        video: {
+          select: { fileURL: true },
+        },
+        user: {
+          select: {
+            id: true,
+            fullName: true,
+            role: true,
+          },
+        },
       },
     });
 
-    // Map workflows for frontend
     const stories = workflows.map((w) => ({
       id: w.id,
       workflow: w.id,
@@ -38,10 +53,16 @@ export const getOverview = async (req, res) => {
       createdAt: w.createdAt,
       error: w.metadata?.error || null,
       metadata: w.metadata || {},
-      video: w.video ? { url: w.video.fileURL || null } : null,
+      owner: {
+        id: w.user.id,
+        name: w.user.fullName,
+        role: w.user.role,
+      },
+      video: w.video ? { url: w.video.fileURL } : null,
     }));
 
     return res.status(200).json({
+      role,
       totalStories,
       videosCreated,
       voiceovers,
@@ -59,25 +80,33 @@ export const getWorkflowById = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user?.userId;
+    const role = req.user?.role;
 
-    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ error: "Unauthorized – missing user identity" });
+    }
+
+    const filter = role === "CREATOR" ? { id, userId } : { id };
 
     const workflow = await prisma.workflow.findFirst({
-      where: { id, adminId: userId },
+      where: filter,
       include: {
         story: true,
         voiceover: true,
         video: true,
-        podcast: {
-          include: { episodes: true },
-        },
+        podcast: { include: { episodes: true } },
         inputs: true,
         media: true,
         tasks: true,
+        user: { select: { id: true, fullName: true, role: true } },
       },
     });
 
-    if (!workflow) return res.status(404).json({ error: "Workflow not found" });
+    if (!workflow) {
+      return res.status(404).json({ error: "Workflow not found" });
+    }
 
     return res.status(200).json({
       id: workflow.id,
@@ -89,6 +118,11 @@ export const getWorkflowById = async (req, res) => {
       createdAt: workflow.createdAt,
       updatedAt: workflow.updatedAt,
       metadata: workflow.metadata || {},
+      owner: {
+        id: workflow.user.id,
+        name: workflow.user.fullName,
+        role: workflow.user.role,
+      },
       story: workflow.story
         ? {
             id: workflow.story.id,
@@ -163,20 +197,23 @@ export const cancelWorkflow = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user?.userId;
+    const role = req.user?.role;
 
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
     const workflow = await prisma.workflow.findFirst({
-      where: { id, adminId: userId },
+      where: {
+        id,
+        ...(role === "CREATOR" ? { userId } : {}),
+      },
     });
 
     if (!workflow) {
       return res.status(404).json({ error: "Workflow not found" });
     }
 
-    // Update status to CANCELLED
     await prisma.workflow.update({
       where: { id },
       data: { status: "CANCELLED" },
@@ -194,13 +231,17 @@ export const deleteWorkflow = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user?.userId;
+    const role = req.user?.role;
 
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
     const workflow = await prisma.workflow.findFirst({
-      where: { id, adminId: userId },
+      where: {
+        id,
+        ...(role === "CREATOR" ? { userId } : {}),
+      },
       select: {
         id: true,
         voiceover: { select: { id: true } },
@@ -220,17 +261,13 @@ export const deleteWorkflow = async (req, res) => {
 
     if (workflow.voiceover) {
       transactions.push(
-        prisma.voiceover.delete({
-          where: { id: workflow.voiceover.id },
-        }),
+        prisma.voiceover.delete({ where: { id: workflow.voiceover.id } }),
       );
     }
 
     if (workflow.podcast) {
       transactions.push(
-        prisma.podcast.delete({
-          where: { id: workflow.podcast.id },
-        }),
+        prisma.podcast.delete({ where: { id: workflow.podcast.id } }),
       );
     }
 

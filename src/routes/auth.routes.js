@@ -1,12 +1,18 @@
 import express from "express";
 import {
-  registerAdminUser,
-  loginAdminUser,
+  registerUser,
+  loginUser,
+  getAllUsers,
+  updateUser,
+  deleteUser,
 } from "../controllers/auth.controller.js";
 
 const router = express.Router();
 
-router.post("/register", registerAdminUser);
-router.post("/login", loginAdminUser);
+router.post("/register", registerUser);
+router.post("/login", loginUser);
+router.get("/users", getAllUsers);
+router.put("/users/:id", updateUser);
+router.delete("/users/:id", deleteUser);
 
 export default router;

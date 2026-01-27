@@ -9,6 +9,7 @@ datasource db {
 
 enum Role {
   ADMIN
+  CREATOR
 }
 
 enum CreationType {
@@ -45,7 +46,7 @@ enum InputType {
   VIDEO
 }
 
-model AdminUser {
+model User {
   id         String  @id @default(auto()) @map("_id") @db.ObjectId
   fullName   String?
   email      String  @unique
@@ -57,11 +58,14 @@ model AdminUser {
   creations    Creation[]
   integrations Integration[]
   workflows    Workflow[]
-  assets       Asset[]
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
   lastLoginAt DateTime?
+  stories     Story[]
+  videos      Video[]
+  voiceovers  Voiceover[]
+  podcasts    Podcast[]
 }
 
 model Input {
@@ -91,23 +95,29 @@ model Task {
 }
 
 model Story {
-  id        String     @id @default(auto()) @map("_id") @db.ObjectId
-  title     String
-  outline   String?
-  content   String
-  adminId   String     @db.ObjectId
+  id      String  @id @default(auto()) @map("_id") @db.ObjectId
+  title   String
+  outline String?
+  content String
+
+  user   User   @relation(fields: [userId], references: [id])
+  userId String @db.ObjectId
+
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
   Workflow  Workflow[]
 }
 
 model Video {
-  id        String     @id @default(auto()) @map("_id") @db.ObjectId
+  id        String  @id @default(auto()) @map("_id") @db.ObjectId
   title     String
   fileURL   String?
   duration  Int?
   subtitles String?
-  adminId   String     @db.ObjectId
+
+  user   User   @relation(fields: [userId], references: [id])
+  userId String @db.ObjectId
+
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
   Workflow  Workflow[]
@@ -118,13 +128,14 @@ model Voiceover {
   script   String
   audioURL String?
   voice    String?
+  userId   String?
 
   workflow   Workflow @relation(fields: [workflowId], references: [id])
   workflowId String   @unique @db.ObjectId
 
-  adminId   String   @db.ObjectId
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  user      User?    @relation(fields: [userId], references: [id])
 }
 
 enum WorkflowStatus {
@@ -145,8 +156,8 @@ model Workflow {
   scheduledAt DateTime?
   metadata    Json?
 
-  admin   AdminUser? @relation(fields: [adminId], references: [id])
-  adminId String?    @db.ObjectId
+  user   User?   @relation(fields: [userId], references: [id])
+  userId String? @db.ObjectId
 
   inputs    Input[]
   story     Story?     @relation(fields: [storyId], references: [id])
@@ -163,11 +174,14 @@ model Workflow {
 }
 
 model Podcast {
-  id         String    @id @default(auto()) @map("_id") @db.ObjectId
-  title      String
-  audience   String?
-  subType    String?
-  adminId    String    @db.ObjectId
+  id       String  @id @default(auto()) @map("_id") @db.ObjectId
+  title    String
+  audience String?
+  subType  String?
+
+  user   User?   @relation(fields: [userId], references: [id])
+  userId String? @db.ObjectId
+
   workflow   Workflow  @relation(fields: [workflowId], references: [id])
   workflowId String    @unique @db.ObjectId
   episodes   Episode[]
@@ -196,8 +210,8 @@ model Creation {
   mediaURL String?
   metadata Json?
 
-  admin   AdminUser @relation(fields: [adminId], references: [id])
-  adminId String    @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id])
+  userId String @db.ObjectId
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -209,8 +223,8 @@ model Integration {
   accountId   String
   accessToken String
 
-  admin   AdminUser @relation(fields: [adminId], references: [id])
-  adminId String    @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id])
+  userId String @db.ObjectId
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -228,17 +242,4 @@ model Media {
   workflowId String?   @db.ObjectId
 
   uploadedAt DateTime @default(now())
-}
-
-model Asset {
-  id       String  @id @default(auto()) @map("_id") @db.ObjectId
-  name     String
-  type     String
-  url      String?
-  metadata Json?
-
-  admin   AdminUser @relation(fields: [adminId], references: [id])
-  adminId String    @db.ObjectId
-
-  createdAt DateTime @default(now())
 }

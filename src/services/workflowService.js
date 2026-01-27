@@ -53,6 +53,8 @@ export async function runScheduledWorkflows() {
       orderBy: { scheduledAt: "asc" },
     });
 
+    console.log(workflow);
+
     if (!workflow) {
       console.log("⏳ No scheduled workflows to process.");
       return;
@@ -68,7 +70,7 @@ export async function runScheduledWorkflows() {
 
     const meta = workflow.metadata || {};
     const payload = {
-      adminId: workflow.adminId,
+      userId: req.user || null,
       title: workflow.title,
       url: meta.url || null,
       videoFile: meta.videoFile || null,
@@ -103,7 +105,7 @@ export async function processExistingWorkflow(workflow) {
   const meta = workflow.metadata || {};
 
   return await runWorkflow({
-    adminId: workflow.adminId,
+    userId: workflow.userId || null,
     title: workflow.title,
     url: meta.url || null,
     videoFile: meta.videoFile || null,
@@ -149,7 +151,7 @@ async function uploadVideoToCloud(videoPath, filename) {
  * Supports podcast-only mode when shouldGenerateImage = false
  */
 export async function runWorkflow({
-  adminId,
+  userId,
   title,
   url = null,
   videoFile = null,
@@ -182,7 +184,7 @@ export async function runWorkflow({
         type: "STORY",
         status: isScheduled ? "SCHEDULED" : "PENDING",
         scheduledAt: isScheduled ? new Date(scheduledUTC) : null,
-        adminId,
+        userId,
         metadata: {
           url,
           videoFile,
@@ -260,7 +262,7 @@ export async function runWorkflow({
         title,
         outline: outline || null,
         content: script,
-        adminId,
+        userId,
       },
     });
 
@@ -280,7 +282,7 @@ export async function runWorkflow({
         script,
         audioURL: voiceURL,
         workflowId: workflow.id,
-        adminId,
+        userId,
       },
     });
 
@@ -326,7 +328,7 @@ export async function runWorkflow({
         videoURL = await uploadVideoToCloud(videoPath, videoFilename);
 
         const videoRecord = await prisma.video.create({
-          data: { title, fileURL: videoURL, adminId },
+          data: { title, fileURL: videoURL, userId },
         });
 
         await prisma.workflow.update({

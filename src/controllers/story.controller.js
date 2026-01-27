@@ -6,7 +6,7 @@ export const getStories = async (req, res) => {
     const userId = req?.user?.userId;
 
     const stories = await prisma.story.findMany({
-      where: { adminId: userId },
+      where: { userId: userId },
       orderBy: { createdAt: "desc" },
       include: {
         Workflow: {
@@ -111,10 +111,10 @@ export const deleteStory = async (req, res) => {
 export const deleteScheduledStory = async (req, res) => {
   try {
     const { id } = req.params;
-    const adminId = req.user?.userId;
+    const userId = req.user?.userId;
 
     const workflow = await prisma.workflow.findFirst({
-      where: { id, adminId, status: "SCHEDULED" },
+      where: { id, userId, status: "SCHEDULED" },
     });
 
     if (!workflow) {
@@ -126,7 +126,9 @@ export const deleteScheduledStory = async (req, res) => {
       data: { status: "CANCELLED" },
     });
 
-    return res.status(200).json({ message: "Scheduled story cancelled successfully" });
+    return res
+      .status(200)
+      .json({ message: "Scheduled story cancelled successfully" });
   } catch (error) {
     console.error("Cancel Scheduled Story Error:", error);
     return res.status(500).json({ error: "Failed to cancel scheduled story" });
