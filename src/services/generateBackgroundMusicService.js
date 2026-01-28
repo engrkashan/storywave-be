@@ -140,7 +140,7 @@ export async function mixAudioWithBackground(voicePath, musicPath, outputPath) {
     `ffmpeg -y`,
     `-i "${voicePath}"`,
     `-i "${musicPath}"`,
-    `-filter_complex "[1:a]volume=0.45,highpass=f=100,lowpass=f=8000[bg]; [0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]"`,
+    `-filter_complex "[1:a]volume=0.40,highpass=f=100,lowpass=f=8000[bg]; [0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]"`,
     `-map "[a]" -c:a libmp3lame -b:a 192k`,
     `"${outputPath}"`,
   ].join(" ");
