@@ -5,12 +5,17 @@ import { cloudinary } from "../config/cloudinary.config.js";
 import prisma from "../config/prisma.client.js";
 import { deleteTempFiles } from "../utils/deleteTemp.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
-import { generateImage } from "./imageService.js"; // ← this is the function
+import { generateImage } from "./imageService.js";
 import { extractContentFromUrl, transcribeVideo } from "./inputService.js";
 import { generateStory } from "./storyService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { createVideo } from "./videoService.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
+
+import {
+  generateBackgroundMusic,
+  mixAudioWithBackground,
+} from "./generateBackgroundMusicService.js";
 
 const TEMP_ROOT = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
@@ -271,21 +276,42 @@ export async function runWorkflow({
       data: { storyId: story.id },
     });
 
-    // 3. Generate voiceover (always)
+    // 3. Generate voiceover (always) - pure voice (used for accurate subtitle timestamps)
     log("Step 3: Generating voiceover...");
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
-    const { url: voiceURL, localPath: voiceLocalPath } =
+    const { url: pureVoiceURL, localPath: voiceLocalPath } =
       await generateVoiceover(script, voiceFilename, voice, workflowTempDir);
+
+    log("Step 3.5: Generating background music...");
+    const musicPath = await generateBackgroundMusic({
+      title,
+      storyType,
+      tempDir: workflowTempDir,
+    });
+
+    const mixedFilename = `mixed-${voiceFilename}`;
+    const mixedLocalPath = path.join(workflowTempDir, mixedFilename);
+
+    await mixAudioWithBackground(voiceLocalPath, musicPath, mixedLocalPath);
+
+    log("Uploading mixed audio (voice + background music) to Cloudinary...");
+    const uploadRes = await cloudinary.uploader.upload(mixedLocalPath, {
+      folder: "voiceovers",
+      resource_type: "video",
+      public_id: path.parse(mixedFilename).name,
+      overwrite: true,
+    });
+
+    const mixedVoiceURL = uploadRes.secure_url;
 
     await prisma.voiceover.create({
       data: {
         script,
-        audioURL: voiceURL,
+        audioURL: mixedVoiceURL,
         workflowId: workflow.id,
         userId,
       },
     });
-
     let imageUrl = null;
     let videoURL = null;
 
@@ -323,7 +349,7 @@ export async function runWorkflow({
         const videoFilename = `${workflow.id}-${timestamp}.mp4`;
         const videoPath = path.join(workflowTempDir, videoFilename);
 
-        await createVideo(imageUrl, voiceLocalPath, videoPath, srtPath);
+        await createVideo(imageUrl, mixedLocalPath, videoPath, srtPath);
 
         videoURL = await uploadVideoToCloud(videoPath, videoFilename);
 
@@ -368,7 +394,7 @@ export async function runWorkflow({
         outline: story.outline,
         script: story.content,
       },
-      voiceover: voiceURL,
+      voiceover: mixedVoiceURL,
       video: videoURL,
       image: imageUrl,
       metadata: {
