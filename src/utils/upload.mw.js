@@ -1,6 +1,6 @@
 import multer from "multer";
 import { CloudinaryStorage } from "multer-storage-cloudinary";
-import {cloudinary} from "../config/cloudinary.config.js";
+import { cloudinary } from "../config/cloudinary.config.js";
 
 // Allowed MIME types
 const allowedMimeTypes = [
@@ -35,7 +35,7 @@ export const mediaUpload = multer({
       } else if (
         file.mimetype === "application/msword" ||
         file.mimetype ===
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
       ) {
         folder = "Ethbat/Documents";
       }
@@ -48,6 +48,6 @@ export const mediaUpload = multer({
   }),
   fileFilter,
   limits: {
-    fileSize: 200 * 1024 * 1024,
+    fileSize: 1024 * 1024 * 1024,
   },
 });

@@ -10,7 +10,9 @@ export function deleteTempFiles(baseDir) {
     const rootDir = process.cwd();
     const resolvedBase = path.resolve(baseDir);
     if (!resolvedBase.startsWith(rootDir)) {
-      console.warn(`⚠️ Skipping deletion outside project root: ${resolvedBase}`);
+      console.warn(
+        `⚠️ Skipping deletion outside project root: ${resolvedBase}`,
+      );
       return;
     }
 
@@ -32,6 +34,8 @@ export function deleteTempFiles(baseDir) {
           console.warn(`⚠️ Could not remove file: ${filePath} (${e.message})`);
         }
       }
+
+      fs.rmdirSync(baseDir);
     });
   } catch (err) {
     console.error("⚠️ Error cleaning temp files:", err.message);
