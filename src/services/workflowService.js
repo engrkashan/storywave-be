@@ -316,7 +316,6 @@ export async function runWorkflow({
     let videoURL = null;
 
     // 4+5+6. Image + Subtitles + Video — only when requested
-
     if (shouldGenerateImage === true) {
       log("Step 4: Checking for abusive words in prompt...");
       let skipImage = false;
