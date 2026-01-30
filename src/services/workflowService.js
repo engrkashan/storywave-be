@@ -290,41 +290,69 @@ export async function runWorkflow({
     let videoURL = null;
 
     // 4+5+6. Image + Subtitles + Video — only when requested
+
     if (shouldGenerateImage === true) {
-      log("Step 4: Generating image...");
+      log("Step 4: Checking for abusive words in prompt...");
+      let skipImage = false;
+      const finalImagePrompt = imagePrompt || script || "Default prompt";
 
-      const finalImagePrompt =
-        imagePrompt || generateThumbnailPrompt(title, storyType);
-      const imageResult = await generateImage(
-        finalImagePrompt,
-        1,
-        workflowTempDir,
-      );
-
-      imageUrl = imageResult.imageUrl;
-
-      if (!imageUrl) {
-        log("Image generation failed → continuing without visuals", "\x1b[33m");
-        await recordWorkflowWarning(
-          workflow.id,
-          "IMAGE_GENERATION",
-          imageResult.error || {},
+      const abusiveWords = ["abuse1", "abuse2", "curse1"];
+      if (
+        abusiveWords.some((word) =>
+          finalImagePrompt.toLowerCase().includes(word),
+        )
+      ) {
+        log(
+          "⚠️ Abusive words detected → skipping image generation",
+          "\x1b[33m",
         );
+        skipImage = true;
+      }
+
+      if (!skipImage) {
+        log("Step 4: Generating image...");
+        try {
+          const imageResult = await generateImage(
+            finalImagePrompt,
+            1,
+            workflowTempDir,
+          );
+          imageUrl = imageResult.imageUrl;
+
+          if (!imageUrl) {
+            log(
+              "⚠️ Image generation failed → continuing without visuals",
+              "\x1b[33m",
+            );
+            await recordWorkflowWarning(
+              workflow.id,
+              "IMAGE_GENERATION",
+              imageResult.error || { message: "Unknown image failure" },
+            );
+          } else {
+            log("✅ Image generated successfully");
+          }
+        } catch (err) {
+          log("⚠️ Image service threw error → skipping image", "\x1b[33m");
+          await recordWorkflowWarning(workflow.id, "IMAGE_GENERATION", err);
+        }
       } else {
-        // Subtitles
-        log("Step 5: Generating subtitles...");
+        log("🚫 Skipping image generation due to unsafe prompt", "\x1b[33m");
+      }
+
+      // --- generate subtitles and video only if image exists ---
+      if (imageUrl) {
         const srtContent = await transcribeWithTimestamps(voiceLocalPath);
-        srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);
+        const srtPath = path.join(
+          workflowTempDir,
+          `subtitles-${workflow.id}.srt`,
+        );
         fs.writeFileSync(srtPath, srtContent);
 
-        // Video
-        log("Step 6: Creating final video...");
-        const timestamp = Date.now();
-        const videoFilename = `${workflow.id}-${timestamp}.mp4`;
+        const videoFilename = `${workflow.id}-${Date.now()}.mp4`;
         const videoPath = path.join(workflowTempDir, videoFilename);
 
         await createVideo(imageUrl, voiceLocalPath, videoPath, srtPath);
-
         videoURL = await uploadVideoToCloud(videoPath, videoFilename);
 
         const videoRecord = await prisma.video.create({
@@ -335,9 +363,14 @@ export async function runWorkflow({
           where: { id: workflow.id },
           data: { videoId: videoRecord.id },
         });
+      } else {
+        log("🎧 Podcast-only workflow → skipping video creation", "\x1b[36m");
       }
     } else {
-      log("Podcast-only mode → skipping image, subtitles & video generation");
+      log(
+        "🎧 Podcast-only mode → skipping image and video generation",
+        "\x1b[36m",
+      );
     }
 
     // Final update

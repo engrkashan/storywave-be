@@ -89,7 +89,6 @@
 //   return filePath;
 // }
 
-
 // // -----------------------------------
 // // MAIN IMAGE GENERATOR
 // // -----------------------------------
@@ -117,7 +116,6 @@
 //         stylization: 200,
 //         chaos: 30
 //       };
-
 
 //       // -----------------------------------
 //       // START GENERATION
@@ -209,8 +207,6 @@
 //   }
 // }
 
-
-
 import fs from "fs";
 import path from "path";
 import OpenAI from "openai";
@@ -283,7 +279,7 @@ ${prompt}
   const buffer = Buffer.from(image, "base64");
   const filePath = path.join(
     tempDir,
-    `scene_${String(index).padStart(3, "0")}.png`
+    `scene_${String(index).padStart(3, "0")}.png`,
   );
 
   fs.writeFileSync(filePath, buffer);
@@ -342,7 +338,7 @@ async function generateWithMidjourney(prompt, index, tempDir) {
         headers: {
           Authorization: `Bearer ${process.env.MIDJOURNEY_API_KEY}`,
         },
-      }
+      },
     );
 
     const statusData = await statusResponse.json();
@@ -356,7 +352,7 @@ async function generateWithMidjourney(prompt, index, tempDir) {
 
       const filePath = path.join(
         tempDir,
-        `scene_${String(index).padStart(3, "0")}.png`
+        `scene_${String(index).padStart(3, "0")}.png`,
       );
 
       await downloadImage(imageUrl, filePath);
@@ -382,32 +378,33 @@ export async function generateImage(prompt, index = 1, tempDir) {
 
   let safePrompt = prompt;
 
-  // GEMINI attempts
+  // --- GEMINI attempts ---
   for (let i = 1; i <= 3; i++) {
     try {
       console.log(`🌈 Gemini attempt ${i}/3`);
       imageUrl = await generateWithImagen(safePrompt, index, tempDir);
       return { imageUrl, error: null };
     } catch (err) {
-      console.error(`❌ Gemini attempt ${i} failed:`, err);
+      console.error(`❌ Gemini attempt ${i} failed:`, err.message);
       safePrompt = await sanitizePrompt(safePrompt);
-      imageError = err; // Save the exact error
+      imageError = err;
     }
   }
 
-  // MIDJOURNEY fallback
+  // --- MIDJOURNEY fallback ---
   for (let i = 1; i <= 3; i++) {
     try {
       console.log(`🎨 MidJourney attempt ${i}/3`);
       imageUrl = await generateWithMidjourney(safePrompt, index, tempDir);
       return { imageUrl, error: null };
     } catch (err) {
-      console.error(`❌ MidJourney attempt ${i} failed:`, err);
+      console.error(`❌ MidJourney attempt ${i} failed:`, err.message);
       safePrompt = await sanitizePrompt(safePrompt);
       imageError = err;
     }
   }
 
+  // --- All image attempts failed ---
   console.warn("⚠️ All image generation attempts failed. Skipping scene.");
-  return { imageUrl: null, error: imageError }; // Return the exact error
+  return { imageUrl: null, error: imageError };
 }
