@@ -16,27 +16,9 @@ export function deleteTempFiles(baseDir) {
       return;
     }
 
-    fs.readdirSync(baseDir).forEach((file) => {
-      const filePath = path.join(baseDir, file);
-      const stat = fs.statSync(filePath);
-
-      if (stat.isDirectory()) {
-        deleteTempFiles(filePath); // recursive delete
-        try {
-          fs.rmdirSync(filePath);
-        } catch (e) {
-          console.warn(`⚠️ Could not remove dir: ${filePath} (${e.message})`);
-        }
-      } else {
-        try {
-          fs.unlinkSync(filePath);
-        } catch (e) {
-          console.warn(`⚠️ Could not remove file: ${filePath} (${e.message})`);
-        }
-      }
-
-      fs.rmdirSync(baseDir);
-    });
+    // Forcefully delete directory and all contents (even if not empty)
+    fs.rmSync(baseDir, { recursive: true, force: true });
+    console.log(`✅ Deleted temp files in: ${baseDir}`);
   } catch (err) {
     console.error("⚠️ Error cleaning temp files:", err.message);
   }

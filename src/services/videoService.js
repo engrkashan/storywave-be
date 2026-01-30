@@ -1,6 +1,7 @@
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import { getAudioDuration } from "./audioService.js";
 
 export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
@@ -20,6 +21,11 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
 
   const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
   const filterComplex = `[0:v]subtitles='${escapedAssPath}'`;
+  const audioDuration = await getAudioDuration(audioPath);
+
+  if (!audioDuration || isNaN(audioDuration)) {
+    console.warn("⚠️ Could not detect audio duration. Fallback to -shortest only.");
+  }
 
   const cmd = [
     `ffmpeg -y -loop 1`,
@@ -27,7 +33,8 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
     `-i "${audioPath}"`,
     `-filter_complex "${filterComplex}"`,
     `-map 0:v -map 1:a`,
-    `-c:v libx264 -pix_fmt yuv420p -c:a aac -shortest`,
+    `-c:v libx264 -pix_fmt yuv420p -c:a copy -shortest`,
+    audioDuration ? `-t ${audioDuration}` : "",
     `"${outputPath}"`,
   ].join(" ");
 

@@ -139,7 +139,7 @@ router.post("/", async (req, res) => {
 router.get("/scheduled", verifyToken, async (req, res) => {
   try {
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized" });
     }
