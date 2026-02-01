@@ -10,7 +10,7 @@ export const getOverview = async (req, res) => {
     }
 
     // Role-based access
-    const whereByRole = role === "CREATOR" ? { userId } : {}; 
+    const whereByRole = role === "CREATOR" ? { userId } : {};
 
     // Counts (parallel)
     const [totalStories, videosCreated, voiceovers, podcasts] =
@@ -54,9 +54,9 @@ export const getOverview = async (req, res) => {
       error: w.metadata?.error || null,
       metadata: w.metadata || {},
       owner: {
-        id: w.user.id,
-        name: w.user.fullName,
-        role: w.user.role,
+        id: w.user?.id,
+        name: w.user?.fullName,
+        role: w.user?.role,
       },
       video: w.video ? { url: w.video.fileURL } : null,
     }));
@@ -125,42 +125,42 @@ export const getWorkflowById = async (req, res) => {
       },
       story: workflow.story
         ? {
-            id: workflow.story.id,
-            title: workflow.story.title,
-            outline: workflow.story.outline,
-            content: workflow.story.content,
-          }
+          id: workflow.story.id,
+          title: workflow.story.title,
+          outline: workflow.story.outline,
+          content: workflow.story.content,
+        }
         : null,
       voiceover: workflow.voiceover
         ? {
-            id: workflow.voiceover.id,
-            script: workflow.voiceover.script,
-            audioURL: workflow.voiceover.audioURL,
-            voice: workflow.voiceover.voice,
-          }
+          id: workflow.voiceover.id,
+          script: workflow.voiceover.script,
+          audioURL: workflow.voiceover.audioURL,
+          voice: workflow.voiceover.voice,
+        }
         : null,
       video: workflow.video
         ? {
-            id: workflow.video.id,
-            title: workflow.video.title,
-            fileURL: workflow.video.fileURL,
-            subtitles: workflow.video.subtitles,
-          }
+          id: workflow.video.id,
+          title: workflow.video.title,
+          fileURL: workflow.video.fileURL,
+          subtitles: workflow.video.subtitles,
+        }
         : null,
       podcast: workflow.podcast
         ? {
-            id: workflow.podcast.id,
-            title: workflow.podcast.title,
-            audience: workflow.podcast.audience,
-            episodes: workflow.podcast.episodes.map((e) => ({
-              id: e.id,
-              title: e.title,
-              script: e.script,
-              audioURL: e.audioURL,
-              duration: e.duration,
-              episodeNo: e.episodeNo,
-            })),
-          }
+          id: workflow.podcast.id,
+          title: workflow.podcast.title,
+          audience: workflow.podcast.audience,
+          episodes: workflow.podcast.episodes.map((e) => ({
+            id: e.id,
+            title: e.title,
+            script: e.script,
+            audioURL: e.audioURL,
+            duration: e.duration,
+            episodeNo: e.episodeNo,
+          })),
+        }
         : null,
       inputs: workflow.inputs.map((i) => ({
         id: i.id,
