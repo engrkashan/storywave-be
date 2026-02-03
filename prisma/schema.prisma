@@ -74,7 +74,7 @@ model Input {
   source    String
   processed Boolean   @default(false)
 
-  workflow   Workflow @relation(fields: [workflowId], references: [id])
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   workflowId String   @db.ObjectId
 
   createdAt DateTime @default(now())
@@ -87,7 +87,7 @@ model Task {
   log      String?
   metadata Json?
 
-  workflow   Workflow @relation(fields: [workflowId], references: [id])
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   workflowId String   @db.ObjectId
 
   createdAt DateTime @default(now())
@@ -100,7 +100,7 @@ model Story {
   outline String?
   content String
 
-  user   User   @relation(fields: [userId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String @db.ObjectId
 
   createdAt DateTime   @default(now())
@@ -115,7 +115,7 @@ model Video {
   duration  Int?
   subtitles String?
 
-  user   User   @relation(fields: [userId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String @db.ObjectId
 
   createdAt DateTime   @default(now())
@@ -130,12 +130,12 @@ model Voiceover {
   voice    String?
   userId   String?
 
-  workflow   Workflow @relation(fields: [workflowId], references: [id])
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   workflowId String   @unique @db.ObjectId
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  user      User?    @relation(fields: [userId], references: [id])
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 enum WorkflowStatus {
@@ -156,7 +156,7 @@ model Workflow {
   scheduledAt DateTime?
   metadata    Json?
 
-  user   User?   @relation(fields: [userId], references: [id])
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String? @db.ObjectId
 
   inputs    Input[]
@@ -179,10 +179,10 @@ model Podcast {
   audience String?
   subType  String?
 
-  user   User?   @relation(fields: [userId], references: [id])
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String? @db.ObjectId
 
-  workflow   Workflow  @relation(fields: [workflowId], references: [id])
+  workflow   Workflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   workflowId String    @unique @db.ObjectId
   episodes   Episode[]
 
@@ -197,7 +197,7 @@ model Episode {
   audioURL  String
   duration  Int?
   episodeNo Int
-  podcast   Podcast  @relation(fields: [podcastId], references: [id])
+  podcast   Podcast  @relation(fields: [podcastId], references: [id], onDelete: Cascade)
   podcastId String   @db.ObjectId
   createdAt DateTime @default(now())
 }
@@ -210,7 +210,7 @@ model Creation {
   mediaURL String?
   metadata Json?
 
-  user   User   @relation(fields: [userId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String @db.ObjectId
 
   createdAt DateTime @default(now())
@@ -223,7 +223,7 @@ model Integration {
   accountId   String
   accessToken String
 
-  user   User   @relation(fields: [userId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String @db.ObjectId
 
   createdAt DateTime @default(now())
@@ -238,7 +238,7 @@ model Media {
   publicId String?
   metadata Json?
 
-  workflow   Workflow? @relation(fields: [workflowId], references: [id])
+  workflow   Workflow? @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   workflowId String?   @db.ObjectId
 
   uploadedAt DateTime @default(now())

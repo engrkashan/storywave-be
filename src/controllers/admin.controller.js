@@ -91,25 +91,13 @@ export const deleteUser = async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id },
-      include: {
-        creations: true,
-        integrations: true,
-        stories: true,
-        voiceovers: true,
-      },
     });
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Cascade delete related entities (orphan cleanup)
-    await prisma.creation.deleteMany({ where: { userId: id } });
-    await prisma.integration.deleteMany({ where: { userId: id } });
-    await prisma.story.deleteMany({ where: { userId: id } });
-    await prisma.voiceover.deleteMany({ where: { userId: id } });
-
-    // Delete user
+    // Cascade delete handled by Prisma Schema
     await prisma.user.delete({
       where: { id },
     });
