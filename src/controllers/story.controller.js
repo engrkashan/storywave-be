@@ -286,18 +286,6 @@ export const deleteStory = async (req, res) => {
       return res.status(404).json({ error: "Story not found or not allowed" });
     }
 
-    // 2️⃣ Transactional deletion
-    // NOTE: With "onDelete: Cascade" in Prisma, deleting the Workflow would delete children.
-    // However, Story -> Workflow implies Workflow depends on Story? No, Schema says: Workflow.storyId -> Story.id
-    // But duplicate relation? Story has Workflow[].
-    // Let's check schema:
-    // Workflow { storyIdString? @db.ObjectId } -> Story { Workflow Workflow[] }
-    // If we delete Story, we might leave Orphan workflows if we don't cascade workflow deletion.
-    // But `Workflow` has `story` relation. Adding onDelete Cascade there?
-    // Wait, Workflow acts as the parent container usually.
-    // If we delete Story, we want to delete the workflows associated with it?
-    // YES.
-    // So we manually delete workflows here, and thanks to our NEW schema changes, deleting Workflow will cascade delete Tasks, Inputs, Media etc.
 
     await prisma.$transaction(async (tx) => {
       // Delete workflows (Cascade will handle their children)

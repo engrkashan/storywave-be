@@ -37,7 +37,6 @@ export async function mergeAudioFiles(files, outputFile) {
         ffmpeg()
             .input(listFile)
             .inputOptions(["-f concat", "-safe 0"])
-            // .outputOptions(["-c copy"]) // Removed to force re-encode and fix duration metadata
             .save(outputFile)
             .on("end", () => {
                 console.log(`Audio merged successfully to ${outputFile}`);

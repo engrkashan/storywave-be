@@ -4,7 +4,7 @@ import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
-import ytdlp from "yt-dlp-exec";
+import ytdlp from "yt-dlp-exec"; //for local video download
 
 const TEMP_DIR = path.join(process.cwd(), "temp");
 fs.mkdirSync(TEMP_DIR, { recursive: true });
