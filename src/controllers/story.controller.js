@@ -3,7 +3,6 @@ import { fork } from "child_process";
 import path from "path";
 import { generateStory } from "../services/storyService.js";
 import crypto from "crypto";
-import { runWorkflow } from "../services/workflowService.js";
 
 // Helper — consistent random title
 function generateRandomTitle(storyType = "Story") {
@@ -253,7 +252,7 @@ export const getStoryById = async (req, res) => {
   }
 };
 
-// DELETE Story (Transactional)
+// DELETE Story (Manual Cascade for MongoDB)
 export const deleteStory = async (req, res) => {
   try {
     const storyId = req.params.id;
@@ -263,21 +262,12 @@ export const deleteStory = async (req, res) => {
       return res.status(401).json({ error: "Unauthorized: missing user" });
     }
 
-    // 1️⃣ Check story ownership + fetch all related data
+    // Check story ownership and get workflows
     const story = await prisma.story.findFirst({
       where: { id: storyId, userId },
       include: {
         Workflow: {
-          include: {
-            inputs: true,
-            tasks: true,
-            media: true,
-            voiceover: true,
-            video: true,
-            podcast: {
-              include: { episodes: true },
-            },
-          },
+          select: { id: true },
         },
       },
     });
@@ -286,24 +276,26 @@ export const deleteStory = async (req, res) => {
       return res.status(404).json({ error: "Story not found or not allowed" });
     }
 
-
-    await prisma.$transaction(async (tx) => {
-      // Delete workflows (Cascade will handle their children)
-      for (const workflow of story.Workflow) {
-        await tx.workflow.delete({ where: { id: workflow.id } });
-      }
-
-      // Finally delete the story itself
-      await tx.story.delete({
-        where: { id: storyId },
+    // MongoDB doesn't support cascade deletes, so we need to manually delete workflows
+    // Delete all workflows associated with this story
+    if (story.Workflow && story.Workflow.length > 0) {
+      await prisma.workflow.deleteMany({
+        where: {
+          id: { in: story.Workflow.map((w) => w.id) },
+        },
       });
+    }
+
+    // Now delete the story itself
+    await prisma.story.delete({
+      where: { id: storyId },
     });
 
     return res.status(200).json({
       message: "✅ Story and all related data deleted successfully",
     });
   } catch (err) {
-    console.error("❌ Error deleting story transactionally:", err);
+    console.error("❌ Error deleting story:", err);
     return res.status(500).json({
       error: err.message || "Failed to delete story and related data",
     });

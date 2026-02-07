@@ -9,6 +9,7 @@ dotenv.config();
 
 const app = express();
 
+
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: "500mb" }));
@@ -30,6 +31,7 @@ import authRoutes from "./routes/auth.routes.js";
 import creationsRoutes from "./routes/creations.route.js";
 import overviewRoutes from "./routes/overview.routes.js";
 import storyRoutes from "./routes/story.routes.js";
+import voiceRoutes from "./routes/voice.routes.js";
 import { runScheduledWorkflows } from "./services/workflowService.js";
 
 app.use("/api/auth", authRoutes);
@@ -37,6 +39,7 @@ app.use("/api/story", storyRoutes);
 app.use("/api/overview", overviewRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/creations", creationsRoutes);
+app.use("/api/voice", voiceRoutes);
 
 // dns configuration
 dns.setDefaultResultOrder("ipv4first");

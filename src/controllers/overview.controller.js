@@ -18,7 +18,7 @@ export const getOverview = async (req, res) => {
         prisma.story.count({ where: whereByRole }),
         prisma.video.count({ where: whereByRole }),
         prisma.voiceover.count({ where: whereByRole }),
-        prisma.podcast.count({ where: whereByRole }),
+        prisma.story.count({ where: { ...whereByRole, isPodcast: true } }),
       ]);
 
     //  Recent workflows
@@ -32,6 +32,13 @@ export const getOverview = async (req, res) => {
         status: true,
         metadata: true,
         createdAt: true,
+        story: {
+          select: {
+            id: true,
+            isPodcast: true,
+            audioURL: true,
+          },
+        },
         video: {
           select: { fileURL: true },
         },
@@ -53,6 +60,8 @@ export const getOverview = async (req, res) => {
       createdAt: w.createdAt,
       error: w.metadata?.error || null,
       metadata: w.metadata || {},
+      isPodcast: w.story?.isPodcast || false,
+      audioURL: w.story?.audioURL || null,
       owner: {
         id: w.user?.id,
         name: w.user?.fullName,
@@ -96,7 +105,6 @@ export const getWorkflowById = async (req, res) => {
         story: true,
         voiceover: true,
         video: true,
-        podcast: { include: { episodes: true } },
         inputs: true,
         media: true,
         tasks: true,
@@ -145,21 +153,6 @@ export const getWorkflowById = async (req, res) => {
           title: workflow.video.title,
           fileURL: workflow.video.fileURL,
           subtitles: workflow.video.subtitles,
-        }
-        : null,
-      podcast: workflow.podcast
-        ? {
-          id: workflow.podcast.id,
-          title: workflow.podcast.title,
-          audience: workflow.podcast.audience,
-          episodes: workflow.podcast.episodes.map((e) => ({
-            id: e.id,
-            title: e.title,
-            script: e.script,
-            audioURL: e.audioURL,
-            duration: e.duration,
-            episodeNo: e.episodeNo,
-          })),
         }
         : null,
       inputs: workflow.inputs.map((i) => ({
@@ -242,14 +235,42 @@ export const deleteWorkflow = async (req, res) => {
         id,
         ...(role === "CREATOR" ? { userId } : {}),
       },
+      include: {
+        story: {
+          select: { id: true },
+        },
+      },
     });
 
     if (!workflow) {
       return res.status(404).json({ error: "Workflow not found" });
     }
 
-    // Cascade delete handled by Prisma Schema (Inputs, Tasks, Media, Voiceover, Podcast, Video)
-    await prisma.workflow.delete({ where: { id } });
+    // If this workflow has a story, delete the story (which will delete all its workflows)
+    if (workflow.story) {
+      // Get all workflows for this story
+      const allWorkflows = await prisma.workflow.findMany({
+        where: { storyId: workflow.story.id },
+        select: { id: true },
+      });
+
+      // Delete all workflows for this story (MongoDB doesn't support cascade)
+      if (allWorkflows.length > 0) {
+        await prisma.workflow.deleteMany({
+          where: {
+            id: { in: allWorkflows.map((w) => w.id) },
+          },
+        });
+      }
+
+      // Delete the story
+      await prisma.story.delete({
+        where: { id: workflow.story.id },
+      });
+    } else {
+      // No story associated, just delete the workflow
+      await prisma.workflow.delete({ where: { id } });
+    }
 
     return res.status(200).json({
       message: "Workflow deleted successfully",

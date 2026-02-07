@@ -36,7 +36,6 @@ enum MediaType {
   IMAGE
   VIDEO
   SUBTITLE
-  PODCAST
   TRANSCRIPT
 }
 
@@ -65,7 +64,6 @@ model User {
   stories     Story[]
   videos      Video[]
   voiceovers  Voiceover[]
-  podcasts    Podcast[]
 }
 
 model Input {
@@ -95,10 +93,15 @@ model Task {
 }
 
 model Story {
-  id      String  @id @default(auto()) @map("_id") @db.ObjectId
-  title   String
-  outline String?
-  content String
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  title     String
+  outline   String?
+  content   String
+  
+  // Podcast support
+  isPodcast Boolean  @default(false)
+  audioURL  String?
+  duration  Int?
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String @db.ObjectId
@@ -160,10 +163,9 @@ model Workflow {
   userId String? @db.ObjectId
 
   inputs    Input[]
-  story     Story?     @relation(fields: [storyId], references: [id])
+  story     Story?     @relation(fields: [storyId], references: [id], onDelete: Cascade)
   voiceover Voiceover?
-  video     Video?     @relation(fields: [videoId], references: [id])
-  podcast   Podcast?
+  video     Video?     @relation(fields: [videoId], references: [id], onDelete: Cascade)
   media     Media[]
   tasks     Task[]
 
@@ -171,35 +173,6 @@ model Workflow {
   updatedAt DateTime @updatedAt
   storyId   String?  @db.ObjectId
   videoId   String?  @db.ObjectId
-}
-
-model Podcast {
-  id       String  @id @default(auto()) @map("_id") @db.ObjectId
-  title    String
-  audience String?
-  subType  String?
-
-  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId String? @db.ObjectId
-
-  workflow   Workflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
-  workflowId String    @unique @db.ObjectId
-  episodes   Episode[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Episode {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  title     String
-  script    String
-  audioURL  String
-  duration  Int?
-  episodeNo Int
-  podcast   Podcast  @relation(fields: [podcastId], references: [id], onDelete: Cascade)
-  podcastId String   @db.ObjectId
-  createdAt DateTime @default(now())
 }
 
 model Creation {

@@ -187,7 +187,7 @@ export async function runWorkflow({
       data: {
         title,
         type: "STORY",
-        status: isScheduled ? "SCHEDULED" : "PENDING",
+        status: isScheduled ? "SCHEDULED" : "PROCESSING",
         scheduledAt: isScheduled ? new Date(scheduledUTC) : null,
         userId,
         metadata: {
@@ -268,6 +268,8 @@ export async function runWorkflow({
         outline: outline || null,
         content: script,
         userId,
+        isPodcast: false, // Will be updated later based on image/video generation
+        audioURL: null, // Will be set after voiceover generation
       },
     });
 
@@ -312,8 +314,10 @@ export async function runWorkflow({
         userId,
       },
     });
+
     let imageUrl = null;
     let videoURL = null;
+    let isPodcast = false; // Track if this is a podcast
 
     // 4+5+6. Image + Subtitles + Video — only when requested
     if (shouldGenerateImage === true) {
@@ -332,6 +336,7 @@ export async function runWorkflow({
           "\x1b[33m",
         );
         skipImage = true;
+        isPodcast = true; // No image → Podcast
       }
 
       if (!skipImage) {
@@ -346,9 +351,10 @@ export async function runWorkflow({
 
           if (!imageUrl) {
             log(
-              "⚠️ Image generation failed → continuing without visuals",
+              "⚠️ Image generation failed → creating as podcast",
               "\x1b[33m",
             );
+            isPodcast = true; // Image failed → Podcast
             await recordWorkflowWarning(
               workflow.id,
               "IMAGE_GENERATION",
@@ -358,11 +364,10 @@ export async function runWorkflow({
             log("✅ Image generated successfully");
           }
         } catch (err) {
-          log("⚠️ Image service threw error → skipping image", "\x1b[33m");
+          log("⚠️ Image service threw error → creating as podcast", "\x1b[33m");
+          isPodcast = true; // Image error → Podcast
           await recordWorkflowWarning(workflow.id, "IMAGE_GENERATION", err);
         }
-      } else {
-        log("🚫 Skipping image generation due to unsafe prompt", "\x1b[33m");
       }
 
       // --- generate subtitles and video only if image exists ---
@@ -389,15 +394,28 @@ export async function runWorkflow({
           where: { id: workflow.id },
           data: { videoId: videoRecord.id },
         });
+
+        isPodcast = false; // Video created successfully → Story
       } else {
-        log("🎧 Podcast-only workflow → skipping video creation", "\x1b[36m");
+        log("🎧 No image available → creating as podcast", "\x1b[36m");
+        isPodcast = true;
       }
     } else {
       log(
         "🎧 Podcast-only mode → skipping image and video generation",
         "\x1b[36m",
       );
+      isPodcast = true; // No image requested → Podcast
     }
+
+    // Update story with isPodcast flag and audioURL
+    await prisma.story.update({
+      where: { id: story.id },
+      data: {
+        isPodcast,
+        audioURL: mixedVoiceURL,
+      },
+    });
 
     // Final update
     await prisma.workflow.update({
@@ -409,7 +427,7 @@ export async function runWorkflow({
           result: {
             hasImage: !!imageUrl,
             hasVideo: !!videoURL,
-            isPodcastOnly: !shouldGenerateImage,
+            isPodcast,
           },
         },
       },
