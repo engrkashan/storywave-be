@@ -242,38 +242,14 @@ export const deleteWorkflow = async (req, res) => {
         id,
         ...(role === "CREATOR" ? { userId } : {}),
       },
-      select: {
-        id: true,
-        voiceover: { select: { id: true } },
-        podcast: { select: { id: true } },
-      },
     });
 
     if (!workflow) {
       return res.status(404).json({ error: "Workflow not found" });
     }
 
-    const transactions = [
-      prisma.input.deleteMany({ where: { workflowId: id } }),
-      prisma.task.deleteMany({ where: { workflowId: id } }),
-      prisma.media.deleteMany({ where: { workflowId: id } }),
-    ];
-
-    if (workflow.voiceover) {
-      transactions.push(
-        prisma.voiceover.delete({ where: { id: workflow.voiceover.id } }),
-      );
-    }
-
-    if (workflow.podcast) {
-      transactions.push(
-        prisma.podcast.delete({ where: { id: workflow.podcast.id } }),
-      );
-    }
-
-    transactions.push(prisma.workflow.delete({ where: { id } }));
-
-    await prisma.$transaction(transactions);
+    // Cascade delete handled by Prisma Schema (Inputs, Tasks, Media, Voiceover, Podcast, Video)
+    await prisma.workflow.delete({ where: { id } });
 
     return res.status(200).json({
       message: "Workflow deleted successfully",

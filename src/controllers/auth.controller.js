@@ -1,4 +1,3 @@
-import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import prisma from "../config/prisma.client.js";
 
@@ -7,7 +6,7 @@ export const registerUser = async (req, res) => {
   try {
     const { fullName, email, username, password, profileURL, role } = req.body;
 
-    const existing = await prisma.User.findFirst({
+    const existing = await prisma.user.findFirst({
       where: { OR: [{ email }, { username }] },
     });
     if (existing) {
@@ -16,7 +15,7 @@ export const registerUser = async (req, res) => {
         .json({ error: "Email or username already in use" });
     }
 
-    const newUser = await prisma.User.create({
+    const newUser = await prisma.user.create({
       data: {
         fullName,
         email,
@@ -49,7 +48,7 @@ export const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await prisma.User.findFirst({
+    const user = await prisma.user.findFirst({
       where: { email },
     });
 
@@ -64,7 +63,7 @@ export const loginUser = async (req, res) => {
       { expiresIn: "7d" },
     );
 
-    await prisma.User.update({
+    await prisma.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
     });
@@ -90,7 +89,7 @@ export const loginUser = async (req, res) => {
 // GET all users
 export const getAllUsers = async (req, res) => {
   try {
-    const users = await prisma.User.findMany({
+    const users = await prisma.user.findMany({
       select: {
         id: true,
         fullName: true,
@@ -116,11 +115,11 @@ export const updateUser = async (req, res) => {
     const { id } = req.params;
     const { fullName, email, username, password, profileURL, role } = req.body;
 
-    const existingUser = await prisma.User.findUnique({ where: { id } });
+    const existingUser = await prisma.user.findUnique({ where: { id } });
     if (!existingUser) return res.status(404).json({ error: "User not found" });
 
     if (email || username) {
-      const conflictUser = await prisma.User.findFirst({
+      const conflictUser = await prisma.user.findFirst({
         where: {
           AND: [{ id: { not: id } }, { OR: [{ email }, { username }] }],
         },
@@ -132,7 +131,7 @@ export const updateUser = async (req, res) => {
           .json({ error: "Email or username already in use by another user" });
     }
 
-    const updatedUser = await prisma.User.update({
+    const updatedUser = await prisma.user.update({
       where: { id },
       data: {
         fullName: fullName ?? existingUser.fullName,
@@ -166,7 +165,7 @@ export const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const existingUser = await prisma.User.findUnique({
+    const existingUser = await prisma.user.findUnique({
       where: { id: id },
     });
 
@@ -174,7 +173,8 @@ export const deleteUser = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    await prisma.User.delete({
+    // Now uses Cascade Deleter in schema
+    await prisma.user.delete({
       where: { id: id },
     });
 

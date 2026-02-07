@@ -394,11 +394,6 @@ export async function generateStory({
 
   // If wordsPerPart > 4000, subdivide large parts with additional API hits
   const maxWordsPerCall = 4000;
-  if (wordsPerPart > maxWordsPerCall) {
-    console.log(
-      `Adjusting for large parts: subdividing to max ${maxWordsPerCall} words per call`
-    );
-  }
 
   async function generateSubdivided(contentFunc, params, targetWords) {
     if (targetWords <= maxWordsPerCall) {
