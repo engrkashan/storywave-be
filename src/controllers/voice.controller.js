@@ -69,8 +69,6 @@ const FISH_VOICE_IDS = [
     "329ff0b9604444ec982526af54630427",
     "4fe31e5e2bba44288bf9944cb1e511d8",
     "06366bd48deb46d98e0df6160f798cb3",
-    "06366bd48deb46d98e0df6160f798cb3",
-    "06366bd48deb46d98e0df6160f798cb3",
     "9ab5d9df251341b5a43c64575acd8aae",
     "5f9dc1849c7644eaa48df363d988ad0e",
     "3f6e5d576b1147f788d5e7542bbbaf1b",
