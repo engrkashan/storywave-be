@@ -5,11 +5,11 @@ import { cloudinary } from "../config/cloudinary.config.js";
 import prisma from "../config/prisma.client.js";
 import { deleteTempFiles } from "../utils/deleteTemp.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
-import { generateImage } from "./imageService.js";
+import { generateImage, generateMultiImages } from "./imageService.js";
 import { extractContentFromUrl, transcribeVideo } from "./inputService.js";
-import { generateStory } from "./storyService.js";
+import { generateStory, generateScenePrompts } from "./storyService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
-import { createVideo } from "./videoService.js";
+import { createVideo, generateVideoClips, createMultiMediaVideo } from "./videoService.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
 
 import {
@@ -169,6 +169,9 @@ export async function runWorkflow({
   storyLength,
   scheduledAt = null,
   existingWorkflow = null,
+  mediaType = "single_image",
+  imageCount = 5,
+  backgroundMusic = true,
 }) {
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
@@ -200,6 +203,9 @@ export async function runWorkflow({
           voice,
           voiceTone,
           storyLength,
+          mediaType,
+          imageCount,
+          backgroundMusic,
         },
       },
     });
@@ -284,23 +290,28 @@ export async function runWorkflow({
     const { url: pureVoiceURL, localPath: voiceLocalPath } =
       await generateVoiceover(script, voiceFilename, voice, workflowTempDir);
 
-    log("Step 3.5: Generating background music...");
-    const musicPath = await generateBackgroundMusic({
-      title,
-      storyType,
-      tempDir: workflowTempDir,
-    });
+    let finalAudioLocalPath = voiceLocalPath;
 
-    const mixedFilename = `mixed-${voiceFilename}`;
-    const mixedLocalPath = path.join(workflowTempDir, mixedFilename);
+    if (backgroundMusic === true) {
+      log("Step 3.5: Generating background music...");
+      const musicPath = await generateBackgroundMusic({
+        title,
+        storyType,
+        tempDir: workflowTempDir,
+      });
 
-    await mixAudioWithBackground(voiceLocalPath, musicPath, mixedLocalPath);
+      const mixedFilename = `mixed-${voiceFilename}`;
+      const mixedLocalPath = path.join(workflowTempDir, mixedFilename);
 
-    log("Uploading mixed audio (voice + background music) to Cloudinary...");
-    const uploadRes = await cloudinary.uploader.upload(mixedLocalPath, {
+      await mixAudioWithBackground(voiceLocalPath, musicPath, mixedLocalPath);
+      finalAudioLocalPath = mixedLocalPath;
+    }
+
+    log("Uploading final audio to Cloudinary...");
+    const uploadRes = await cloudinary.uploader.upload(finalAudioLocalPath, {
       folder: "voiceovers",
       resource_type: "video",
-      public_id: path.parse(mixedFilename).name,
+      public_id: path.parse(finalAudioLocalPath).name,
       overwrite: true,
     });
 
@@ -315,74 +326,51 @@ export async function runWorkflow({
       },
     });
 
-    let imageUrl = null;
+    let mediaUrls = [];
     let videoURL = null;
-    let isPodcast = false; // Track if this is a podcast
+    let isPodcast = false;
 
-    // 4+5+6. Image + Subtitles + Video — only when requested
+    // 4+5+6. Media + Subtitles + Video
     if (shouldGenerateImage === true) {
-      log("Step 4: Checking for abusive words in prompt...");
-      let skipImage = false;
-      const finalImagePrompt = imagePrompt || script || "Default prompt";
+      log(`Step 4: Handling ${mediaType} generation...`);
 
-      const abusiveWords = ["abuse1", "abuse2", "curse1"];
-      if (
-        abusiveWords.some((word) =>
-          finalImagePrompt.toLowerCase().includes(word),
-        )
-      ) {
-        log(
-          "⚠️ Abusive words detected → skipping image generation",
-          "\x1b[33m",
-        );
-        skipImage = true;
-        isPodcast = true; // No image → Podcast
+      // 1. Generate Scenic Prompts if needed
+      let scenePrompts = [];
+      if (mediaType === "single_image") {
+        scenePrompts = [imagePrompt || script || "Cinematic storytelling scene"];
+      } else {
+        const count = mediaType === "multi_image" ? imageCount : 5; // Video defaults to 5 clips
+        scenePrompts = await generateScenePrompts(script, count);
       }
 
-      if (!skipImage) {
-        log("Step 4: Generating image...");
-        try {
-          const imageResult = await generateImage(
-            finalImagePrompt,
-            1,
-            workflowTempDir,
-          );
-          imageUrl = imageResult.imageUrl;
-
-          if (!imageUrl) {
-            log(
-              "⚠️ Image generation failed → creating as podcast",
-              "\x1b[33m",
-            );
-            isPodcast = true; // Image failed → Podcast
-            await recordWorkflowWarning(
-              workflow.id,
-              "IMAGE_GENERATION",
-              imageResult.error || { message: "Unknown image failure" },
-            );
-          } else {
-            log("✅ Image generated successfully");
-          }
-        } catch (err) {
-          log("⚠️ Image service threw error → creating as podcast", "\x1b[33m");
-          isPodcast = true; // Image error → Podcast
-          await recordWorkflowWarning(workflow.id, "IMAGE_GENERATION", err);
-        }
+      // 2. Generate Media Items
+      let mediaItems = [];
+      if (mediaType === "video") {
+        const clips = await generateVideoClips(scenePrompts, workflowTempDir);
+        mediaItems = clips.filter(c => c.filePath).map(c => c.filePath);
+      } else if (mediaType === "multi_image") {
+        const images = await generateMultiImages(scenePrompts, workflowTempDir);
+        mediaItems = images.filter(img => img.imageUrl).map(img => img.imageUrl);
+      } else {
+        const imageResult = await generateImage(scenePrompts[0], 1, workflowTempDir);
+        if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
       }
 
-      // --- generate subtitles and video only if image exists ---
-      if (imageUrl) {
+      // 3. Create Video if media exist
+      if (mediaItems.length > 0) {
+        log("Step 5: Generating subtitles and stitching video...");
         const srtContent = await transcribeWithTimestamps(voiceLocalPath);
-        const srtPath = path.join(
-          workflowTempDir,
-          `subtitles-${workflow.id}.srt`,
-        );
+        const srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);
         fs.writeFileSync(srtPath, srtContent);
 
         const videoFilename = `${workflow.id}-${Date.now()}.mp4`;
         const videoPath = path.join(workflowTempDir, videoFilename);
 
-        await createVideo(imageUrl, mixedLocalPath, videoPath, srtPath);
+        if (mediaItems.length === 1 && mediaType === "single_image") {
+          await createVideo(mediaItems[0], finalAudioLocalPath, videoPath, srtPath);
+        } else {
+          await createMultiMediaVideo(mediaItems, finalAudioLocalPath, videoPath, srtPath);
+        }
 
         videoURL = await uploadVideoToCloud(videoPath, videoFilename);
 
@@ -395,17 +383,15 @@ export async function runWorkflow({
           data: { videoId: videoRecord.id },
         });
 
-        isPodcast = false; // Video created successfully → Story
+        isPodcast = false;
+        mediaUrls = mediaItems;
       } else {
-        log("🎧 No image available → creating as podcast", "\x1b[36m");
+        log("⚠️ Media generation failed → creating as podcast", "\x1b[33m");
         isPodcast = true;
       }
     } else {
-      log(
-        "🎧 Podcast-only mode → skipping image and video generation",
-        "\x1b[36m",
-      );
-      isPodcast = true; // No image requested → Podcast
+      log("🎧 Podcast-only mode", "\x1b[36m");
+      isPodcast = true;
     }
 
     // Update story with isPodcast flag and audioURL
@@ -425,9 +411,10 @@ export async function runWorkflow({
         metadata: {
           ...(workflow.metadata || {}),
           result: {
-            hasImage: !!imageUrl,
+            hasMedia: mediaUrls.length > 0,
             hasVideo: !!videoURL,
             isPodcast,
+            mediaType,
           },
         },
       },
@@ -447,7 +434,7 @@ export async function runWorkflow({
       },
       voiceover: mixedVoiceURL,
       video: videoURL,
-      image: imageUrl,
+      media: mediaUrls,
       metadata: {
         title,
         storyType,
@@ -455,6 +442,9 @@ export async function runWorkflow({
         voiceTone,
         shouldGenerateImage,
         isPodcastOnly: !shouldGenerateImage,
+        mediaType,
+        imageCount,
+        backgroundMusic,
       },
     };
   } catch (err) {

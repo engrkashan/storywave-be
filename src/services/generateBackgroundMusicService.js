@@ -3,14 +3,6 @@ import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
 
-/**
- * Generates slow ambient background music using Suno API
- * @param {Object} options
- * @param {string} options.title - Title of the story/podcast (used for music title)
- * @param {string} options.storyType - Type of story to influence music style
- * @param {string} options.tempDir - Temporary directory to save the music file
- * @returns {Promise<string|null>} Path to downloaded music file or null if failed
- */
 export async function generateBackgroundMusic({ title, storyType, tempDir }) {
   const apiUrl = "https://api.sunoapi.org/api/v1/generate";
   const headers = {
@@ -122,13 +114,6 @@ export async function generateBackgroundMusic({ title, storyType, tempDir }) {
   }
 }
 
-/**
- * Mixes voiceover with background music using FFmpeg
- * @param {string} voicePath - Path to voiceover audio
- * @param {string} musicPath - Path to background music
- * @param {string} outputPath - Where to save mixed audio
- * @returns {Promise<void>}
- */
 export async function mixAudioWithBackground(voicePath, musicPath, outputPath) {
   if (!musicPath || !fs.existsSync(musicPath)) {
     console.log("[Audio Mix] No background music → copying voice only");
@@ -140,7 +125,7 @@ export async function mixAudioWithBackground(voicePath, musicPath, outputPath) {
     `ffmpeg -y`,
     `-i "${voicePath}"`,
     `-i "${musicPath}"`,
-    `-filter_complex "[1:a]volume=0.38,highpass=f=100,lowpass=f=8000[bg]; [0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]"`,
+    `-filter_complex "[1:a]volume=0.18,highpass=f=100,lowpass=f=8000[bg]; [0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]"`,
     `-map "[a]" -c:a libmp3lame -b:a 192k`,
     `"${outputPath}"`,
   ].join(" ");

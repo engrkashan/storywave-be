@@ -355,7 +355,7 @@ export async function generateStory({
   storyType = "storytelling_cinematic",
   voiceTone = "neutral",
   storyLength = "30 minutes",
-  voice
+  voice,
 }) {
   let inputText = textIdea || "";
   if (url) inputText = await extractFromUrl(url);
@@ -368,12 +368,7 @@ export async function generateStory({
   // 🔪 Limit token size before prompt (trim or summarize)
   if (inputText.length > 8000) {
     console.log(" Input too long, summarizing before story generation...");
-    const summaryPrompt = `Summarize the following text in under 800 words focusing only on the main ideas, tone, and narrative elements:\n\n${inputText.slice(
-      0,
-      15000
-    )}`;
-    const summary = await summarizeText(summaryPrompt);
-    inputText = summary;
+    inputText = await summarizeText(inputText);
   }
 
   // Parse storyLength to get minutes (e.g., "30 minutes" -> 30)
@@ -469,11 +464,55 @@ export async function generateStory({
   };
 }
 
-async function summarizeText(summaryPrompt) {
+/**
+ * Break story into visual scene prompts for image/video generation
+ */
+export async function generateScenePrompts(storyScript, count = 5) {
+  const prompt = `
+    Split the following story into ${count} distinct visual scenes.
+    For each scene, provide a detailed, cinematic image generation prompt.
+    Requirements:
+    - Highly detailed HDR scenes.
+    - 8k photographic quality, professional lighting, and rich textures.
+    - Captures the exact essence of that specific moment.
+    - Scenes should be spread evenly throughout the story timeline.
+
+    Story: ${storyScript}
+
+    Return the results as a JSON array of strings: ["prompt 1", "prompt 2", ...]
+    Return ONLY the JSON.
+  `;
+
+  try {
+    const result = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      temperature: 0.7,
+    });
+
+    const content = result.choices[0].message.content;
+    const parsed = JSON.parse(content);
+    // Handle potential object keys like { "scenes": [...] }
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed.scenes && Array.isArray(parsed.scenes)) return parsed.scenes;
+    if (parsed.prompts && Array.isArray(parsed.prompts)) return parsed.prompts;
+    return Object.values(parsed).find(Array.isArray) || [];
+  } catch (err) {
+    console.error("Failed to generate scene prompts:", err);
+    return [];
+  }
+}
+
+async function summarizeText(text) {
+  const summaryPrompt = `Summarize the following text in under 800 words focusing only on the main ideas, tone, and narrative elements:\n\n${text.slice(
+    0,
+    15000
+  )}`;
   const result = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [{ role: "user", content: summaryPrompt }],
     temperature: 0.5,
   });
-  return result.choices?.[0]?.message?.content?.trim() || "";
+  return result.choices?.[0]?.message?.content?.trim() || text.slice(0, 5000);
 }

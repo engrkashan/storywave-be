@@ -123,6 +123,9 @@ async function generateWithMidjourney(prompt, index, tempDir) {
       throw new Error("MidJourney polling timeout");
     }
 
+    const qualityPrefix = "Ultra HD, 8k, HDR, cinematic lighting, masterpiece, highly detailed, ";
+    const finalPrompt = `${qualityPrefix}${prompt}`;
+
     const statusResponse = await fetch(
       `${MIDJOURNEY_API_BASE}/record-info?taskId=${taskId}`,
       {
@@ -198,4 +201,17 @@ export async function generateImage(prompt, index = 1, tempDir) {
   // --- All image attempts failed ---
   console.warn("⚠️ All image generation attempts failed. Skipping scene.");
   return { imageUrl: null, error: imageError };
+}
+
+/**
+ * Generate multiple images for a set of prompts
+ */
+export async function generateMultiImages(prompts, tempDir) {
+  const results = [];
+  for (let i = 0; i < prompts.length; i++) {
+    console.log(`🖼️ Generating image ${i + 1}/${prompts.length}...`);
+    const result = await generateImage(prompts[i], i + 1, tempDir);
+    results.push(result);
+  }
+  return results;
 }

@@ -28,6 +28,9 @@ export const createWorkflow = async (req, res) => {
       shouldGenerateImage,
       scheduledAt,
       voice,
+      mediaType,
+      imageCount,
+      backgroundMusic,
     } = req.body;
 
     if (!userId) {
@@ -56,6 +59,9 @@ export const createWorkflow = async (req, res) => {
       voiceTone,
       storyLength,
       scheduledAt,
+      mediaType,
+      imageCount,
+      backgroundMusic,
     };
 
     // 👉 PATH to worker file
