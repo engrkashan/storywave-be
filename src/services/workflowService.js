@@ -9,8 +9,10 @@ import { generateImage, generateMultiImages } from "./imageService.js";
 import { extractContentFromUrl, transcribeVideo } from "./inputService.js";
 import { generateStory, generateScenePrompts } from "./storyService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
+import { getAudioDuration } from "./audioService.js";
 import { createVideo, generateVideoClips, createMultiMediaVideo } from "./videoService.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
+import { extractStoryMetadata, generateMasterPrompts } from "./promptService.js";
 
 import {
   generateBackgroundMusic,
@@ -172,6 +174,7 @@ export async function runWorkflow({
   mediaType = "single_image",
   imageCount = 5,
   backgroundMusic = true,
+  aspectRatio = "16:9", // Default to 16:9
 }) {
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
@@ -206,6 +209,7 @@ export async function runWorkflow({
           mediaType,
           imageCount,
           backgroundMusic,
+          aspectRatio,
         },
       },
     });
@@ -284,6 +288,21 @@ export async function runWorkflow({
       data: { storyId: story.id },
     });
 
+    log("Step 2.1: Extracting story metadata and master prompts...");
+    const storyMetadata = await extractStoryMetadata(script);
+    const masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
+
+    await prisma.workflow.update({
+      where: { id: workflow.id },
+      data: {
+        metadata: {
+          ...(workflow.metadata || {}),
+          storyMetadata,
+          masterPrompts,
+        }
+      },
+    });
+
     // 3. Generate voiceover (always) - pure voice (used for accurate subtitle timestamps)
     log("Step 3: Generating voiceover...");
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
@@ -317,6 +336,10 @@ export async function runWorkflow({
 
     const mixedVoiceURL = uploadRes.secure_url;
 
+    // Detect actual audio duration for synchronization
+    const actualAudioDuration = await getAudioDuration(finalAudioLocalPath);
+    log(`📊 Actual audio duration: ${actualAudioDuration.toFixed(2)}s`);
+
     await prisma.voiceover.create({
       data: {
         script,
@@ -339,20 +362,23 @@ export async function runWorkflow({
       if (mediaType === "single_image") {
         scenePrompts = [imagePrompt || script || "Cinematic storytelling scene"];
       } else {
-        const count = mediaType === "multi_image" ? imageCount : 5; // Video defaults to 5 clips
-        scenePrompts = await generateScenePrompts(script, count);
+        // Dynamic clip count: One clip every 5 seconds (to match Veo preview length), minimum 5 clips
+        const dynamicCount = Math.max(5, Math.ceil(actualAudioDuration / 5));
+        const count = mediaType === "multi_image" ? imageCount : dynamicCount;
+        log(`🎬 Target media count: ${count} (based on ${actualAudioDuration.toFixed(2)}s audio)`);
+        scenePrompts = await generateScenePrompts(script, count, storyMetadata);
       }
 
       // 2. Generate Media Items
       let mediaItems = [];
       if (mediaType === "video") {
-        const clips = await generateVideoClips(scenePrompts, workflowTempDir);
+        const clips = await generateVideoClips(scenePrompts, workflowTempDir, aspectRatio);
         mediaItems = clips.filter(c => c.filePath).map(c => c.filePath);
       } else if (mediaType === "multi_image") {
-        const images = await generateMultiImages(scenePrompts, workflowTempDir);
+        const images = await generateMultiImages(scenePrompts, workflowTempDir, aspectRatio);
         mediaItems = images.filter(img => img.imageUrl).map(img => img.imageUrl);
       } else {
-        const imageResult = await generateImage(scenePrompts[0], 1, workflowTempDir);
+        const imageResult = await generateImage(scenePrompts[0], 1, workflowTempDir, aspectRatio);
         if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
       }
 
@@ -445,6 +471,7 @@ export async function runWorkflow({
         mediaType,
         imageCount,
         backgroundMusic,
+        aspectRatio,
       },
     };
   } catch (err) {

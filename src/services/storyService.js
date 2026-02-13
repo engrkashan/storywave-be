@@ -467,15 +467,32 @@ export async function generateStory({
 /**
  * Break story into visual scene prompts for image/video generation
  */
-export async function generateScenePrompts(storyScript, count = 5) {
+export async function generateScenePrompts(storyScript, count = 5, metadata = null) {
+  let consistencyInstructions = "";
+  if (metadata) {
+    const { demographic, environment, physicality, anchor, texture } = metadata;
+    consistencyInstructions = `
+    VISUAL CONSISTENCY RULES:
+    - Protagonist: ${demographic}
+    - Environment: ${environment}
+    - Details: ${physicality}
+    - Anchor: ${anchor}
+    - Textures: ${texture}
+    
+    Technical: All scenes must be cinematic "Medium-Close" or "Wide-Close" shots. 8k, HDR, ray-traced reflections. NO TEXT.
+    `.trim();
+  }
+
   const prompt = `
     Split the following story into ${count} distinct visual scenes.
     For each scene, provide a detailed, cinematic image generation prompt.
+    
+    ${consistencyInstructions}
+
     Requirements:
-    - Highly detailed HDR scenes.
-    - 8k photographic quality, professional lighting, and rich textures.
-    - Captures the exact essence of that specific moment.
+    - Highly detailed scenes reflecting the specific narrative beats.
     - Scenes should be spread evenly throughout the story timeline.
+    - Captures the exact essence of that specific moment.
 
     Story: ${storyScript}
 

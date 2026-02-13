@@ -123,35 +123,48 @@ function secToAssTime(sec) {
 }
 
 /**
- * Generate video clips using Gemini Veo
+ * Generate video clips using Gemini Veo 3.1
  */
-export async function generateVideoClips(prompts, tempDir) {
-  const model = ai.getGenerativeModel({ model: "veo-1.0" }); // Using available Veo model
-
+export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9") {
   const results = [];
+
   for (let i = 0; i < prompts.length; i++) {
     try {
-      console.log(`🎬 Generating video clip ${i + 1}/${prompts.length}...`);
+      console.log(`🎬 Generating video clip ${i + 1}/${prompts.length} using Veo 3.1...`);
 
-      // Note: Video generation is typically an async long-running operation
-      // For this implementation, we assume a simplified polling/blocking flow if the SDK supports it,
-      // or we handle the task submission.
-
-      const result = await model.generateContent({
-        contents: [{ role: "user", parts: [{ text: prompts[i] }] }],
-        // video generation parameters would go here if supported natively in this version
+      // 📺 Start the video generation operation
+      let operation = await ai.models.generateVideos({
+        model: "veo-3.1-generate-preview",
+        prompt: prompts[i],
+        config: {
+          aspectRatio: aspectRatio === "1:1" ? "1:1" : "16:9"
+        }
       });
 
-      // This is a placeholder for the actual Veo API call structure
-      // which usually returns a task/operation ID that needs polling.
-      // Since specific Veo SDK details can vary, we'll implement a robust fallback or dummy for now
-      // or use the correct structure if known.
+      // ⏳ Poll the operation status until the video is ready
+      while (!operation.done) {
+        console.log(`⏳ Clip ${i + 1}: Waiting for video generation...`);
+        await new Promise((resolve) => setTimeout(resolve, 10000));
 
-      const filePath = path.join(tempDir, `clip_${String(i).padStart(3, "0")}.mp4`);
-      // Placeholder: Logic to download the video result
+        operation = await ai.operations.getVideosOperation({
+          operation: operation,
+        });
+      }
+
+      const clipFilename = `clip_${String(i).padStart(3, "0")}.mp4`;
+      const filePath = path.join(tempDir, clipFilename);
+
+      // 💾 Download the generated video
+      await ai.files.download({
+        file: operation.response.generatedVideos[0].video,
+        downloadPath: filePath
+      });
+
+      console.log(`✅ Clip ${i + 1} saved to ${filePath}`);
       results.push({ filePath, error: null });
+
     } catch (err) {
-      console.error(`❌ Video generation failed for clip ${i}:`, err.message);
+      console.error(`❌ Video generation failed for clip ${i + 1}:`, err.message);
       results.push({ filePath: null, error: err });
     }
   }
@@ -184,21 +197,25 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
     if (isVideo) {
       inputs += `-i "${item}" `;
       filter += `[${i}:v]setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=duration=${clipDuration}[v${i}]; `;
+      filter += `[${i}:a]volume=0.1,atrim=duration=${clipDuration},asetpts=PTS-STARTPTS[a${i}]; `;
     } else {
       inputs += `-loop 1 -t ${clipDuration} -i "${item}" `;
       filter += `[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[v${i}]; `;
+      filter += `anullsrc=r=44100:cl=stereo:d=${clipDuration}[a${i}]; `;
     }
   });
 
-  const concatFilter = mediaItems.map((_, i) => `[v${i}]`).join("") + `concat=n=${mediaItems.length}:v=1:a=0[outv]; [outv]subtitles='${escapedAssPath}'[finalv]`;
+  const concatFilter = mediaItems.map((_, i) => `[v${i}][a${i}]`).join("") + `concat=n=${mediaItems.length}:v=1:a=1[outv][outa]; `;
+  const mixingFilter = `[outa][${mediaItems.length}:a]amix=inputs=2:duration=first:dropout_transition=2[mixeda]; [outv]subtitles='${escapedAssPath}'[finalv]`;
 
   const cmd = [
     `ffmpeg -y`,
     inputs,
     `-i "${audioPath}"`,
-    `-filter_complex "${filter}${concatFilter}"`,
-    `-map "[finalv]" -map ${mediaItems.length}:a`,
-    `-c:v libx264 -crf 17 -preset slower -pix_fmt yuv420p -c:a copy -shortest`,
+    `-f lavfi -i anullsrc=r=44100:cl=stereo -t 0.1`, // Extra silent pad if needed
+    `-filter_complex "${filter}${concatFilter}${mixingFilter}"`,
+    `-map "[finalv]" -map "[mixeda]"`,
+    `-c:v libx264 -crf 17 -preset slower -pix_fmt yuv420p -c:a aac -b:a 192k -shortest`,
     `-t ${audioDuration}`,
     `"${outputPath}"`,
   ].join(" ");

@@ -46,12 +46,12 @@ async function downloadImage(url, filePath) {
 /* --------------------------------------------------
    GEMINI (IMAGEN) GENERATOR
 -------------------------------------------------- */
-async function generateWithImagen(prompt, index, tempDir) {
+async function generateWithImagen(prompt, index, tempDir, aspectRatio = "16:9") {
   fs.mkdirSync(tempDir, { recursive: true });
 
   const enhancedPrompt = `
 High quality, cinematic, ultra-detailed.
-Wide horizontal composition, 16:9 aspect ratio.
+${aspectRatio === "16:9" ? "Wide horizontal composition, 16:9 aspect ratio." : "Square composition, 1:1 aspect ratio."}
 ${prompt}
 `.trim();
 
@@ -60,7 +60,7 @@ ${prompt}
     prompt: enhancedPrompt,
     config: {
       numberOfImages: 1,
-      aspectRatio: "16:9",
+      aspectRatio: aspectRatio === "1:1" ? "1:1" : "16:9",
     },
   });
 
@@ -74,7 +74,7 @@ ${prompt}
   );
 
   fs.writeFileSync(filePath, buffer);
-  console.log("✅ Imagen success:", filePath);
+  console.log(`✅ Imagen success (${aspectRatio}):`, filePath);
 
   return filePath;
 }
@@ -82,14 +82,14 @@ ${prompt}
 /* --------------------------------------------------
    MIDJOURNEY GENERATOR
 -------------------------------------------------- */
-async function generateWithMidjourney(prompt, index, tempDir) {
+async function generateWithMidjourney(prompt, index, tempDir, aspectRatio = "16:9") {
   fs.mkdirSync(tempDir, { recursive: true });
 
   const payload = {
     taskType: "mj_txt2img",
     prompt: prompt,
     speed: "fast",
-    aspectRatio: "16:9",
+    aspectRatio: aspectRatio === "1:1" ? "1:1" : "16:9",
     version: "6.1",
     stylization: 200,
     chaos: 30,
@@ -166,7 +166,7 @@ async function generateWithMidjourney(prompt, index, tempDir) {
 /* --------------------------------------------------
    MAIN ORCHESTRATOR
 -------------------------------------------------- */
-export async function generateImage(prompt, index = 1, tempDir) {
+export async function generateImage(prompt, index = 1, tempDir, aspectRatio = "16:9") {
   let imageUrl = null;
   let imageError = null;
 
@@ -176,7 +176,7 @@ export async function generateImage(prompt, index = 1, tempDir) {
   for (let i = 1; i <= 3; i++) {
     try {
       console.log(`🌈 Gemini attempt ${i}/3`);
-      imageUrl = await generateWithImagen(safePrompt, index, tempDir);
+      imageUrl = await generateWithImagen(safePrompt, index, tempDir, aspectRatio);
       return { imageUrl, error: null };
     } catch (err) {
       console.error(`❌ Gemini attempt ${i} failed:`, err.message);
@@ -189,7 +189,7 @@ export async function generateImage(prompt, index = 1, tempDir) {
   for (let i = 1; i <= 3; i++) {
     try {
       console.log(`🎨 MidJourney attempt ${i}/3`);
-      imageUrl = await generateWithMidjourney(safePrompt, index, tempDir);
+      imageUrl = await generateWithMidjourney(safePrompt, index, tempDir, aspectRatio);
       return { imageUrl, error: null };
     } catch (err) {
       console.error(`❌ MidJourney attempt ${i} failed:`, err.message);
@@ -206,11 +206,11 @@ export async function generateImage(prompt, index = 1, tempDir) {
 /**
  * Generate multiple images for a set of prompts
  */
-export async function generateMultiImages(prompts, tempDir) {
+export async function generateMultiImages(prompts, tempDir, aspectRatio = "16:9") {
   const results = [];
   for (let i = 0; i < prompts.length; i++) {
     console.log(`🖼️ Generating image ${i + 1}/${prompts.length}...`);
-    const result = await generateImage(prompts[i], i + 1, tempDir);
+    const result = await generateImage(prompts[i], i + 1, tempDir, aspectRatio);
     results.push(result);
   }
   return results;
