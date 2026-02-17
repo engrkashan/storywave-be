@@ -24,20 +24,20 @@ export const mediaUpload = multer({
   storage: new CloudinaryStorage({
     cloudinary,
     params: (req, file) => {
-      let folder = "Ethbat/Media";
+      let folder = "Storywave/Media";
       let resource_type = "auto";
 
       if (file.mimetype.startsWith("image")) {
-        folder = "Ethbat/Images";
+        folder = "Storywave/Images";
         resource_type = "image";
       } else if (file.mimetype === "application/pdf") {
-        folder = "Ethbat/PDFs";
+        folder = "Storywave/PDFs";
       } else if (
         file.mimetype === "application/msword" ||
         file.mimetype ===
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
       ) {
-        folder = "Ethbat/Documents";
+        folder = "Storywave/Documents";
       }
 
       return {
