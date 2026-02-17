@@ -59,9 +59,9 @@ export async function extractStoryMetadata(storyText) {
 export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
   const { demographic, environment, physicality, anchor, texture } = metadata;
 
-  // [PROMPT 1: THE 1:1 ICONIC POSTER]
+  // [PROMPT 1: THE 9:16 ICONIC POSTER]
   const prompt1 = `
-    A high-impact 1:1 iconic poster featuring an extreme close-up (ECU) of the central character, focusing on the raw emotional peak.
+    A high-impact 9:16 iconic poster featuring an extreme close-up (ECU) of the central character, focusing on the raw emotional peak.
     Character Identity: ${demographic}. Features must be rendered with absolute accuracy to the narrative.
     Physical Action: ${physicality}.
     Shot Detail: 85mm lens compression, making the subject feel intimate and physically close. Every pore, bead of sweat, and individual hair is crisp and tactile with ${texture} texture.
@@ -83,4 +83,26 @@ export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
   `.trim();
 
   return { poster: prompt1, cinematic: prompt2 };
+}
+
+/**
+ * Generates 3 anchor prompts for the Character Bible
+ */
+export function generateCharacterBiblePrompts(demographic) {
+  const views = [
+    { name: "front", description: "Full front view, neutral expression, looking directly at camera." },
+    { name: "profile", description: "Profile view (side), looking away from camera." },
+    { name: "three_quarter", description: "3/4 view, cinematic lighting, looking slightly off-camera." }
+  ];
+
+  return views.map(view => {
+    return `
+      A professional studio character reference sheet: ${view.name} view.
+      Character Identity: ${demographic}.
+      Composition: ${view.description}.
+      Lighting: Balanced studio lighting, high contrast, every detail of features and skin texture clearly visible.
+      Aesthetic: Hyper-realistic, 8k, cinematic, ultra-detailed.
+      Constraint: No text, white or solid background for clean reference.
+    `.trim();
+  });
 }

@@ -31,6 +31,8 @@ export const createWorkflow = async (req, res) => {
       mediaType,
       imageCount,
       backgroundMusic,
+      aspectRatio,
+      dualPlatform,
     } = req.body;
 
     if (!userId) {
@@ -62,6 +64,8 @@ export const createWorkflow = async (req, res) => {
       mediaType,
       imageCount,
       backgroundMusic,
+      aspectRatio,
+      dualPlatform,
     };
 
     // 👉 PATH to worker file

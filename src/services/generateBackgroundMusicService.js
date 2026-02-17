@@ -124,14 +124,15 @@ export async function mixAudioWithBackground(voicePath, musicPath, outputPath) {
   const cmd = [
     `ffmpeg -y`,
     `-i "${voicePath}"`,
-    `-i "${musicPath}"`,
+    `-stream_loop -1 -i "${musicPath}"`,
     `-filter_complex "[1:a]volume=0.18,highpass=f=100,lowpass=f=8000[bg]; [0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]"`,
     `-map "[a]" -c:a libmp3lame -b:a 192k`,
+    `-shortest`, // Ensure it cuts off at the shortest input (voicePath)
     `"${outputPath}"`,
   ].join(" ");
 
   try {
-    console.log("[Audio Mix] Mixing voice + background music...");
+    console.log("[Audio Mix] Mixing voice + background music (looping)...");
     execSync(cmd, { stdio: "inherit" });
     console.log("[Audio Mix] Success →", outputPath);
   } catch (err) {

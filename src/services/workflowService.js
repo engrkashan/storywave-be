@@ -18,6 +18,7 @@ import {
   generateBackgroundMusic,
   mixAudioWithBackground,
 } from "./generateBackgroundMusicService.js";
+import { generateCharacterBible } from "./characterService.js";
 
 const TEMP_ROOT = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
@@ -89,6 +90,11 @@ export async function runScheduledWorkflows() {
       voiceTone: meta.voiceTone || null,
       storyLength: meta.storyLength || null,
       scheduledAt: null,
+      mediaType: meta.mediaType || "single_image",
+      imageCount: meta.imageCount || 5,
+      backgroundMusic: meta.backgroundMusic ?? true,
+      aspectRatio: meta.aspectRatio || "16:9",
+      dualPlatform: meta.dualPlatform || false,
       existingWorkflow: workflow,
     };
 
@@ -175,6 +181,7 @@ export async function runWorkflow({
   imageCount = 5,
   backgroundMusic = true,
   aspectRatio = "16:9", // Default to 16:9
+  dualPlatform = false,
 }) {
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
@@ -210,6 +217,7 @@ export async function runWorkflow({
           imageCount,
           backgroundMusic,
           aspectRatio,
+          dualPlatform,
         },
       },
     });
@@ -303,6 +311,16 @@ export async function runWorkflow({
       },
     });
 
+    // 2.2 Generate Character Bible for consistency
+    log("Step 2.2: Generating Character Bible (Anchor Images)...");
+    let characterAssets = [];
+    try {
+      characterAssets = await generateCharacterBible(workflow.id.toString(), storyMetadata.demographic, workflowTempDir);
+    } catch (err) {
+      log(`⚠️ Character Bible failed: ${err.message}`, "\x1b[31m");
+      await recordWorkflowWarning(workflow.id, "Character Bible", err);
+    }
+
     // 3. Generate voiceover (always) - pure voice (used for accurate subtitle timestamps)
     log("Step 3: Generating voiceover...");
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
@@ -357,60 +375,92 @@ export async function runWorkflow({
     if (shouldGenerateImage === true) {
       log(`Step 4: Handling ${mediaType} generation...`);
 
-      // 1. Generate Scenic Prompts if needed
-      let scenePrompts = [];
-      if (mediaType === "single_image") {
-        scenePrompts = [imagePrompt || script || "Cinematic storytelling scene"];
-      } else {
-        // Dynamic clip count: One clip every 5 seconds (to match Veo preview length), minimum 5 clips
-        const dynamicCount = Math.max(5, Math.ceil(actualAudioDuration / 5));
-        const count = mediaType === "multi_image" ? imageCount : dynamicCount;
-        log(`🎬 Target media count: ${count} (based on ${actualAudioDuration.toFixed(2)}s audio)`);
-        scenePrompts = await generateScenePrompts(script, count, storyMetadata);
-      }
+      const dualPlatform = workflow.metadata?.dualPlatform === true;
+      const ratiosToGenerate = dualPlatform ? ["16:9", "9:16"] : [aspectRatio];
 
-      // 2. Generate Media Items
-      let mediaItems = [];
-      if (mediaType === "video") {
-        const clips = await generateVideoClips(scenePrompts, workflowTempDir, aspectRatio);
-        mediaItems = clips.filter(c => c.filePath).map(c => c.filePath);
-      } else if (mediaType === "multi_image") {
-        const images = await generateMultiImages(scenePrompts, workflowTempDir, aspectRatio);
-        mediaItems = images.filter(img => img.imageUrl).map(img => img.imageUrl);
-      } else {
-        const imageResult = await generateImage(scenePrompts[0], 1, workflowTempDir, aspectRatio);
-        if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
-      }
+      log(`Generating for ratios: ${ratiosToGenerate.join(", ")}`);
 
-      // 3. Create Video if media exist
-      if (mediaItems.length > 0) {
-        log("Step 5: Generating subtitles and stitching video...");
-        const srtContent = await transcribeWithTimestamps(voiceLocalPath);
-        const srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);
-        fs.writeFileSync(srtPath, srtContent);
+      const srtContent = await transcribeWithTimestamps(voiceLocalPath);
+      const srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);
+      fs.writeFileSync(srtPath, srtContent);
 
-        const videoFilename = `${workflow.id}-${Date.now()}.mp4`;
-        const videoPath = path.join(workflowTempDir, videoFilename);
+      const videoResults = {};
 
-        if (mediaItems.length === 1 && mediaType === "single_image") {
-          await createVideo(mediaItems[0], finalAudioLocalPath, videoPath, srtPath);
+      for (const currentRatio of ratiosToGenerate) {
+        log(`🎬 Processing ratio: ${currentRatio}`);
+        const ratioDir = path.join(workflowTempDir, currentRatio.replace(":", "_"));
+        fs.mkdirSync(ratioDir, { recursive: true });
+
+        // 1. Generate Scenic Prompts
+        let scenePrompts = [];
+        if (mediaType === "single_image") {
+          scenePrompts = [imagePrompt || script || "Cinematic storytelling scene"];
         } else {
-          await createMultiMediaVideo(mediaItems, finalAudioLocalPath, videoPath, srtPath);
+          const dynamicCount = Math.max(5, Math.ceil(actualAudioDuration / 5));
+          const count = mediaType === "multi_image" ? imageCount : dynamicCount;
+          scenePrompts = await generateScenePrompts(script, count, storyMetadata);
         }
 
-        videoURL = await uploadVideoToCloud(videoPath, videoFilename);
+        // 2. Generate Media Items for this ratio
+        let mediaItems = [];
+        if (mediaType === "video") {
+          const clips = await generateVideoClips(scenePrompts, ratioDir, currentRatio, characterAssets);
+          mediaItems = clips.filter(c => c.filePath).map(c => c.filePath);
+        } else if (mediaType === "multi_image") {
+          const images = await generateMultiImages(scenePrompts, ratioDir, currentRatio);
+          mediaItems = images.filter(img => img.imageUrl).map(img => img.imageUrl);
+        } else {
+          const imageResult = await generateImage(scenePrompts[0], 1, ratioDir, currentRatio);
+          if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
+        }
+
+        // 3. Create Video for this ratio
+        if (mediaItems.length > 0) {
+          log(`Step 5: Stitching video for ${currentRatio}...`);
+          const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
+          const videoPath = path.join(workflowTempDir, videoFilename);
+
+          if (mediaItems.length === 1 && mediaType === "single_image") {
+            await createVideo(mediaItems[0], finalAudioLocalPath, videoPath, srtPath, currentRatio);
+          } else {
+            await createMultiMediaVideo(mediaItems, finalAudioLocalPath, videoPath, srtPath, currentRatio);
+          }
+
+          const currentVideoURL = await uploadVideoToCloud(videoPath, videoFilename);
+          videoResults[currentRatio] = { url: currentVideoURL, items: mediaItems };
+
+          if (!videoURL) videoURL = currentVideoURL; // Set primary for backward compatibility
+          if (mediaUrls.length === 0) mediaUrls = mediaItems;
+        }
+      }
+
+      if (Object.keys(videoResults).length > 0) {
+        const primaryVideo = videoResults[aspectRatio] || Object.values(videoResults)[0];
+        videoURL = primaryVideo.url;
+        mediaUrls = primaryVideo.items;
 
         const videoRecord = await prisma.video.create({
-          data: { title, fileURL: videoURL, userId },
+          data: {
+            title: dualPlatform ? `${title} (Dual Version)` : title,
+            fileURL: videoURL, // Fallback/Main
+            video_16_9: videoResults["16:9"]?.url,
+            video_9_16: videoResults["9:16"]?.url,
+            userId
+          },
         });
 
         await prisma.workflow.update({
           where: { id: workflow.id },
-          data: { videoId: videoRecord.id },
+          data: {
+            videoId: videoRecord.id,
+            metadata: {
+              ...(workflow.metadata || {}),
+              dualPlatform,
+            }
+          },
         });
 
         isPodcast = false;
-        mediaUrls = mediaItems;
       } else {
         log("⚠️ Media generation failed → creating as podcast", "\x1b[33m");
         isPodcast = true;

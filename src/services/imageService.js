@@ -51,7 +51,7 @@ async function generateWithImagen(prompt, index, tempDir, aspectRatio = "16:9") 
 
   const enhancedPrompt = `
 High quality, cinematic, ultra-detailed.
-${aspectRatio === "16:9" ? "Wide horizontal composition, 16:9 aspect ratio." : "Square composition, 1:1 aspect ratio."}
+${aspectRatio === "16:9" ? "Wide horizontal composition, 16:9 aspect ratio." : "Portrait vertical composition, 9:16 aspect ratio."}
 ${prompt}
 `.trim();
 
@@ -60,7 +60,7 @@ ${prompt}
     prompt: enhancedPrompt,
     config: {
       numberOfImages: 1,
-      aspectRatio: aspectRatio === "1:1" ? "1:1" : "16:9",
+      aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9",
     },
   });
 
@@ -89,7 +89,7 @@ async function generateWithMidjourney(prompt, index, tempDir, aspectRatio = "16:
     taskType: "mj_txt2img",
     prompt: prompt,
     speed: "fast",
-    aspectRatio: aspectRatio === "1:1" ? "1:1" : "16:9",
+    aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9",
     version: "6.1",
     stylization: 200,
     chaos: 30,

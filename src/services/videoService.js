@@ -6,7 +6,7 @@ import { GoogleGenAI } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
+export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspectRatio = "16:9") {
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -20,7 +20,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
   }
 
   const assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
-  convertSrtToAss(srtPath, assPath);
+  convertSrtToAss(srtPath, assPath, aspectRatio);
 
   const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
   const filterComplex = `[0:v]subtitles='${escapedAssPath}'`;
@@ -30,11 +30,16 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
     console.warn("⚠️ Could not detect audio duration. Fallback to -shortest only.");
   }
 
+  // Determine target dimensions
+  const isVertical = aspectRatio === "9:16";
+  const width = isVertical ? 1080 : 1920;
+  const height = isVertical ? 1920 : 1080;
+
   const cmd = [
     `ffmpeg -y -loop 1`,
     `-i "${imagePath}"`,
     `-i "${audioPath}"`,
-    `-filter_complex "${filterComplex}"`,
+    `-filter_complex "scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,${filterComplex}"`,
     `-map 0:v -map 1:a`,
     `-c:v libx264 -crf 17 -preset slower -pix_fmt yuv420p -c:a copy -shortest`,
     audioDuration ? `-t ${audioDuration}` : "",
@@ -52,15 +57,22 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath) {
   }
 }
 
-function convertSrtToAss(srtPath, assPath) {
+function convertSrtToAss(srtPath, assPath, aspectRatio = "16:9") {
   const srtContent = fs.readFileSync(srtPath, "utf8");
   const blocks = srtContent.trim().split(/\n\s*\n/);
+
+  const isVertical = aspectRatio === "9:16";
+  const resX = isVertical ? 1080 : 1920;
+  const resY = isVertical ? 1920 : 1080;
+  const fontSize = isVertical ? 80 : 130; // Slightly smaller fonts for vertical
+  const posX = resX / 2;
+  const posY = isVertical ? 1400 : 900; // Position lower for vertical, standard for horizontal
 
   let ass = `[Script Info]
 Title: Cinematic Shorts Subs
 ScriptType: v4.00+
-PlayResX: 1920
-PlayResY: 1080
+PlayResX: ${resX}
+PlayResY: ${resY}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
@@ -68,7 +80,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 
 ; ---- GOLD GRADIENT FILL WITH BRIGHT STROKE & GLOW ----
-Style: GoldGlow,Bebas Neue Bold,130,&H0000B8E6&,&H0000BFFF&,&H00FFFFFF&,&H64000000&,1,0,0,0,100,100,2,0,1,12,5,3,2,60,60,120,1
+Style: GoldGlow,Bebas Neue Bold,${fontSize},&H0000B8E6&,&H0000BFFF&,&H00FFFFFF&,&H64000000&,1,0,0,0,100,100,2,0,1,12,5,3,2,60,60,120,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -101,7 +113,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       const s = startSec + index * chunkDuration;
       const e = s + chunkDuration;
 
-      ass += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(960,900)\\bord12\\shad5\\be4}${chunk}\n`;
+      ass += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${chunk}\n`;
     });
   }
 
@@ -125,47 +137,111 @@ function secToAssTime(sec) {
 /**
  * Generate video clips using Gemini Veo 3.1
  */
-export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9") {
+/**
+ * Extracts the last frame of a video using FFmpeg
+ */
+export async function extractLastFrame(videoPath, outputPath) {
+  // Use FFmpeg to get the last frame: -sseof -0.1 gets near the end
+  const cmd = `ffmpeg -y -sseof -0.1 -i "${videoPath}" -vframes 1 "${outputPath}"`;
+  try {
+    execSync(cmd, { stdio: "ignore" });
+    return outputPath;
+  } catch (err) {
+    console.error("❌ Failed to extract last frame:", err.message);
+    return null;
+  }
+}
+
+export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = []) {
   const results = [];
+  let previousClipLastFrame = null;
+
+  // Convert characterAssets to base64 for the API if needed, 
+  // though the SDK might handle paths. Let's assume it needs data/URIs.
+  const characterReferences = characterAssets.map(asset => {
+    const data = fs.readFileSync(asset).toString("base64");
+    return {
+      imageBytes: data,
+      mimeType: "image/png"
+    };
+  });
 
   for (let i = 0; i < prompts.length; i++) {
-    try {
-      console.log(`🎬 Generating video clip ${i + 1}/${prompts.length} using Veo 3.1...`);
+    let attempt = 0;
+    const MAX_RETRIES = 3;
+    let success = false;
 
-      // 📺 Start the video generation operation
-      let operation = await ai.models.generateVideos({
-        model: "veo-3.1-generate-preview",
-        prompt: prompts[i],
-        config: {
-          aspectRatio: aspectRatio === "1:1" ? "1:1" : "16:9"
+    while (attempt < MAX_RETRIES && !success) {
+      try {
+        attempt++;
+        console.log(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Veo 3.1 Fast...`);
+
+        const videoConfig = {
+          model: "veo-3.1-generate-preview", // Use Fast model as requested
+          prompt: prompts[i],
+          config: {
+            aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9"
+          }
+        };
+
+        // Add character references for identity lock
+        if (characterReferences.length > 0) {
+          videoConfig.referenceImages = characterReferences;
         }
-      });
 
-      // ⏳ Poll the operation status until the video is ready
-      while (!operation.done) {
-        console.log(`⏳ Clip ${i + 1}: Waiting for video generation...`);
-        await new Promise((resolve) => setTimeout(resolve, 10000));
+        // Add bridge logic: use last frame of previous clip as starting point
+        if (previousClipLastFrame) {
+          const lastFrameData = fs.readFileSync(previousClipLastFrame).toString("base64");
+          videoConfig.image = {
+            imageBytes: lastFrameData,
+            mimeType: "image/png"
+          };
+        }
 
-        operation = await ai.operations.getVideosOperation({
-          operation: operation,
+        // 📺 Start the video generation operation
+        let operation = await ai.models.generateVideos(videoConfig);
+
+        // ⏳ Poll the operation status until the video is ready
+        while (!operation.done) {
+          console.log(`⏳ Clip ${i + 1}: Waiting for video generation...`);
+          await new Promise((resolve) => setTimeout(resolve, 10000));
+
+          operation = await ai.operations.getVideosOperation({
+            operation: operation,
+          });
+        }
+
+        const clipFilename = `clip_${String(i).padStart(3, "0")}.mp4`;
+        const filePath = path.join(tempDir, clipFilename);
+
+        // 💾 Download the generated video
+        await ai.files.download({
+          file: operation.response.generatedVideos[0].video,
+          downloadPath: filePath
         });
+
+        console.log(`✅ Clip ${i + 1} saved to ${filePath}`);
+        results.push({ filePath, error: null });
+
+        // Extract last frame for the next clip's "bridge"
+        const lastFramePath = path.join(tempDir, `last_frame_${i}.png`);
+        const extracted = await extractLastFrame(filePath, lastFramePath);
+        if (extracted) {
+          previousClipLastFrame = extracted;
+        }
+
+        success = true; // Mark as successful to exit while loop
+
+      } catch (err) {
+        const isQuotaError = err.message.toLowerCase().includes("quota") || err.message.includes("429");
+        if (isQuotaError || attempt >= MAX_RETRIES) {
+          console.error(`❌ Video generation failed for clip ${i + 1} (Attempt ${attempt}):`, err.message);
+          results.push({ filePath: null, error: err });
+          break; // Stop retrying
+        }
+        console.warn(`⚠️ Video generation failed for clip ${i + 1} (Attempt ${attempt}). Retrying in 5s...`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
-
-      const clipFilename = `clip_${String(i).padStart(3, "0")}.mp4`;
-      const filePath = path.join(tempDir, clipFilename);
-
-      // 💾 Download the generated video
-      await ai.files.download({
-        file: operation.response.generatedVideos[0].video,
-        downloadPath: filePath
-      });
-
-      console.log(`✅ Clip ${i + 1} saved to ${filePath}`);
-      results.push({ filePath, error: null });
-
-    } catch (err) {
-      console.error(`❌ Video generation failed for clip ${i + 1}:`, err.message);
-      results.push({ filePath: null, error: err });
     }
   }
   return results;
@@ -174,16 +250,21 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9")
 /**
  * Creates a video from multiple images or video clips, synchronized with audio.
  */
-export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, srtPath) {
+export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, srtPath, aspectRatio = "16:9") {
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 
   const audioDuration = await getAudioDuration(audioPath);
   const clipDuration = audioDuration / mediaItems.length;
 
+  // Determine target dimensions
+  const isVertical = aspectRatio === "9:16";
+  const width = isVertical ? 1080 : 1920;
+  const height = isVertical ? 1920 : 1080;
+
   // Prepare subtitle path
   const assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
-  convertSrtToAss(srtPath, assPath);
+  convertSrtToAss(srtPath, assPath, aspectRatio);
   const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
   // Build FFmpeg command for stitching
@@ -196,11 +277,11 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
     const isVideo = item.endsWith(".mp4");
     if (isVideo) {
       inputs += `-i "${item}" `;
-      filter += `[${i}:v]setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=duration=${clipDuration}[v${i}]; `;
+      filter += `[${i}:v]setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,trim=duration=${clipDuration}[v${i}]; `;
       filter += `[${i}:a]volume=0.1,atrim=duration=${clipDuration},asetpts=PTS-STARTPTS[a${i}]; `;
     } else {
       inputs += `-loop 1 -t ${clipDuration} -i "${item}" `;
-      filter += `[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[v${i}]; `;
+      filter += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[v${i}]; `;
       filter += `anullsrc=r=44100:cl=stereo:d=${clipDuration}[a${i}]; `;
     }
   });

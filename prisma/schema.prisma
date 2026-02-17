@@ -112,11 +112,13 @@ model Story {
 }
 
 model Video {
-  id        String  @id @default(auto()) @map("_id") @db.ObjectId
-  title     String
-  fileURL   String?
-  duration  Int?
-  subtitles String?
+  id         String  @id @default(auto()) @map("_id") @db.ObjectId
+  title      String
+  video_16_9 String?
+  video_9_16 String?
+  fileURL    String?
+  duration   Int?
+  subtitles  String?
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String @db.ObjectId

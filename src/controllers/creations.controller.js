@@ -41,6 +41,8 @@ export const getMyCreations = async (req, res) => {
           ? {
             id: w.video.id,
             url: w.video.fileURL || null,
+            video_16_9: w.video.video_16_9 || null,
+            video_9_16: w.video.video_9_16 || null,
             duration: w.video.duration || null,
             subtitles: w.video.subtitles || null,
           }
