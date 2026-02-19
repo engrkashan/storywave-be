@@ -186,7 +186,7 @@ export async function runWorkflow({
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
   const isScheduled = scheduledUTC && new Date(scheduledUTC) > new Date(nowUTC);
-
+  console.log("DP", dualPlatform);
   log(
     isScheduled
       ? `🕒 Scheduled workflow: "${title}" for ${scheduledAt}`
@@ -381,7 +381,7 @@ export async function runWorkflow({
     if (shouldGenerateImage === true) {
       log(`Step 4: Handling ${mediaType} generation...`);
 
-      const dualPlatform = workflow.metadata?.dualPlatform === true || dualPlatform === true;
+      // const dualPlatform = workflow.metadata?.dualPlatform === true || dualPlatform === true;
       const ratiosToGenerate = dualPlatform ? ["16:9", "9:16"] : [aspectRatio];
 
       log(`Generating for ratios: ${ratiosToGenerate.join(", ")} (Dual: ${dualPlatform})`);
