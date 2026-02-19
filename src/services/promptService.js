@@ -69,6 +69,7 @@ export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
     Lighting: Intense cinematic "Key Lighting" that casts deep, dramatic shadows, highlighting the contours of the face.
     Typography: Bold, stylized 3D typography for the title "${title}" is placed with a "shallow depth of field," allowing it to sit naturally within the scene's atmosphere. STRICT RULE: Use the title exactly as provided.
     Aesthetic: Hyper-saturated colors reflecting the specific mood of the written narrative.
+    Cinematic Effects: [VIBRATE] for high-frequency kinetic energy and visual intensity. [PULSATE] for rhythmic shifts in ambient atmosphere and lighting.
   `.trim();
 
   // [PROMPT 2: THE 16:9 CINEMATIC WIDE-CLOSE]
@@ -79,6 +80,7 @@ export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
     Environmental Storytelling: ${environment}. Detailed, hyper-realistic. Every light source and reflection must be grounded in the world.
     Aesthetic: High-saturation color grading with "Anamorphic" lens flares and heavy "Bokeh" (background blur).
     Technical: Hyper-realistic textures with electric luminescence and ray-traced reflections. Feeling of a high-budget film still.
+    Cinematic Effects: Integrate "VIBRATE" and "PULSATE" keywords to trigger dynamic motion and rhythmic atmosphere.
     Constraint: STRICTLY NO TEXT, words, or letters.
   `.trim();
 

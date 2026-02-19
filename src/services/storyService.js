@@ -480,6 +480,7 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
     - Textures: ${texture}
     
     Technical: All scenes must be cinematic "Medium-Close" or "Wide-Close" shots. 8k, HDR, ray-traced reflections. NO TEXT.
+    Cinematic Effects: [VIBRATE] for high-frequency kinetic energy and visual intensity. [PULSATE] for rhythmic shifts in ambient atmosphere and lighting.
     `.trim();
   }
 

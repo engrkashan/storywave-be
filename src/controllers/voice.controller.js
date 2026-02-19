@@ -80,6 +80,16 @@ const FISH_VOICE_IDS = [
     "a50ea00b1bef4a12a3f670a0ca75b695",
     "93963d9a417b492387a10dbdade8c644",
     "5b36b8232b054f958e00a2b707b30e32",
+    "c64a9003acb44737ae2a2d548c772b91",
+    "1127a2a0c8574b75a20d1f8dae12c1b9",
+    "6b4dad5d33a94ba183d1e8de39ab2b04",
+    "dd3ac663d3af48bb8e7a6ee8c4aae580",
+    "18639abef86e406bbeab6e8a514b4903",
+    "0c55ceb51fca40319d40eb148bc6d3ce",
+    "ff431c2c73444b468747bae5946d3beb",
+    "245d0399e807472ba1ffc514a6466dd9",
+    "f547497123684d1b8f9f23ebbc915015",
+    "6849bbc1ba9148e393679912a8f5e35d",
 ];
 
 /**
