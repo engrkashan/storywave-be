@@ -186,7 +186,6 @@ export async function runWorkflow({
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
   const isScheduled = scheduledUTC && new Date(scheduledUTC) > new Date(nowUTC);
-  console.log("DP", dualPlatform);
   log(
     isScheduled
       ? `🕒 Scheduled workflow: "${title}" for ${scheduledAt}`
