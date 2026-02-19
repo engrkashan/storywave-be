@@ -311,14 +311,20 @@ export async function runWorkflow({
       },
     });
 
-    // 2.2 Generate Character Bible for consistency
-    log("Step 2.2: Generating Character Bible (Anchor Images)...");
+    // 2.2 Generate Character Bible for consistency (Only if video media and character exists)
+    const hasCharacter = script.toLowerCase().includes("character:") || script.toLowerCase().includes("protagonist:") || storyMetadata.demographic?.toLowerCase().includes("person") || storyMetadata.demographic?.toLowerCase().includes("man") || storyMetadata.demographic?.toLowerCase().includes("woman");
+
     let characterAssets = [];
-    try {
-      characterAssets = await generateCharacterBible(workflow.id.toString(), storyMetadata.demographic, workflowTempDir);
-    } catch (err) {
-      log(`⚠️ Character Bible failed: ${err.message}`, "\x1b[31m");
-      await recordWorkflowWarning(workflow.id, "Character Bible", err);
+    if (mediaType === "video" && hasCharacter) {
+      log("Step 2.2: Generating Character Bible (Anchor Images)...");
+      try {
+        characterAssets = await generateCharacterBible(workflow.id.toString(), storyMetadata.demographic, workflowTempDir);
+      } catch (err) {
+        log(`⚠️ Character Bible failed: ${err.message}`, "\x1b[31m");
+        await recordWorkflowWarning(workflow.id, "Character Bible", err);
+      }
+    } else {
+      log("Step 2.2: Skipping Character Bible (Criteria not met).");
     }
 
     // 3. Generate voiceover (always) - pure voice (used for accurate subtitle timestamps)
@@ -375,10 +381,10 @@ export async function runWorkflow({
     if (shouldGenerateImage === true) {
       log(`Step 4: Handling ${mediaType} generation...`);
 
-      const dualPlatform = workflow.metadata?.dualPlatform === true;
+      const dualPlatform = workflow.metadata?.dualPlatform === true || dualPlatform === true;
       const ratiosToGenerate = dualPlatform ? ["16:9", "9:16"] : [aspectRatio];
 
-      log(`Generating for ratios: ${ratiosToGenerate.join(", ")}`);
+      log(`Generating for ratios: ${ratiosToGenerate.join(", ")} (Dual: ${dualPlatform})`);
 
       const srtContent = await transcribeWithTimestamps(voiceLocalPath);
       const srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);

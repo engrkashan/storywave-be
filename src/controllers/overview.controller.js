@@ -40,7 +40,11 @@ export const getOverview = async (req, res) => {
           },
         },
         video: {
-          select: { fileURL: true },
+          select: {
+            fileURL: true,
+            video_16_9: true,
+            video_9_16: true,
+          },
         },
         user: {
           select: {
@@ -67,7 +71,11 @@ export const getOverview = async (req, res) => {
         name: w.user?.fullName,
         role: w.user?.role,
       },
-      video: w.video ? { url: w.video.fileURL } : null,
+      video: w.video ? {
+        url: w.video.fileURL,
+        video_16_9: w.video.video_16_9,
+        video_9_16: w.video.video_9_16,
+      } : null,
     }));
 
     return res.status(200).json({
@@ -152,6 +160,8 @@ export const getWorkflowById = async (req, res) => {
           id: workflow.video.id,
           title: workflow.video.title,
           fileURL: workflow.video.fileURL,
+          video_16_9: workflow.video.video_16_9,
+          video_9_16: workflow.video.video_9_16,
           subtitles: workflow.video.subtitles,
         }
         : null,

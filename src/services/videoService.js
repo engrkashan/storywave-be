@@ -255,7 +255,15 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 
   const audioDuration = await getAudioDuration(audioPath);
-  const clipDuration = audioDuration / mediaItems.length;
+
+  // Transition settings
+  const transitionDuration = mediaItems.length > 1 ? 1 : 0; // 1 second transition
+  const transitionType = "pixelize";
+
+  // Calculate effective duration for each clip to account for overlaps
+  // Formula: TotalDuration = (ClipDuration * N) - (TransitionDuration * (N - 1))
+  // => ClipDuration = (TotalDuration + TransitionDuration * (N - 1)) / N
+  const clipDuration = (audioDuration + (transitionDuration * (mediaItems.length - 1))) / mediaItems.length;
 
   // Determine target dimensions
   const isVertical = aspectRatio === "9:16";
@@ -267,42 +275,51 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   convertSrtToAss(srtPath, assPath, aspectRatio);
   const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
-  // Build FFmpeg command for stitching
-  // We'll use the 'concat' or 'filter_complex' to ensure perfect transitions
-
   let inputs = "";
   let filter = "";
 
+  // 1. Prepare each input (scale, crop, fps, etc.)
   mediaItems.forEach((item, i) => {
     const isVideo = item.endsWith(".mp4");
     if (isVideo) {
       inputs += `-i "${item}" `;
-      filter += `[${i}:v]setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,trim=duration=${clipDuration}[v${i}]; `;
-      filter += `[${i}:a]volume=0.1,atrim=duration=${clipDuration},asetpts=PTS-STARTPTS[a${i}]; `;
+      filter += `[${i}:v]setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,fps=30,trim=duration=${clipDuration}[v${i}]; `;
     } else {
       inputs += `-loop 1 -t ${clipDuration} -i "${item}" `;
-      filter += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[v${i}]; `;
-      filter += `anullsrc=r=44100:cl=stereo:d=${clipDuration}[a${i}]; `;
+      filter += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,fps=30[v${i}]; `;
     }
   });
 
-  const concatFilter = mediaItems.map((_, i) => `[v${i}][a${i}]`).join("") + `concat=n=${mediaItems.length}:v=1:a=1[outv][outa]; `;
-  const mixingFilter = `[outa][${mediaItems.length}:a]amix=inputs=2:duration=first:dropout_transition=2[mixeda]; [outv]subtitles='${escapedAssPath}'[finalv]`;
+  // 2. Chain xfade filters
+  let lastOutput = "v0";
+  if (mediaItems.length > 1) {
+    for (let i = 1; i < mediaItems.length; i++) {
+      const nextOutput = `vt${i}`;
+      const offset = i * (clipDuration - transitionDuration);
+      filter += `[${lastOutput}][v${i}]xfade=transition=${transitionType}:duration=${transitionDuration}:offset=${offset}[${nextOutput}]; `;
+      lastOutput = nextOutput;
+    }
+  }
+
+  // 3. Final overlay (Subtitles) and Audio mixing
+  const finalVideoLabel = lastOutput;
+  // Note: We amix the generated video audio (if any) with the main narration audioPath
+  // But usually, images have no audio, so we mainly care about the subtitles and audioPath
+  const mixingFilter = `[${finalVideoLabel}]subtitles='${escapedAssPath}'[finalv]`;
 
   const cmd = [
     `ffmpeg -y`,
     inputs,
     `-i "${audioPath}"`,
-    `-f lavfi -i anullsrc=r=44100:cl=stereo -t 0.1`, // Extra silent pad if needed
-    `-filter_complex "${filter}${concatFilter}${mixingFilter}"`,
-    `-map "[finalv]" -map "[mixeda]"`,
+    `-filter_complex "${filter}${mixingFilter}"`,
+    `-map "[finalv]" -map ${mediaItems.length}:a`,
     `-c:v libx264 -crf 17 -preset slower -pix_fmt yuv420p -c:a aac -b:a 192k -shortest`,
     `-t ${audioDuration}`,
     `"${outputPath}"`,
   ].join(" ");
 
   try {
-    console.log("🎬 Stitching video...");
+    console.log(`🎬 Stitching video with ${transitionType} transitions...`);
     execSync(cmd, { stdio: "inherit" });
   } catch (err) {
     console.error("FFmpeg Error:", err.message);
@@ -315,3 +332,87 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
 function pad(n) {
   return n.toString().padStart(2, "0");
 }
+
+
+// /* --------------------------------------------------
+//    VEO VIDEO FALLBACK CHAIN
+// -------------------------------------------------- */
+// const VEO_MODELS = {
+//   PREMIUM: "veo-3.1-generate-001",      // High fidelity, 4K capable
+//   FAST: "veo-3.1-fast-generate-001",    // Optimized for speed/lower quota impact
+//   STABLE_OLD: "veo-2.0-generate-001"    // Ultimate fallback (Veo 2.0)
+// };
+
+// export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = []) {
+//   const results = [];
+//   let previousClipLastFrame = null;
+
+//   const characterReferences = characterAssets.map(asset => ({
+//     imageBytes: fs.readFileSync(asset).toString("base64"),
+//     mimeType: "image/png"
+//   }));
+
+//   for (let i = 0; i < prompts.length; i++) {
+//     let success = false;
+//     const modelChain = [VEO_MODELS.PREMIUM, VEO_MODELS.FAST, VEO_MODELS.STABLE_OLD];
+
+//     for (const modelId of modelChain) {
+//       if (success) break;
+
+//       try {
+//         console.log(`🎬 Attempting Clip ${i + 1} with ${modelId}...`);
+
+//         const videoConfig = {
+//           model: modelId,
+//           prompt: prompts[i],
+//           config: {
+//             aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9",
+//             // Native audio generation is supported in 3.1 models
+//             audio: modelId.includes("3.1") 
+//           }
+//         };
+
+//         if (characterReferences.length > 0) videoConfig.referenceImages = characterReferences;
+        
+//         // Continuity: Use last frame of previous clip
+//         if (previousClipLastFrame) {
+//           videoConfig.image = {
+//             imageBytes: fs.readFileSync(previousClipLastFrame).toString("base64"),
+//             mimeType: "image/png"
+//           };
+//         }
+
+//         let operation = await ai.models.generateVideos(videoConfig);
+
+//         // Polling logic
+//         while (!operation.done) {
+//           await new Promise(r => setTimeout(r, 10000));
+//           operation = await ai.operations.getVideosOperation({ operation });
+//         }
+
+//         const filePath = path.join(tempDir, `clip_${String(i).padStart(3, "0")}.mp4`);
+//         await ai.files.download({
+//           file: operation.response.generatedVideos[0].video,
+//           downloadPath: filePath
+//         });
+
+//         // Continuity check: Extract frame for next loop
+//         const lastFramePath = path.join(tempDir, `last_frame_${i}.png`);
+//         previousClipLastFrame = await extractLastFrame(filePath, lastFramePath);
+
+//         console.log(`✅ Clip ${i + 1} success (${modelId})`);
+//         results.push({ filePath, error: null });
+//         success = true;
+
+//       } catch (err) {
+//         if (err.status === 429 || err.message.includes("quota")) {
+//           console.warn(`⚠️ ${modelId} Quota reached. Falling back...`);
+//           continue; // Try next model in chain
+//         }
+//         // If it's a prompt block, you might want to return an error or try a safer prompt
+//         throw err; 
+//       }
+//     }
+//   }
+//   return results;
+// }

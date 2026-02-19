@@ -185,6 +185,7 @@ export const getStories = async (req, res) => {
       include: {
         Workflow: {
           include: {
+            video: true,
             media: {
               where: {
                 type: "VIDEO",
@@ -208,6 +209,12 @@ export const getStories = async (req, res) => {
       title: story.title,
       createdAt: story.createdAt,
       media: story.Workflow.flatMap((wf) => wf.media || []),
+      videos: story.Workflow.filter(wf => wf.video).map(wf => ({
+        id: wf.video.id,
+        url: wf.video.fileURL,
+        video_16_9: wf.video.video_16_9,
+        video_9_16: wf.video.video_9_16,
+      })),
     }));
 
     return res.status(200).json(result);
@@ -227,6 +234,7 @@ export const getStoryById = async (req, res) => {
       include: {
         Workflow: {
           include: {
+            video: true,
             media: {
               where: {
                 type: "VIDEO",
@@ -255,6 +263,12 @@ export const getStoryById = async (req, res) => {
       title: story.title,
       createdAt: story.createdAt,
       media,
+      videos: story.Workflow.filter(wf => wf.video).map(wf => ({
+        id: wf.video.id,
+        url: wf.video.fileURL,
+        video_16_9: wf.video.video_16_9,
+        video_9_16: wf.video.video_9_16,
+      })),
     });
   } catch (error) {
     console.error("Get Story Error:", error);

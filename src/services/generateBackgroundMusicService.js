@@ -93,14 +93,15 @@ export async function generateBackgroundMusic({ title, storyType, tempDir }) {
       }
     }
 
-    if (!audioUrl) {
-      throw new Error("No audio URL received after successful generation");
+    if (!audioUrl || !audioUrl.startsWith("http")) {
+      console.log("Invalid audioUrl:", audioUrl);
+      throw new Error("Invalid or missing audio URL");
     }
 
     // Step 3: Download the music file
     const musicFilename = `bg-music-${Date.now()}.mp3`;
     const musicPath = path.join(tempDir, musicFilename);
-
+    console.log("Downloading music from:", audioUrl);
     const downloadRes = await axios.get(audioUrl, {
       responseType: "arraybuffer",
     });
@@ -125,12 +126,13 @@ export async function mixAudioWithBackground(voicePath, musicPath, outputPath) {
     `ffmpeg -y`,
     `-i "${voicePath}"`,
     `-stream_loop -1 -i "${musicPath}"`,
-    `-filter_complex "[1:a]volume=0.01,highpass=f=100,lowpass=f=8000[bg]; [0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]"`,
+    `-filter_complex "[1:a]volume=0.2[bg]; [bg][0:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=200[ducked]; [0:a][ducked]amix=inputs=2:duration=first[a]"`,
     `-map "[a]" -c:a libmp3lame -b:a 192k`,
     `-shortest`, // Ensure it cuts off at the shortest input (voicePath)
     `"${outputPath}"`,
   ].join(" ");
 
+  // `-filter_complex "[1:a]volume=0.2,highpass=f=100,lowpass=f=8000[bg]; [0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]"`,
   try {
     console.log("[Audio Mix] Mixing voice + background music (looping)...");
     execSync(cmd, { stdio: "inherit" });

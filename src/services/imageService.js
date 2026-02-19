@@ -43,45 +43,130 @@ async function downloadImage(url, filePath) {
   fs.writeFileSync(filePath, buffer);
 }
 
+
 /* --------------------------------------------------
-   GEMINI (IMAGEN) GENERATOR
+   TIERED MODEL STRATEGY
 -------------------------------------------------- */
+const MODELS = {
+  PREMIUM: "gemini-3-pro-image-preview", // Nano Banana Pro (Best for complex story scenes)
+  FAST: "imagen-4.0-fast-generate-001",   // Fast Imagen 4 (Different quota bucket)
+  STABLE: "gemini-2.5-flash-image",       // Nano Banana (Most reliable fallback)
+};
+
 async function generateWithImagen(prompt, index, tempDir, aspectRatio = "16:9") {
   fs.mkdirSync(tempDir, { recursive: true });
 
-  const enhancedPrompt = `
-High quality, cinematic, ultra-detailed.
-${aspectRatio === "16:9" ? "Wide horizontal composition, 16:9 aspect ratio." : "Portrait vertical composition, 9:16 aspect ratio."}
-${prompt}
-`.trim();
+  const enhancedPrompt = `High quality story illustration, cinematic lighting: ${prompt}`;
 
-  const response = await ai.models.generateImages({
-    model: "imagen-4.0-generate-001",
-    prompt: enhancedPrompt,
-    config: {
-      numberOfImages: 1,
-      aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9",
-    },
-  });
+  // Array of models to try in order if a Quota (429) or 404 is hit
+  const modelFallbackChain = [MODELS.PREMIUM, MODELS.FAST, MODELS.STABLE];
+  let lastError = null;
 
-  const image = response.generatedImages?.[0]?.image?.imageBytes;
-  if (!image) throw new Error("Imagen returned no image bytes");
+  for (const modelId of modelFallbackChain) {
+    try {
+      console.log(`📡 Attempting generation with: ${modelId}`);
 
-  const buffer = Buffer.from(image, "base64");
-  const filePath = path.join(
-    tempDir,
-    `scene_${String(index).padStart(3, "0")}.png`,
-  );
+      const response = await ai.models.generateImages({
+        model: modelId,
+        prompt: enhancedPrompt,
+        config: {
+          numberOfImages: 1,
+          aspectRatio: aspectRatio,
+        },
+      });
 
-  fs.writeFileSync(filePath, buffer);
-  console.log(`✅ Imagen success (${aspectRatio}):`, filePath);
+      const imageData = response.generatedImages?.[0]?.image?.imageBytes;
+      if (!imageData) throw new Error(`${modelId} returned no image bytes`);
 
-  return filePath;
+      const filePath = path.join(tempDir, `scene_${String(index).padStart(3, "0")}.png`);
+      fs.writeFileSync(filePath, Buffer.from(imageData, "base64"));
+
+      console.log(`✅ Success with ${modelId}`);
+      return filePath;
+
+    } catch (err) {
+      lastError = err;
+      // If error is 429 (Quota) or 404 (Not Found/Retired), move to next model
+      if (err.status === 429 || err.message.includes("404") || err.message.includes("quota")) {
+        console.warn(`⚠️ ${modelId} failed (Quota/Retired). Switching to next fallback...`);
+        continue;
+      }
+      // If it's a safety block or other error, throw it to trigger sanitization
+      throw err;
+    }
+  }
+
+  throw lastError; // If all Gemini/Imagen models in the chain fail
 }
 
 /* --------------------------------------------------
-   MIDJOURNEY GENERATOR
+   UPDATED MAIN ORCHESTRATOR
 -------------------------------------------------- */
+// export async function generateImage(prompt, index = 1, tempDir, aspectRatio = "16:9") {
+//   let safePrompt = prompt;
+
+//   // --- GOOGLE ECOSYSTEM (Tiered Gemini/Imagen) ---
+//   try {
+//     const imageUrl = await generateWithImagen(safePrompt, index, tempDir, aspectRatio);
+//     return { imageUrl, error: null };
+//   } catch (err) {
+//     console.error(`❌ All Gemini attempts failed:`, err.message);
+//     // Sanitize prompt and fall back to MidJourney
+//     safePrompt = await sanitizePrompt(safePrompt);
+//   }
+
+//   // --- MIDJOURNEY Fallback ---
+//   try {
+//     console.log(`🎨 Falling back to MidJourney...`);
+//     const imageUrl = await generateWithMidjourney(safePrompt, index, tempDir, aspectRatio);
+//     return { imageUrl, error: null };
+//   } catch (err) {
+//     console.error(`❌ MidJourney fallback failed:`, err.message);
+//     return { imageUrl: null, error: err };
+//   }
+// }
+
+/* --------------------------------------------------
+   GEMINI (IMAGEN) GENERATOR
+// -------------------------------------------------- */
+// async function generateWithImagen(prompt, index, tempDir, aspectRatio = "16:9") {
+//   fs.mkdirSync(tempDir, { recursive: true });
+
+//   const enhancedPrompt = `
+// High quality, cinematic, ultra-detailed.
+// ${aspectRatio === "16:9" ? "Wide horizontal composition, 16:9 aspect ratio." : "Portrait vertical composition, 9:16 aspect ratio."}
+// ${prompt}
+// `.trim();
+
+
+//   const response = await ai.models.generateImages({
+//     // model: "imagen-4.0-generate-001",
+//     model: "gemini-2.5-flash-preview-image",
+//     prompt: enhancedPrompt,
+//     config: {
+//       numberOfImages: 1,
+//       aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9",
+//     },
+//   });
+
+//   const image = response.generatedImages?.[0]?.image?.imageBytes;
+//   if (!image) throw new Error("Imagen returned no image bytes");
+
+//   const buffer = Buffer.from(image, "base64");
+//   const filePath = path.join(
+//     tempDir,
+//     `scene_${String(index).padStart(3, "0")}.png`,
+//   );
+
+//   fs.writeFileSync(filePath, buffer);
+//   console.log(`✅ Imagen success (${aspectRatio}):`, filePath);
+
+//   return filePath;
+// }
+
+// /* --------------------------------------------------
+//    MIDJOURNEY GENERATOR
+// -------------------------------------------------- */
 async function generateWithMidjourney(prompt, index, tempDir, aspectRatio = "16:9") {
   fs.mkdirSync(tempDir, { recursive: true });
 
