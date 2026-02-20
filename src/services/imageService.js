@@ -317,7 +317,22 @@ export async function generateImage(
   let activeModelTier = null;
 
   // Gemini attempts
+  for (let i = 0; i < 3; i++) {
+    try {
+      const result = await generateWithImagen({
+        prompt: safePrompt,
+        index,
+        tempDir,
+        aspectRatio,
+        activeModelTier,
+      });
 
+      return { imageUrl: result.filePath, error: null };
+    } catch (err) {
+      lastError = err;
+      safePrompt = await sanitizePrompt(safePrompt);
+    }
+  }
 
   // MidJourney fallback
   for (let i = 0; i < 3; i++) {
@@ -330,23 +345,6 @@ export async function generateImage(
       });
 
       return { imageUrl: filePath, error: null };
-    } catch (err) {
-      lastError = err;
-      safePrompt = await sanitizePrompt(safePrompt);
-    }
-  }
-
-  for (let i = 0; i < 3; i++) {
-    try {
-      const result = await generateWithImagen({
-        prompt: safePrompt,
-        index,
-        tempDir,
-        aspectRatio,
-        activeModelTier,
-      });
-
-      return { imageUrl: result.filePath, error: null };
     } catch (err) {
       lastError = err;
       safePrompt = await sanitizePrompt(safePrompt);
