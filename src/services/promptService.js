@@ -15,13 +15,16 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  */
 export async function extractStoryMetadata(storyText) {
   const prompt = `
+    Analyze the following story text and identify the "Micro-Climax"—a specific, tight-frame moment where the story’s tension is physically visible.
+    
+    Extraction Rules:
+    - The Demographic Lock: Identify the specific race, ethnicity, and sex of the protagonist as explicitly stated or culturally implied. The character must match the narrative identity 100%.
+    - The Environmental Reflection: Direct visual extension of the setting (flora, architecture, lighting, era). Must feel lived-in and accurate.
+    - The Physicality: Pinpoint the exact physical reaction (clenched jaw, shaking hand, eyes reflecting fire).
+    - The Story Anchor: A specific object or environmental detail from the text that must be in the immediate foreground.
+    - The Sensory Detail: Texture (damp skin, rusted metal, velvet) that reinforces the setting.
     - The Art Style: Define a consistent artistic medium or cinematic style (e.g., "Neo-Noir Film", "Oil Painting on Canvas", "Hyper-Realistic 3D Render", "Studio Ghibli Anime").
     - The Color Palette: Harmonic colors (e.g., "Teal and Orange", "Monochrome with Red accents", "Pastel Dreamscape").
-    - The Demographic Lock: Identify the specific race, ethnicity, and sex of the protagonist as explicitly stated or culturally implied.
-    - The Environmental Reflection: Direct visual extension of the setting (flora, architecture, lighting, era).
-    - The Physicality: Pinpoint the exact physical reaction (clenched jaw, shaking hand, eyes reflecting fire).
-    - The Story Anchor: A specific object or environmental detail that must be in the immediate foreground.
-    - The Sensory Detail: Texture (damp skin, rusted metal, velvet) that reinforces the setting.
 
     Story: ${storyText}
 
@@ -57,30 +60,29 @@ export async function extractStoryMetadata(storyText) {
  * Generates the Universal Story-to-Cover Master Prompts (v5.0)
  */
 export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
-  const { demographic, environment, physicality, anchor, texture } = metadata;
+  const { artStyle, colorPalette, demographic, environment, physicality, anchor, texture } = metadata;
 
   // [PROMPT 1: THE 9:16 ICONIC POSTER]
   const prompt1 = `
-    A high-impact 9:16 iconic poster featuring an extreme close-up (ECU) of the central character, focusing on the raw emotional peak.
+    A high-impact 9:16 iconic poster featuring an extreme close-up (ECU) of the central character, focusing on the raw emotional peak of the story. 
     Character Identity: ${demographic}. Features must be rendered with absolute accuracy to the narrative.
     Physical Action: ${physicality}.
+    Style: ${artStyle}.
     Shot Detail: 85mm lens compression, making the subject feel intimate and physically close. Every pore, bead of sweat, and individual hair is crisp and tactile with ${texture} texture.
     Background: ${environment}. The environment subtly reflects the specific textures, architecture, or lighting.
     Lighting: Intense cinematic "Key Lighting" that casts deep, dramatic shadows, highlighting the contours of the face.
-    Typography: Bold, stylized 3D typography for the title "${title}" is placed with a "shallow depth of field," allowing it to sit naturally within the scene's atmosphere. STRICT RULE: Use the title exactly as provided.
-    Aesthetic: Hyper-saturated colors reflecting the specific mood of the written narrative.
-    Cinematic Effects: [VIBRATE] for high-frequency kinetic energy and visual intensity. [PULSATE] for rhythmic shifts in ambient atmosphere and lighting.
+    Typography: Bold, stylized 3D typography for the title "${title}" is placed with a "shallow depth of field," allowing it to sit naturally within the scene's atmosphere. STRICT RULE: Use the title exactly as provided. No subtitles or creative additions allowed.
+    Aesthetic: ${colorPalette}. Hyper-saturated colors reflecting the specific mood of the written narrative.
   `.trim();
 
   // [PROMPT 2: THE 16:9 CINEMATIC WIDE-CLOSE]
   const prompt2 = `
-    A breathtaking 16:9 cinematic "Medium-Close" shot prioritizing immersive detail.
-    Character Identity: ${demographic}, in the immediate foreground reacting to the story's climax with ${physicality}.
+    A breathtaking 16:9 cinematic "Medium-Close" shot prioritizing immersive detail over wide landscapes.
+    The frame is tightly packed with environmental storytelling, showing the protagonist—whose race and sex strictly match the story intake (${demographic})—in the immediate foreground reacting to the story's climax with ${physicality}.
     Story Anchor: ${anchor} must be in the immediate foreground.
     Environmental Storytelling: ${environment}. Detailed, hyper-realistic. Every light source and reflection must be grounded in the world.
-    Aesthetic: High-saturation color grading with "Anamorphic" lens flares and heavy "Bokeh" (background blur).
+    Aesthetic: ${artStyle}, ${colorPalette}. High-saturation color grading with "Anamorphic" lens flares and heavy "Bokeh" (background blur).
     Technical: Hyper-realistic textures with electric luminescence and ray-traced reflections. Feeling of a high-budget film still.
-    Cinematic Effects: Integrate "VIBRATE" and "PULSATE" keywords to trigger dynamic motion and rhythmic atmosphere.
     Constraint: STRICTLY NO TEXT, words, or letters.
   `.trim();
 

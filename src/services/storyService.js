@@ -423,7 +423,6 @@ export async function generateStory({
     wordsPerPart
   );
 
-  console.log("Introduction of the story: ", intro);
 
   let previous = intro;
 
@@ -489,14 +488,16 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
 
   const prompt = `
     Split the following story into ${count} distinct visual scenes.
-    For each scene, provide a detailed, cinematic image generation prompt.
+    Act as a Visual Creative Director and Narrative Architect. For each scene, provide a detailed, cinematic generation prompt.
     
     ${consistencyInstructions}
 
-    Requirements:
-    - Highly detailed scenes reflecting the specific narrative beats.
-    - Scenes should be spread evenly throughout the story timeline.
-    - Captures the exact essence of that specific moment.
+    Scene Rules:
+    - Demographic Lock: Characters MUST strictly match the narrative identity 100%.
+    - Environmental Continuity: Every scene must be a direct visual extension of the setting.
+    - Story Alignment: Highly detailed scenes reflecting the specific narrative beats.
+    - Timeline Distribution: Scenes should be spread evenly throughout the story timeline.
+    - Cinematic Essence: Captures the exact physical reaction and intensity of each moment.
 
     Story: ${storyScript}
 
