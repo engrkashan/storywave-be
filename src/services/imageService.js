@@ -13,6 +13,14 @@ const MODELS = {
 };
 
 /* --------------------------------------------------
+   GLOBAL STATE (IN-MEMORY)
+-------------------------------------------------- */
+
+let imagenCounter = 0;
+let isThrottling = false;
+let throttlePromise = null;
+
+/* --------------------------------------------------
    UTILS
 -------------------------------------------------- */
 
@@ -40,6 +48,36 @@ async function sanitizePrompt(prompt) {
     .trim();
 }
 
+/**
+ * Global throttler for Imagen generations.
+ * Every 10 generations, pauses for 1 minute.
+ */
+async function throttleImagen() {
+  // If already throttling, wait for it to finish
+  if (isThrottling && throttlePromise) {
+    console.log("⏳ Waiting for global Imagen throttling to finish...");
+    await throttlePromise;
+  }
+
+  imagenCounter++;
+  console.log(`📈 Imagen Count: ${imagenCounter}/10`);
+
+  if (imagenCounter >= 10) {
+    console.warn("🛑 Imagen limit reached (10). Pausing for 1 minute...");
+    isThrottling = true;
+
+    throttlePromise = (async () => {
+      await sleep(60000); // 1 minute pause
+      imagenCounter = 0;
+      isThrottling = false;
+      throttlePromise = null;
+      console.log("✅ Throttling period over. Resetting count.");
+    })();
+
+    await throttlePromise;
+  }
+}
+
 /* --------------------------------------------------
    GEMINI / IMAGEN
 -------------------------------------------------- */
@@ -55,6 +93,7 @@ async function generateWithImagen({
 
   const enhancedPrompt = `High quality cinematic story illustration: ${prompt}`;
 
+  // Fallback chain: Imagen Fast -> Gemini 3 Pro
   const fallbackChain =
     activeModelTier === "PREMIUM"
       ? [MODELS.PREMIUM]
@@ -64,10 +103,15 @@ async function generateWithImagen({
   let updatedTier = activeModelTier;
 
   for (const modelId of fallbackChain) {
-    const maxRetries = modelId === MODELS.FAST ? 2 : 1;
+    const isFast = modelId === MODELS.FAST;
+    const maxRetries = isFast ? 1 : 1; // Simplified retries as requested
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        if (isFast) {
+          await throttleImagen();
+        }
+
         console.log(`📡 [${modelId}] Attempt ${attempt}/${maxRetries}`);
 
         const response = await ai.models.generateImages({
@@ -104,18 +148,15 @@ async function generateWithImagen({
           err.status === 429 ||
           err.message?.toLowerCase().includes("quota");
 
-        if (isQuota && modelId === MODELS.FAST && attempt < maxRetries) {
-          console.warn("⏳ FAST quota hit. Retrying in 20s...");
-          await sleep(20000);
-          continue;
+        if (isQuota && isFast) {
+          console.warn(`⚠️ ${modelId} quota hit. Switching to ${MODELS.PREMIUM}`);
+          updatedTier = "PREMIUM";
+          break; // Break attempt loop to switch to next model in chain
         }
 
-        if (isQuota) {
-          console.warn(
-            `⚠️ ${modelId} exhausted. Switching permanently to PREMIUM.`
-          );
-          updatedTier = "PREMIUM";
-          break;
+        if (isQuota && modelId === MODELS.PREMIUM) {
+          console.warn(`⚠️ ${modelId} quota hit. Falling back to MidJourney.`);
+          throw err; // Propagate to orchestrator for MidJourney fallback
         }
 
         throw err;
@@ -264,38 +305,41 @@ export async function generateMultiImages(
   let activeModelTier = null;
   const results = [];
 
-  try {
-    const result = await generateWithImagen({
-      prompt: safePrompt,
-      index: i + 1,
-      tempDir,
-      aspectRatio,
-      activeModelTier,
-    });
-
-    activeModelTier = result.activeModelTier;
-
-    results.push({
-      imageUrl: result.filePath,
-      error: null,
-    });
-  } catch (err) {
-    console.warn("Gemini failed. Trying MidJourney...");
-
+  for (let i = 0; i < prompts.length; i++) {
+    const safePrompt = prompts[i];
     try {
-      const filePath = await generateWithMidjourney({
+      const result = await generateWithImagen({
         prompt: safePrompt,
         index: i + 1,
         tempDir,
         aspectRatio,
+        activeModelTier,
       });
 
-      results.push({ imageUrl: filePath, error: null });
-    } catch (mjErr) {
+      activeModelTier = result.activeModelTier;
+
       results.push({
-        imageUrl: null,
-        error: mjErr.message,
+        imageUrl: result.filePath,
+        error: null,
       });
+    } catch (err) {
+      console.warn("Gemini/Imagen failed. Trying MidJourney...");
+
+      try {
+        const filePath = await generateWithMidjourney({
+          prompt: safePrompt,
+          index: i + 1,
+          tempDir,
+          aspectRatio,
+        });
+
+        results.push({ imageUrl: filePath, error: null });
+      } catch (mjErr) {
+        results.push({
+          imageUrl: null,
+          error: mjErr.message,
+        });
+      }
     }
   }
 

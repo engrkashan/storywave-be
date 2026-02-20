@@ -257,12 +257,11 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   const audioDuration = await getAudioDuration(audioPath);
 
   // Transition settings
-  const transitionDuration = mediaItems.length > 1 ? 1 : 0; // 1 second transition
-  const transitionType = "pixelize";
+  const transitionDuration = 0.5; // Set to 0 for hard cuts (no transition)
+  const transitionType = "fade"; // Better default if duration is > 0
 
-  // Calculate effective duration for each clip to account for overlaps
-  // Formula: TotalDuration = (ClipDuration * N) - (TransitionDuration * (N - 1))
-  // => ClipDuration = (TotalDuration + TransitionDuration * (N - 1)) / N
+  // Calculate effective duration for each clip
+  // If transitionDuration is 0, clipDuration is just audioDuration / N
   const clipDuration = (audioDuration + (transitionDuration * (mediaItems.length - 1))) / mediaItems.length;
 
   // Determine target dimensions
@@ -290,14 +289,24 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
     }
   });
 
-  // 2. Chain xfade filters
+  // 2. Chain xfade filters OR simple concat if duration is 0
   let lastOutput = "v0";
   if (mediaItems.length > 1) {
-    for (let i = 1; i < mediaItems.length; i++) {
-      const nextOutput = `vt${i}`;
-      const offset = i * (clipDuration - transitionDuration);
-      filter += `[${lastOutput}][v${i}]xfade=transition=${transitionType}:duration=${transitionDuration}:offset=${offset}[${nextOutput}]; `;
-      lastOutput = nextOutput;
+    if (transitionDuration > 0) {
+      for (let i = 1; i < mediaItems.length; i++) {
+        const nextOutput = `vt${i}`;
+        const offset = i * (clipDuration - transitionDuration);
+        filter += `[${lastOutput}][v${i}]xfade=transition=${transitionType}:duration=${transitionDuration}:offset=${offset}[${nextOutput}]; `;
+        lastOutput = nextOutput;
+      }
+    } else {
+      // Hard cuts (simple concat)
+      let concatParams = "";
+      for (let i = 0; i < mediaItems.length; i++) {
+        concatParams += `[v${i}]`;
+      }
+      filter += `${concatParams}concat=n=${mediaItems.length}:v=1:a=0[vconcat]; `;
+      lastOutput = "vconcat";
     }
   }
 
@@ -319,7 +328,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   ].join(" ");
 
   try {
-    console.log(`🎬 Stitching video with ${transitionType} transitions...`);
+    console.log(`🎬 Stitching video with ${transitionDuration > 0 ? transitionType : "hard cut"} transitions...`);
     execSync(cmd, { stdio: "inherit" });
   } catch (err) {
     console.error("FFmpeg Error:", err.message);

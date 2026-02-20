@@ -15,10 +15,8 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  */
 export async function extractStoryMetadata(storyText) {
   const prompt = `
-    Analyze the following story text and extract visual metadata for cinematic generation.
-    Focus on physical identity, environment, and specific physical reactions.
-
-    Extraction Rules:
+    - The Art Style: Define a consistent artistic medium or cinematic style (e.g., "Neo-Noir Film", "Oil Painting on Canvas", "Hyper-Realistic 3D Render", "Studio Ghibli Anime").
+    - The Color Palette: Harmonic colors (e.g., "Teal and Orange", "Monochrome with Red accents", "Pastel Dreamscape").
     - The Demographic Lock: Identify the specific race, ethnicity, and sex of the protagonist as explicitly stated or culturally implied.
     - The Environmental Reflection: Direct visual extension of the setting (flora, architecture, lighting, era).
     - The Physicality: Pinpoint the exact physical reaction (clenched jaw, shaking hand, eyes reflecting fire).
@@ -27,7 +25,7 @@ export async function extractStoryMetadata(storyText) {
 
     Story: ${storyText}
 
-    Return the result as JSON with keys: demographic, environment, physicality, anchor, texture.
+    Return the result as JSON with keys: artStyle, colorPalette, demographic, environment, physicality, anchor, texture.
     Return ONLY JSON.
   `;
 
@@ -44,6 +42,8 @@ export async function extractStoryMetadata(storyText) {
   } catch (err) {
     console.error("❌ Failed to extract story metadata:", err);
     return {
+      artStyle: "Cinematic Realistic Film",
+      colorPalette: "Natural Cinematic Colors",
       demographic: "A person matching the story's context",
       environment: "A setting accurate to the narrative",
       physicality: "A natural reaction",

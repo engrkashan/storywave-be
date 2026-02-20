@@ -470,16 +470,19 @@ export async function generateStory({
 export async function generateScenePrompts(storyScript, count = 5, metadata = null) {
   let consistencyInstructions = "";
   if (metadata) {
-    const { demographic, environment, physicality, anchor, texture } = metadata;
+    const { artStyle, colorPalette, demographic, environment, physicality, anchor, texture } = metadata;
     consistencyInstructions = `
-    VISUAL CONSISTENCY RULES:
-    - Protagonist: ${demographic}
-    - Environment: ${environment}
+    VISUAL CONSISTENCY RULES (MANDATORY):
+    - Art Style: ${artStyle} (Strictly follow this medium/style)
+    - Color Palette: ${colorPalette} (Use these colors for lighting and atmosphere)
+    - Protagonist: ${demographic} (Maintain same physical features)
+    - Environment: ${environment} (Consistent setting throughout)
     - Details: ${physicality}
     - Anchor: ${anchor}
     - Textures: ${texture}
     
     Technical: All scenes must be cinematic "Medium-Close" or "Wide-Close" shots. 8k, HDR, ray-traced reflections. NO TEXT.
+    Quality: Ensure high visual coherence. Every image must look like it belongs to the same ${artStyle} movie.
     Cinematic Effects: [VIBRATE] for high-frequency kinetic energy and visual intensity. [PULSATE] for rhythmic shifts in ambient atmosphere and lighting.
     `.trim();
   }
