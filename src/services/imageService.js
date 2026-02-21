@@ -121,7 +121,7 @@ async function generateWithImagen({
         let imageBytes = null;
         if (isPro) {
           const response = await ai.models.generateContent({
-            model: modelId,
+            model: "gemini-3-pro-image-preview",
             contents: finalPrompt,
             generationConfig: {
               responseMimeType: "image/png",
@@ -130,12 +130,12 @@ async function generateWithImagen({
 
           // Wait for response to resolve and grab the part
           const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-          console.log("RES:", response);
+
           imageBytes = part?.inlineData?.data;
         } else {
           // imagen-4.0-fast uses generateImages
           const response = await ai.models.generateImages({
-            model: modelId,
+            model: "imagen-4.0-fast-generate-001",
             prompt: finalPrompt,
             config: {
               numberOfImages: 1,
@@ -149,8 +149,6 @@ async function generateWithImagen({
         if (!imageBytes) {
           throw new Error(`${modelId} returned empty image`);
         }
-        console.log("Image bytes:", imageBytes)
-          ;
         const filePath = path.join(
           tempDir,
           `scene_${String(index).padStart(3, "0")}.png`
@@ -398,14 +396,16 @@ export async function generateImage(
         aspectRatio,
         activeModelTier,
       });
-
+      console.log("Gemini/Imagen succeeded.");
       return { imageUrl: result.filePath, error: null };
     } catch (err) {
       lastError = err;
+      console.log("Gemini/Imagen failed.", err);
       safePrompt = await sanitizePrompt(safePrompt);
     }
   }
 
+  console.log("Gemini/Imagen failed. Trying MidJourney...");
   // MidJourney fallback
   for (let i = 0; i < 3; i++) {
     try {
@@ -415,10 +415,11 @@ export async function generateImage(
         tempDir,
         aspectRatio,
       });
-
+      console.log("MidJourney succeeded.");
       return { imageUrl: filePath, error: null };
     } catch (err) {
       lastError = err;
+      console.log("MidJourney failed.", err);
       safePrompt = await sanitizePrompt(safePrompt);
     }
   }
