@@ -121,20 +121,18 @@ async function generateWithImagen({
         let imageBytes = null;
 
         if (isPro) {
-          // gemini-3-pro-image-preview uses generateContent
-          const response = await ai.models.generateContent({
+          const result = await ai.models.generateContent({
             model: modelId,
             contents: [{ role: "user", parts: [{ text: finalPrompt }] }],
-            config: {
-              responseMimeType: "image/png", // Ensure PNG output
-              imageConfig: {
-                aspectRatio: aspectRatio,
-              },
-            },
+            generationConfig: {
+              responseMimeType: "image/png",
+            }
           });
 
-          // Pro response parsing (parts)
+          // Wait for response to resolve and grab the part
+          const response = await result.response;
           const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+
           imageBytes = part?.inlineData?.data;
         } else {
           // imagen-4.0-fast uses generateImages
@@ -145,24 +143,6 @@ async function generateWithImagen({
               numberOfImages: 1,
               aspectRatio: aspectRatio,
               personGeneration: "allow_adult",
-              safetySetting: [
-                {
-                  category: "HARM_CATEGORY_HATE_SPEECH",
-                  threshold: "BLOCK_MEDIUM_AND_ABOVE",
-                },
-                {
-                  category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-                  threshold: "BLOCK_MEDIUM_AND_ABOVE",
-                },
-                {
-                  category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                  threshold: "BLOCK_MEDIUM_AND_ABOVE",
-                },
-                {
-                  category: "HARM_CATEGORY_HARASSMENT",
-                  threshold: "BLOCK_MEDIUM_AND_ABOVE",
-                }
-              ]
             },
           });
           imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
