@@ -84,6 +84,7 @@ async function throttleImagen() {
 
 async function generateWithImagen({
   prompt,
+  commonPrompt,
   index,
   tempDir,
   aspectRatio = "16:9",
@@ -91,7 +92,9 @@ async function generateWithImagen({
 }) {
   await ensureDir(tempDir);
 
-  const enhancedPrompt = `High quality cinematic story illustration: ${prompt}`;
+  const finalPrompt = commonPrompt
+    ? `${commonPrompt} UNIQUE SCENE DETAIL: ${prompt}`
+    : `High quality cinematic story illustration: ${prompt}`;
 
   // Fallback chain: Imagen Fast -> Gemini 3 Pro
   const fallbackChain =
@@ -104,7 +107,8 @@ async function generateWithImagen({
 
   for (const modelId of fallbackChain) {
     const isFast = modelId === MODELS.FAST;
-    const maxRetries = isFast ? 1 : 1; // Simplified retries as requested
+    const isPro = modelId === MODELS.PREMIUM;
+    const maxRetries = 1;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -114,17 +118,55 @@ async function generateWithImagen({
 
         console.log(`📡 [${modelId}] Attempt ${attempt}/${maxRetries}`);
 
-        const response = await ai.models.generateImages({
-          model: modelId,
-          prompt: enhancedPrompt,
-          config: {
-            numberOfImages: 1,
-            aspectRatio,
-          },
-        });
+        let imageBytes = null;
 
-        const imageBytes =
-          response.generatedImages?.[0]?.image?.imageBytes;
+        if (isPro) {
+          // gemini-3-pro-image-preview uses generateContent
+          const response = await ai.models.generateContent({
+            model: modelId,
+            contents: [{ role: "user", parts: [{ text: finalPrompt }] }],
+            config: {
+              responseMimeType: "image/png", // Ensure PNG output
+              imageConfig: {
+                aspectRatio: aspectRatio,
+              },
+            },
+          });
+
+          // Pro response parsing (parts)
+          const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+          imageBytes = part?.inlineData?.data;
+        } else {
+          // imagen-4.0-fast uses generateImages
+          const response = await ai.models.generateImages({
+            model: modelId,
+            prompt: finalPrompt,
+            config: {
+              numberOfImages: 1,
+              aspectRatio: aspectRatio,
+              personGeneration: "allow_adult",
+              safetySetting: [
+                {
+                  category: "HARM_CATEGORY_HATE_SPEECH",
+                  threshold: "BLOCK_MEDIUM_AND_ABOVE",
+                },
+                {
+                  category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+                  threshold: "BLOCK_MEDIUM_AND_ABOVE",
+                },
+                {
+                  category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                  threshold: "BLOCK_MEDIUM_AND_ABOVE",
+                },
+                {
+                  category: "HARM_CATEGORY_HARASSMENT",
+                  threshold: "BLOCK_MEDIUM_AND_ABOVE",
+                }
+              ]
+            },
+          });
+          imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
+        }
 
         if (!imageBytes) {
           throw new Error(`${modelId} returned empty image`);
@@ -151,12 +193,12 @@ async function generateWithImagen({
         if (isQuota && isFast) {
           console.warn(`⚠️ ${modelId} quota hit. Switching to ${MODELS.PREMIUM}`);
           updatedTier = "PREMIUM";
-          break; // Break attempt loop to switch to next model in chain
+          break;
         }
 
-        if (isQuota && modelId === MODELS.PREMIUM) {
+        if (isQuota && isPro) {
           console.warn(`⚠️ ${modelId} quota hit. Falling back to MidJourney.`);
-          throw err; // Propagate to orchestrator for MidJourney fallback
+          throw err;
         }
 
         throw err;
@@ -300,7 +342,8 @@ async function generateWithMidjourney({
 export async function generateMultiImages(
   prompts,
   tempDir,
-  aspectRatio = "16:9"
+  aspectRatio = "16:9",
+  commonPrompt = null
 ) {
   let activeModelTier = null;
   const results = [];
@@ -310,6 +353,7 @@ export async function generateMultiImages(
     try {
       const result = await generateWithImagen({
         prompt: safePrompt,
+        commonPrompt,
         index: i + 1,
         tempDir,
         aspectRatio,
@@ -325,9 +369,11 @@ export async function generateMultiImages(
     } catch (err) {
       console.warn("Gemini/Imagen failed. Trying MidJourney...");
 
+      const mjPrompt = commonPrompt ? `${commonPrompt} ${safePrompt}` : safePrompt;
+
       try {
         const filePath = await generateWithMidjourney({
-          prompt: safePrompt,
+          prompt: mjPrompt,
           index: i + 1,
           tempDir,
           aspectRatio,
@@ -354,17 +400,19 @@ export async function generateImage(
   prompt,
   index = 1,
   tempDir,
-  aspectRatio = "16:9"
+  aspectRatio = "16:9",
+  commonPrompt = null
 ) {
   let safePrompt = prompt;
   let lastError = null;
-  let activeModelTier = null;
+  let activeModelTier = "PREMIUM";
 
   // Gemini attempts
   for (let i = 0; i < 3; i++) {
     try {
       const result = await generateWithImagen({
         prompt: safePrompt,
+        commonPrompt,
         index,
         tempDir,
         aspectRatio,

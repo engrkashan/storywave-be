@@ -152,12 +152,11 @@ export async function extractLastFrame(videoPath, outputPath) {
   }
 }
 
-export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = []) {
+export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = [], commonPrompt = null) {
   const results = [];
   let previousClipLastFrame = null;
 
-  // Convert characterAssets to base64 for the API if needed, 
-  // though the SDK might handle paths. Let's assume it needs data/URIs.
+  // Convert characterAssets to base64 for the API if needed
   const characterReferences = characterAssets.map(asset => {
     const data = fs.readFileSync(asset).toString("base64");
     return {
@@ -174,11 +173,14 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
     while (attempt < MAX_RETRIES && !success) {
       try {
         attempt++;
+        const uniquePrompt = prompts[i];
+        const finalPrompt = commonPrompt ? `${commonPrompt} UNIQUE SCENE DETAIL: ${uniquePrompt}` : uniquePrompt;
+
         console.log(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Veo 3.1 Fast...`);
 
         const videoConfig = {
-          model: "veo-3.1-generate-preview", // Use Fast model as requested
-          prompt: prompts[i],
+          model: "veo-3.1-generate-preview",
+          prompt: finalPrompt,
           config: {
             aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9"
           }

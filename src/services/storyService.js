@@ -488,20 +488,19 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
 
   const prompt = `
     Split the following story into ${count} distinct visual scenes.
-    Act as a Visual Creative Director and Narrative Architect. For each scene, provide a detailed, cinematic generation prompt.
+    Act as a Visual Creative Director. For each scene, provide a detailed, cinematic generation prompt focusing ONLY on the UNIQUE narrative actions and specific environmental changes of that moment.
     
     ${consistencyInstructions}
 
     Scene Rules:
-    - Demographic Lock: Characters MUST strictly match the narrative identity 100%.
-    - Environmental Continuity: Every scene must be a direct visual extension of the setting.
-    - Story Alignment: Highly detailed scenes reflecting the specific narrative beats.
-    - Timeline Distribution: Scenes should be spread evenly throughout the story timeline.
-    - Cinematic Essence: Captures the exact physical reaction and intensity of each moment.
+    - Focus on Action: Describe the specific movement, reaction, or interaction in this scene.
+    - Narrative Beat: Each prompt must reflect a unique part of the story timeline.
+    - Synergy: Assume these unique details will be combined with a "Common Visual Prompt" containing the art style, characters, and color palette.
+    - Cinematic Essence: Capture the exact physical intensity of the moment.
 
     Story: ${storyScript}
 
-    Return the results as a JSON array of strings: ["prompt 1", "prompt 2", ...]
+    Return the results as a JSON array of strings: ["unique scene prompt 1", "unique scene prompt 2", ...]
     Return ONLY the JSON.
   `;
 

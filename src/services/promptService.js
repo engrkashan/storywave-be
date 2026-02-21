@@ -62,31 +62,39 @@ export async function extractStoryMetadata(storyText) {
 export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
   const { artStyle, colorPalette, demographic, environment, physicality, anchor, texture } = metadata;
 
+  const commonVisuals = generateCommonVisualPrompt(metadata);
+
   // [PROMPT 1: THE 9:16 ICONIC POSTER]
   const prompt1 = `
     A high-impact 9:16 iconic poster featuring an extreme close-up (ECU) of the central character, focusing on the raw emotional peak of the story. 
-    Character Identity: ${demographic}. Features must be rendered with absolute accuracy to the narrative.
+    ${commonVisuals}
     Physical Action: ${physicality}.
-    Style: ${artStyle}.
-    Shot Detail: 85mm lens compression, making the subject feel intimate and physically close. Every pore, bead of sweat, and individual hair is crisp and tactile with ${texture} texture.
-    Background: ${environment}. The environment subtly reflects the specific textures, architecture, or lighting.
+    Shot Detail: 85mm lens compression, making the subject feel intimate and physically close. Every pore, bead of sweat, and individual hair is crisp and tactile.
+    Background: ${environment}.
     Lighting: Intense cinematic "Key Lighting" that casts deep, dramatic shadows, highlighting the contours of the face.
     Typography: Bold, stylized 3D typography for the title "${title}" is placed with a "shallow depth of field," allowing it to sit naturally within the scene's atmosphere. STRICT RULE: Use the title exactly as provided. No subtitles or creative additions allowed.
-    Aesthetic: ${colorPalette}. Hyper-saturated colors reflecting the specific mood of the written narrative.
   `.trim();
 
   // [PROMPT 2: THE 16:9 CINEMATIC WIDE-CLOSE]
   const prompt2 = `
     A breathtaking 16:9 cinematic "Medium-Close" shot prioritizing immersive detail over wide landscapes.
-    The frame is tightly packed with environmental storytelling, showing the protagonist—whose race and sex strictly match the story intake (${demographic})—in the immediate foreground reacting to the story's climax with ${physicality}.
+    The frame is tightly packed with environmental storytelling, showing the protagonist react to the story's climax with ${physicality}.
+    ${commonVisuals}
     Story Anchor: ${anchor} must be in the immediate foreground.
-    Environmental Storytelling: ${environment}. Detailed, hyper-realistic. Every light source and reflection must be grounded in the world.
-    Aesthetic: ${artStyle}, ${colorPalette}. High-saturation color grading with "Anamorphic" lens flares and heavy "Bokeh" (background blur).
-    Technical: Hyper-realistic textures with electric luminescence and ray-traced reflections. Feeling of a high-budget film still.
+    Technical: Anamorphic lens flares and heavy Bokeh. Hyper-realistic, high-budget film still.
     Constraint: STRICTLY NO TEXT, words, or letters.
   `.trim();
 
   return { poster: prompt1, cinematic: prompt2 };
+}
+
+/**
+ * Generates a common visual prompt to sync the whole story theme, characters, style, tone.
+ * This should be concatenated with unique scene-specific prompts.
+ */
+export function generateCommonVisualPrompt(metadata) {
+  const { artStyle, colorPalette, demographic, environment, texture } = metadata;
+  return `Art Style: ${artStyle}. Visual Identity: ${demographic}. Setting: ${environment}. Color Palette: ${colorPalette}. Texture Detail: ${texture}. Consistent visual tone: High quality cinematic story illustration, 8k resolution, photorealistic.`.trim();
 }
 
 /**

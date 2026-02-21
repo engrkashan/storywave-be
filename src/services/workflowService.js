@@ -12,7 +12,7 @@ import { transcribeWithTimestamps } from "./transcribeService.js";
 import { getAudioDuration } from "./audioService.js";
 import { createVideo, generateVideoClips, createMultiMediaVideo } from "./videoService.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
-import { extractStoryMetadata, generateMasterPrompts } from "./promptService.js";
+import { extractStoryMetadata, generateMasterPrompts, generateCommonVisualPrompt } from "./promptService.js";
 
 import {
   generateBackgroundMusic,
@@ -298,6 +298,7 @@ export async function runWorkflow({
     log("Step 2.1: Extracting story metadata and master prompts...");
     const storyMetadata = await extractStoryMetadata(script);
     const masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
+    const commonPrompt = generateCommonVisualPrompt(storyMetadata);
 
     await prisma.workflow.update({
       where: { id: workflow.id },
@@ -306,6 +307,7 @@ export async function runWorkflow({
           ...(workflow.metadata || {}),
           storyMetadata,
           masterPrompts,
+          commonPrompt,
         }
       },
     });
@@ -409,13 +411,13 @@ export async function runWorkflow({
         // 2. Generate Media Items for this ratio
         let mediaItems = [];
         if (mediaType === "video") {
-          const clips = await generateVideoClips(scenePrompts, ratioDir, currentRatio, characterAssets);
+          const clips = await generateVideoClips(scenePrompts, ratioDir, currentRatio, characterAssets, commonPrompt);
           mediaItems = clips.filter(c => c.filePath).map(c => c.filePath);
         } else if (mediaType === "multi_image") {
-          const images = await generateMultiImages(scenePrompts, ratioDir, currentRatio);
+          const images = await generateMultiImages(scenePrompts, ratioDir, currentRatio, commonPrompt);
           mediaItems = images.filter(img => img.imageUrl).map(img => img.imageUrl);
         } else {
-          const imageResult = await generateImage(scenePrompts[0], 1, ratioDir, currentRatio);
+          const imageResult = await generateImage(scenePrompts[0], 1, ratioDir, currentRatio, commonPrompt);
           if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
         }
 
