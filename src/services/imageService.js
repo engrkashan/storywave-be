@@ -345,7 +345,7 @@ export async function generateMultiImages(
   aspectRatio = "16:9",
   commonPrompt = null
 ) {
-  let activeModelTier = null;
+  let activeModelTier = "PREMIUM";
   const results = [];
 
   for (let i = 0; i < prompts.length; i++) {
