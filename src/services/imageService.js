@@ -119,20 +119,18 @@ async function generateWithImagen({
         console.log(`📡 [${modelId}] Attempt ${attempt}/${maxRetries}`);
 
         let imageBytes = null;
-
         if (isPro) {
-          const result = await ai.models.generateContent({
+          const response = await ai.models.generateContent({
             model: modelId,
-            contents: [{ role: "user", parts: [{ text: finalPrompt }] }],
+            contents: finalPrompt,
             generationConfig: {
               responseMimeType: "image/png",
             }
           });
 
           // Wait for response to resolve and grab the part
-          const response = await result.response;
           const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-
+          console.log("RES:", response);
           imageBytes = part?.inlineData?.data;
         } else {
           // imagen-4.0-fast uses generateImages
@@ -151,7 +149,8 @@ async function generateWithImagen({
         if (!imageBytes) {
           throw new Error(`${modelId} returned empty image`);
         }
-
+        console.log("Image bytes:", imageBytes)
+          ;
         const filePath = path.join(
           tempDir,
           `scene_${String(index).padStart(3, "0")}.png`
@@ -260,6 +259,7 @@ async function generateWithMidjourney({
   while (polls < maxPolls) {
     polls++;
     await sleep(5000);
+    console.log(`📡 [MidJourney] Attempt ${polls}/${maxPolls}`);
 
     const statusRes = await fetch(
       `${MIDJOURNEY_API_BASE}/record-info?taskId=${taskId}`,
@@ -325,7 +325,7 @@ export async function generateMultiImages(
   aspectRatio = "16:9",
   commonPrompt = null
 ) {
-  let activeModelTier = "PREMIUM";
+  let activeModelTier = null;
   const results = [];
 
   for (let i = 0; i < prompts.length; i++) {
@@ -385,7 +385,7 @@ export async function generateImage(
 ) {
   let safePrompt = prompt;
   let lastError = null;
-  let activeModelTier = "PREMIUM";
+  let activeModelTier = null;
 
   // Gemini attempts
   for (let i = 0; i < 3; i++) {
