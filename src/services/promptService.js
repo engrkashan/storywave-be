@@ -15,35 +15,31 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  */
 export async function extractStoryMetadata(storyText) {
   const prompt = `
-    Analyze the following story text and identify the "Micro-Climax"—a specific, tight-frame moment where the story’s tension is physically visible.
-    
-    Extraction Rules:
-    - The Demographic Lock: Identify the specific race, ethnicity, and sex of the protagonist as explicitly stated or culturally implied. The character must match the narrative identity 100%.
-    - The Environmental Reflection: Direct visual extension of the setting (flora, architecture, lighting, era). Must feel lived-in and accurate.
-    - The Physicality: Pinpoint the exact physical reaction (clenched jaw, shaking hand, eyes reflecting fire).
-    - The Story Anchor: A specific object or environmental detail from the text that must be in the immediate foreground.
-    - The Sensory Detail: Texture (damp skin, rusted metal, velvet) that reinforces the setting.
-    - The Art Style: Define a consistent artistic medium or cinematic style (e.g., "Neo-Noir Film", "Oil Painting on Canvas", "Hyper-Realistic 3D Render", "Studio Ghibli Anime").
-    - The Color Palette: Harmonic colors (e.g., "Teal and Orange", "Monochrome with Red accents", "Pastel Dreamscape").
+Analyze the following story text and extract metadata.
 
-    Story: ${storyText}
+Return STRICT valid JSON with:
+artStyle, colorPalette, demographic, environment, physicality, anchor, texture.
 
-    Return the result as JSON with keys: artStyle, colorPalette, demographic, environment, physicality, anchor, texture.
-    Return ONLY JSON.
-  `;
+Story:
+${storyText}
+`;
 
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: [{ role: "user", parts: [{ text: prompt }] }]
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+      }
     });
 
-    let text = response.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    // Clean JSON if needed
-    text = text.replace(/```json|```/g, "").trim();
+    const text =
+      response.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+
     return JSON.parse(text);
   } catch (err) {
     console.error("❌ Failed to extract story metadata:", err);
+
     return {
       artStyle: "Cinematic Realistic Film",
       colorPalette: "Natural Cinematic Colors",
