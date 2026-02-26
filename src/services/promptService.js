@@ -15,10 +15,21 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  */
 export async function extractStoryMetadata(storyText) {
   const prompt = `
-Analyze the following story text and extract metadata.
+Analyze the following story text and extract metadata for visual consistency in image generation.
 
-Return STRICT valid JSON with:
-artStyle, colorPalette, demographic, environment, physicality, anchor, texture.
+Pay special attention to the characters' background:
+- If the story is about a specific culture or region (e.g., Caribbean, Viking, ancient Rome), the characters MUST reflect that regional demographic/tribe accurately in their appearance.
+- Identify the personality traits of the main characters (e.g., brave, weary, mischievous) to inform their facial expressions and posture.
+
+Return STRICT valid JSON with the following keys:
+artStyle: (string) The photographic or artistic style.
+colorPalette: (string) Dominant colors.
+demographic: (string) The specific ethnic/regional identity and tribe based on the story's setting.
+personality: (string) Key personality traits that should influence appearance.
+environment: (string) A setting accurate to the narrative.
+physicality: (string) A natural reaction or pose reflecting the character's state.
+anchor: (string) An object from the story for visual consistency.
+texture: (string) Realistic textures (e.g., weathered skin, silk fabric).
 
 Story:
 ${storyText}
@@ -43,7 +54,8 @@ ${storyText}
     return {
       artStyle: "Cinematic Realistic Film",
       colorPalette: "Natural Cinematic Colors",
-      demographic: "A person matching the story's context",
+      demographic: "A person matching the story's ethnic and regional context",
+      personality: "Determined and focused",
       environment: "A setting accurate to the narrative",
       physicality: "A natural reaction",
       anchor: "An object from the story",
@@ -56,7 +68,7 @@ ${storyText}
  * Generates the Universal Story-to-Cover Master Prompts (v5.0)
  */
 export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
-  const { artStyle, colorPalette, demographic, environment, physicality, anchor, texture } = metadata;
+  const { artStyle, colorPalette, demographic, personality, environment, physicality, anchor, texture } = metadata;
 
   const commonVisuals = generateCommonVisualPrompt(metadata);
 
@@ -89,8 +101,8 @@ export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
  * This should be concatenated with unique scene-specific prompts.
  */
 export function generateCommonVisualPrompt(metadata) {
-  const { artStyle, colorPalette, demographic, environment, texture } = metadata;
-  return `Art Style: ${artStyle}. Visual Identity: ${demographic}. Setting: ${environment}. Color Palette: ${colorPalette}. Texture Detail: ${texture}. Consistent visual tone: High quality cinematic story illustration, 8k resolution, photorealistic.`.trim();
+  const { artStyle, colorPalette, demographic, personality, environment, texture } = metadata;
+  return `Art Style: ${artStyle}. Visual Identity: ${demographic} with a ${personality} personality. Setting: ${environment}. Color Palette: ${colorPalette}. Texture Detail: ${texture}. Consistent visual tone: High quality cinematic story illustration, 8k resolution, photorealistic.`.trim();
 }
 
 /**
