@@ -90,6 +90,7 @@ const FISH_VOICE_IDS = [
     "245d0399e807472ba1ffc514a6466dd9",
     "f547497123684d1b8f9f23ebbc915015",
     "6849bbc1ba9148e393679912a8f5e35d",
+    "502b2739e7a8439889c596ea9d9a355e",
 ];
 
 /**
