@@ -23,7 +23,6 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   convertSrtToAss(srtPath, assPath, aspectRatio);
 
   const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
-  const filterComplex = `[0:v]subtitles='${escapedAssPath}'`;
   const audioDuration = await getAudioDuration(audioPath);
 
   if (!audioDuration || isNaN(audioDuration)) {
@@ -35,11 +34,12 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   const width = isVertical ? 1080 : 1920;
   const height = isVertical ? 1920 : 1080;
 
+  const filterComplex = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,subtitles='${escapedAssPath}'`;
   const cmd = [
     `ffmpeg -y -loop 1`,
     `-i "${imagePath}"`,
     `-i "${audioPath}"`,
-    `-filter_complex "scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,${filterComplex}"`,
+    `-filter_complex "${filterComplex}"`,
     `-map 0:v -map 1:a`,
     `-c:v libx264 -crf 17 -preset slower -pix_fmt yuv420p -c:a copy -shortest`,
     audioDuration ? `-t ${audioDuration}` : "",

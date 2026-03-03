@@ -44,8 +44,11 @@ ${storyText}
       }
     });
 
-    const text =
+    const raw =
       response.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+
+    // Strip markdown code fences if Gemini wraps JSON in ```json ... ```
+    const text = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
 
     return JSON.parse(text);
   } catch (err) {

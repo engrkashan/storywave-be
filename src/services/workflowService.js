@@ -387,8 +387,9 @@ export async function runWorkflow({
 
       log(`Generating for ratios: ${ratiosToGenerate.join(", ")} (Dual: ${dualPlatform})`);
 
+      log("Step 5: Generating subtitles...");
       const srtContent = await transcribeWithTimestamps(voiceLocalPath);
-      const srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);
+      srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);
       fs.writeFileSync(srtPath, srtContent);
 
       const videoResults = {};
