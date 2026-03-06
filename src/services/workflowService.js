@@ -23,9 +23,13 @@ import { generateCharacterBible } from "./characterService.js";
 const TEMP_ROOT = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
 
-const log = (msg, color = "\x1b[36m") => {
+const log = (msg, ...args) => {
   const time = new Date().toISOString().split("T")[1].split(".")[0];
-  console.log(`${color}[${time}] ${msg}\x1b[0m`);
+  let color = "\x1b[36m";
+  if (args.length > 0 && typeof args[0] === "string" && args[0].startsWith("\x1b[")) {
+    color = args.shift();
+  }
+  console.log(`${color}[${time}] ${msg}\x1b[0m`, ...args);
 };
 
 async function recordWorkflowWarning(workflowId, step, error) {

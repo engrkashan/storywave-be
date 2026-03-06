@@ -500,8 +500,13 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
 
     Story: ${storyScript}
 
-    Return the results as a JSON array of strings: ["unique scene prompt 1", "unique scene prompt 2", ...]
-    Return ONLY the JSON.
+    Return the results as a JSON object with a single key "scenes" which contains an array of strings:
+    {
+      "scenes": [
+        "unique scene prompt 1",
+        "unique scene prompt 2"
+      ]
+    }
   `;
 
   try {
