@@ -149,6 +149,7 @@ async function generateWithImagen({
         if (!imageBytes) {
           throw new Error(`${modelId} returned empty image`);
         }
+
         const filePath = path.join(
           tempDir,
           `scene_${String(index).padStart(3, "0")}.png`
@@ -158,7 +159,7 @@ async function generateWithImagen({
           filePath,
           Buffer.from(imageBytes, "base64")
         );
-
+        log("Image generated successfully:", filePath);
         return { filePath, activeModelTier: updatedTier };
       } catch (err) {
         lastError = err;
@@ -177,7 +178,7 @@ async function generateWithImagen({
           console.warn(`⚠️ ${modelId} quota hit. Falling back to MidJourney.`);
           throw err;
         }
-
+        log("Image generation failed:", err);
         throw err;
       }
     }
@@ -344,6 +345,7 @@ export async function generateMultiImages(
         imageUrl: result.filePath,
         error: null,
       });
+
     } catch (err) {
       console.warn("Gemini/Imagen failed. Trying MidJourney...");
 

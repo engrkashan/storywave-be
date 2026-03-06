@@ -408,7 +408,7 @@ export async function runWorkflow({
           const count = mediaType === "multi_image" ? imageCount : dynamicCount;
           scenePrompts = await generateScenePrompts(script, count, storyMetadata);
         }
-
+        log("Scene Prompts:", scenePrompts);
         // 2. Generate Media Items for this ratio
         let mediaItems = [];
         if (mediaType === "video") {
