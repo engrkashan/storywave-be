@@ -17,19 +17,28 @@ export async function extractStoryMetadata(storyText) {
   const prompt = `
 Analyze the following story text and extract metadata for visual consistency in image generation.
 
-Pay special attention to the characters' background:
-- If the story is about a specific culture or region (e.g., Caribbean, Viking, ancient Rome), the characters MUST reflect that regional demographic/tribe accurately in their appearance.
-- Identify the personality traits of the main characters (e.g., brave, weary, mischievous) to inform their facial expressions and posture.
+STRICT INSTRUCTIONS FOR THE 'synopsis' KEY:
+The synopsis must be a visual-narrative blueprint (50-100 words). It should not just tell the plot, but describe:
+1. The Scale: Is it an intimate character study or a grand epic?
+2. The Lighting/Atmosphere: (e.g., "drenched in Golden Hour warmth" or "suffocated by noir shadows").
+3. The Emotional Arc: How the character's physical state changes from the beginning to the end.
+4. Visual Theme: Mention the specific "nature" of the story (e.g., Cyberpunk, Pastoral, Mythic).
 
-Return STRICT valid JSON with the following keys:
-artStyle: (string) The photographic or artistic style.
-colorPalette: (string) Dominant colors.
-demographic: (string) The specific ethnic/regional identity and tribe based on the story's setting.
-personality: (string) Key personality traits that should influence appearance.
-environment: (string) A setting accurate to the narrative.
-physicality: (string) A natural reaction or pose reflecting the character's state.
-anchor: (string) An object from the story for visual consistency.
-texture: (string) Realistic textures (e.g., weathered skin, silk fabric).
+Pay special attention to demographic accuracy:
+- If the story is about a specific culture (e.g., Caribbean, Viking, Ancient Rome), the characters MUST reflect that regional demographic/tribe accurately.
+
+Return STRICT valid JSON:
+{
+  "artStyle": "Specific photographic style (e.g., 35mm film, anamorphic, oil painting)",
+  "colorPalette": "Dominant tones and accent colors",
+  "demographic": "Specific ethnic/regional identity based on setting",
+  "personality": "Traits influencing facial expressions/posture",
+  "environment": "Setting details accurate to the narrative",
+  "physicality": "A pose or reaction reflecting the character's state",
+  "anchor": "A recurring object for visual consistency",
+  "texture": "Tactile details (e.g., weathered skin, coarse wool)",
+  "synopsis": "The visual-narrative blueprint described above."
+}
 
 Story:
 ${storyText}
@@ -63,6 +72,7 @@ ${storyText}
       physicality: "A natural reaction",
       anchor: "An object from the story",
       texture: "Realistic textures",
+      synopsis: "A cinematic story with deep emotional resonance.",
     };
   }
 }
@@ -104,8 +114,9 @@ export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
  * This should be concatenated with unique scene-specific prompts.
  */
 export function generateCommonVisualPrompt(metadata) {
-  const { artStyle, colorPalette, demographic, personality, environment, texture } = metadata;
-  return `Art Style: ${artStyle}. Visual Identity: ${demographic} with a ${personality} personality. Setting: ${environment}. Color Palette: ${colorPalette}. Texture Detail: ${texture}. Consistent visual tone: High quality cinematic story illustration, 8k resolution, photorealistic.`.trim();
+  const { artStyle, colorPalette, demographic, personality, environment, texture, synopsis } = metadata;
+  const synopsisPart = synopsis ? ` Narrative Context: ${synopsis}` : "";
+  return `Art Style: ${artStyle}.${synopsisPart} Visual Identity: ${demographic} with a ${personality} personality. Setting: ${environment}. Color Palette: ${colorPalette}. Texture Detail: ${texture}. Consistent visual tone: High quality cinematic story illustration, 8k resolution, photorealistic.`.trim();
 }
 
 /**

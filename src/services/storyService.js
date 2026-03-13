@@ -469,9 +469,10 @@ export async function generateStory({
 export async function generateScenePrompts(storyScript, count = 5, metadata = null) {
   let consistencyInstructions = "";
   if (metadata) {
-    const { artStyle, colorPalette, demographic, personality, environment, physicality, anchor, texture } = metadata;
+    const { artStyle, colorPalette, demographic, personality, environment, physicality, anchor, texture, synopsis } = metadata;
     consistencyInstructions = `
     VISUAL CONSISTENCY RULES (MANDATORY):
+    - Narrative Synopsis: ${synopsis} (Use this for overall context and nature of the story)
     - Art Style: ${artStyle} (Strictly follow this medium/style)
     - Color Palette: ${colorPalette} (Use these colors for lighting and atmosphere)
     - Protagonist: ${demographic} with a ${personality} personality (Maintain same physical features and emotional baseline)
