@@ -1,5 +1,7 @@
 import { FishAudioClient } from "fish-audio";
+import { createLogger } from "../utils/logger.js";
 
+const logger = createLogger("VoiceController");
 const fishAudio = new FishAudioClient({ apiKey: process.env.FISH_API_KEY });
 
 // Predefined list of specific Fish Audio voice IDs
@@ -72,7 +74,6 @@ const FISH_VOICE_IDS = [
     "5f9dc1849c7644eaa48df363d988ad0e",
     "3f6e5d576b1147f788d5e7542bbbaf1b",
     "739da5c41315410caa69bfcc9a2e80f9",
-    "1127a2a0c8574b75a20d1f8dae12c1b9",
     "1005d2697a1d4b4dbb2f954033652be6",
     "5a8c5ea548324024bc33e92f40631f88",
     "03a9e8a0655042cebd7d17d117ed3500",
@@ -109,7 +110,7 @@ export async function getFishVoices(req, res) {
                     tags: voice.tags || [],
                 };
             } catch (error) {
-                console.error(`Failed to fetch voice ${voiceId}:`, error.message);
+                logger.error(`Failed to fetch voice ${voiceId}:`, error.message);
                 // Return a fallback object if individual voice fetch fails
                 return {
                     id: voiceId,

@@ -3,6 +3,9 @@ import fs from "fs";
 import path from "path";
 import { getAudioDuration } from "./audioService.js";
 import { GoogleGenAI } from "@google/genai";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("VideoService");
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -26,7 +29,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   const audioDuration = await getAudioDuration(audioPath);
 
   if (!audioDuration || isNaN(audioDuration)) {
-    console.warn("⚠️ Could not detect audio duration. Fallback to -shortest only.");
+    logger.warn("⚠️ Could not detect audio duration. Fallback to -shortest only.");
   }
 
   // Determine target dimensions
@@ -147,7 +150,7 @@ export async function extractLastFrame(videoPath, outputPath) {
     execSync(cmd, { stdio: "ignore" });
     return outputPath;
   } catch (err) {
-    console.error("❌ Failed to extract last frame:", err.message);
+    logger.error("❌ Failed to extract last frame:", err.message);
     return null;
   }
 }
@@ -176,7 +179,7 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
         const uniquePrompt = prompts[i];
         const finalPrompt = commonPrompt ? `${commonPrompt} UNIQUE SCENE DETAIL: ${uniquePrompt}` : uniquePrompt;
 
-        console.log(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Veo 3.1 Fast...`);
+        logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Veo 3.1 Fast...`);
 
         const videoConfig = {
           model: "veo-3.1-generate-preview",
@@ -205,7 +208,7 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
 
         // ⏳ Poll the operation status until the video is ready
         while (!operation.done) {
-          console.log(`⏳ Clip ${i + 1}: Waiting for video generation...`);
+          logger.info(`⏳ Clip ${i + 1}: Waiting for video generation...`);
           await new Promise((resolve) => setTimeout(resolve, 10000));
 
           operation = await ai.operations.getVideosOperation({
@@ -222,7 +225,7 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
           downloadPath: filePath
         });
 
-        console.log(`✅ Clip ${i + 1} saved to ${filePath}`);
+        logger.info(`✅ Clip ${i + 1} saved to ${filePath}`);
         results.push({ filePath, error: null });
 
         // Extract last frame for the next clip's "bridge"
@@ -237,11 +240,11 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
       } catch (err) {
         const isQuotaError = err.message.toLowerCase().includes("quota") || err.message.includes("429");
         if (isQuotaError || attempt >= MAX_RETRIES) {
-          console.error(`❌ Video generation failed for clip ${i + 1} (Attempt ${attempt}):`, err.message);
+          logger.error(`❌ Video generation failed for clip ${i + 1} (Attempt ${attempt}):`, err.message);
           results.push({ filePath: null, error: err });
           break; // Stop retrying
         }
-        console.warn(`⚠️ Video generation failed for clip ${i + 1} (Attempt ${attempt}). Retrying in 5s...`);
+        logger.warn(`⚠️ Video generation failed for clip ${i + 1} (Attempt ${attempt}). Retrying in 5s...`);
         await new Promise(resolve => setTimeout(resolve, 5000));
       }
     }
@@ -330,10 +333,10 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   ].join(" ");
 
   try {
-    console.log(`🎬 Stitching video with ${transitionDuration > 0 ? transitionType : "hard cut"} transitions...`);
+    logger.info(`🎬 Stitching video with ${transitionDuration > 0 ? transitionType : "hard cut"} transitions...`);
     execSync(cmd, { stdio: "inherit" });
   } catch (err) {
-    console.error("FFmpeg Error:", err.message);
+    logger.error("FFmpeg Error:", err.message);
     throw new Error("🎥 Multi-media video creation failed.");
   } finally {
     if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
@@ -371,7 +374,7 @@ function pad(n) {
 //       if (success) break;
 
 //       try {
-//         console.log(`🎬 Attempting Clip ${i + 1} with ${modelId}...`);
+//         logger.info(`🎬 Attempting Clip ${i + 1} with ${modelId}...`);
 
 //         const videoConfig = {
 //           model: modelId,
@@ -411,13 +414,13 @@ function pad(n) {
 //         const lastFramePath = path.join(tempDir, `last_frame_${i}.png`);
 //         previousClipLastFrame = await extractLastFrame(filePath, lastFramePath);
 
-//         console.log(`✅ Clip ${i + 1} success (${modelId})`);
+//         logger.info(`✅ Clip ${i + 1} success (${modelId})`);
 //         results.push({ filePath, error: null });
 //         success = true;
 
 //       } catch (err) {
 //         if (err.status === 429 || err.message.includes("quota")) {
-//           console.warn(`⚠️ ${modelId} Quota reached. Falling back...`);
+//           logger.warn(`⚠️ ${modelId} Quota reached. Falling back...`);
 //           continue; // Try next model in chain
 //         }
 //         // If it's a prompt block, you might want to return an error or try a safer prompt

@@ -1,4 +1,7 @@
 import prisma from "../config/prisma.client.js";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("OverviewController");
 
 export const getOverview = async (req, res) => {
   try {
@@ -87,7 +90,7 @@ export const getOverview = async (req, res) => {
       stories,
     });
   } catch (error) {
-    console.error("Overview Error:", error);
+    logger.error("Overview Error:", error);
     return res.status(500).json({ error: "Failed to fetch overview" });
   }
 };
@@ -190,7 +193,7 @@ export const getWorkflowById = async (req, res) => {
       })),
     });
   } catch (error) {
-    console.error("Get Workflow By ID Error:", error);
+    logger.error("Get Workflow By ID Error:", error);
     return res.status(500).json({ error: "Failed to fetch workflow" });
   }
 };
@@ -224,7 +227,7 @@ export const cancelWorkflow = async (req, res) => {
 
     return res.status(200).json({ message: "Workflow cancelled successfully" });
   } catch (error) {
-    console.error("Cancel Workflow Error:", error);
+    logger.error("Cancel Workflow Error:", error);
     return res.status(500).json({ error: "Failed to cancel workflow" });
   }
 };
@@ -286,7 +289,7 @@ export const deleteWorkflow = async (req, res) => {
       message: "Workflow deleted successfully",
     });
   } catch (error) {
-    console.error("Delete Workflow Error:", error);
+    logger.error("Delete Workflow Error:", error);
     return res.status(500).json({ error: "Failed to delete workflow" });
   }
 };

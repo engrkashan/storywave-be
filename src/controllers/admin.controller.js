@@ -1,5 +1,8 @@
 import bcrypt from "bcryptjs";
 import prisma from "../config/prisma.client.js";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("AdminController");
 
 // GET Admin User Profile
 export const getUserProfile = async (req, res) => {
@@ -16,7 +19,7 @@ export const getUserProfile = async (req, res) => {
 
     return res.status(200).json(user);
   } catch (error) {
-    console.error("Get User Profile Error:", error);
+    logger.error("Get User Profile Error:", error);
     return res.status(500).json({ error: "Failed to fetch profile" });
   }
 };
@@ -52,7 +55,7 @@ export const updateUser = async (req, res) => {
       .status(200)
       .json({ message: "Admin user updated", user: updated });
   } catch (error) {
-    console.error("Update AdminUser Error:", error);
+    logger.error("Update AdminUser Error:", error);
     return res.status(500).json({ error: "Failed to update admin user" });
   }
 };
@@ -79,7 +82,7 @@ export const changeUserPassword = async (req, res) => {
 
     return res.status(200).json({ message: "Password updated successfully" });
   } catch (error) {
-    console.error("User Password Change Error:", error);
+    logger.error("User Password Change Error:", error);
     return res.status(500).json({ error: "Failed to change password" });
   }
 };
@@ -104,7 +107,7 @@ export const deleteUser = async (req, res) => {
 
     return res.status(200).json({ message: "User deleted successfully" });
   } catch (error) {
-    console.error("Delete User Error:", error);
+    logger.error("Delete User Error:", error);
     return res.status(500).json({ error: "Failed to delete user" });
   }
 };

@@ -1,4 +1,7 @@
 import prisma from "../config/prisma.client.js";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("MediaController");
 
 export const createMediaHandler = async (req, res) => {
   try {
@@ -34,7 +37,7 @@ export const createMediaHandler = async (req, res) => {
       media: newMedia,
     });
   } catch (error) {
-    console.error("Upload Error:", error);
+    logger.error("Upload Error:", error);
     return res.status(500).json({ error: "Failed to upload media" });
   }
 };
@@ -47,7 +50,7 @@ export const getAllMediaHandler = async (_req, res) => {
 
     return res.status(200).json(mediaList);
   } catch (error) {
-    console.error("Fetch Error:", error);
+    logger.error("Fetch Error:", error);
     return res.status(500).json({ error: "Failed to fetch media" });
   }
 };
@@ -65,7 +68,7 @@ export const getMediaByIdHandler = async (req, res) => {
 
     return res.status(200).json(media);
   } catch (error) {
-    console.error("Get Error:", error);
+    logger.error("Get Error:", error);
     return res.status(500).json({ error: "Failed to retrieve media" });
   }
 };
@@ -83,7 +86,7 @@ export const deleteMediaHandler = async (req, res) => {
 
     return res.status(200).json({ message: "Media deleted successfully" });
   } catch (error) {
-    console.error("Delete Error:", error);
+    logger.error("Delete Error:", error);
     return res.status(500).json({ error: "Failed to delete media" });
   }
 };

@@ -2,6 +2,9 @@ import fs from "fs";
 import path from "path";
 import fetch from "node-fetch";
 import { GoogleGenAI } from "@google/genai";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("ImageService");
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -25,7 +28,6 @@ let throttlePromise = null;
 -------------------------------------------------- */
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const log = (msg, ...args) => console.log(`[ImageService] ${msg}`, ...args);
 
 async function ensureDir(dir) {
   await fs.promises.mkdir(dir, { recursive: true });
@@ -57,15 +59,15 @@ async function sanitizePrompt(prompt) {
 async function throttleImagen() {
   // If already throttling, wait for it to finish
   if (isThrottling && throttlePromise) {
-    console.log("⏳ Waiting for global Imagen throttling to finish...");
+    logger.info("⏳ Waiting for global Imagen throttling to finish...");
     await throttlePromise;
   }
 
   imagenCounter++;
-  console.log(`📈 Imagen Count: ${imagenCounter}/10`);
+  logger.info(`📈 Imagen Count: ${imagenCounter}/10`);
 
   if (imagenCounter >= 10) {
-    console.warn("🛑 Imagen limit reached (10). Pausing for 1 minute...");
+    logger.warn("🛑 Imagen limit reached (10). Pausing for 1 minute...");
     isThrottling = true;
 
     throttlePromise = (async () => {
@@ -73,7 +75,7 @@ async function throttleImagen() {
       imagenCounter = 0;
       isThrottling = false;
       throttlePromise = null;
-      console.log("✅ Throttling period over. Resetting count.");
+      logger.info("✅ Throttling period over. Resetting count.");
     })();
 
     await throttlePromise;
@@ -91,6 +93,7 @@ async function generateWithImagen({
   tempDir,
   aspectRatio = "16:9",
   activeModelTier,
+  resolution = "4K",
 }) {
   await ensureDir(tempDir);
 
@@ -118,16 +121,20 @@ async function generateWithImagen({
           await throttleImagen();
         }
 
-        console.log(`📡 [${modelId}] Attempt ${attempt}/${maxRetries}`);
+        logger.info(`📡 [${modelId}] Attempt ${attempt}/${maxRetries}`);
 
         let imageBytes = null;
         if (isPro) {
           const response = await ai.models.generateContent({
-            model: "gemini-3-pro-image-preview",
+            model: "gemini-3.1-flash-image-preview",
             contents: finalPrompt,
             generationConfig: {
               responseMimeType: "image/png",
-            }
+            },
+            imageConfig: {
+              aspectRatio: aspectRatio,
+              imageSize: resolution,
+            },
           });
 
           // Wait for response to resolve and grab the part
@@ -142,7 +149,8 @@ async function generateWithImagen({
             config: {
               numberOfImages: 1,
               aspectRatio: aspectRatio,
-              personGeneration: "allow_adult",
+              personGeneration: "allow_all",
+              imageSize: '2K',
             },
           });
           imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
@@ -161,26 +169,26 @@ async function generateWithImagen({
           filePath,
           Buffer.from(imageBytes, "base64")
         );
-        log(`✅ Image generated successfully with ${modelId}:`, filePath);
+        logger.info(`✅ Image generated successfully with ${modelId}:`, filePath);
         return { filePath, activeModelTier: updatedTier };
       } catch (err) {
         lastError = err;
-        log(`❌ Image generation failed for ${modelId} (Attempt ${attempt}/${maxRetries}):`, err.message || err);
+        logger.info(`❌ Image generation failed for ${modelId} (Attempt ${attempt}/${maxRetries}):`, err.message || err);
 
         if (attempt === maxRetries) {
           if (isFast) {
-            console.warn(`⚠️ ${modelId} failed max retries (${err.message || "Unknown Error"}). Switching to ${MODELS.PREMIUM}`);
+            logger.warn(`⚠️ ${modelId} failed max retries (${err.message || "Unknown Error"}). Switching to ${MODELS.PREMIUM}`);
             updatedTier = "PREMIUM";
             break; // Break attempt loop to move to the next model in fallbackChain
           }
 
           if (isPro) {
-            console.warn(`⚠️ ${modelId} failed max retries. Falling back to MidJourney.`);
+            logger.warn(`⚠️ ${modelId} failed max retries. Falling back to MidJourney.`);
             throw err;
           }
           throw err;
         } else {
-          console.log(`⏳ Waiting 2 seconds before retrying...`);
+          logger.info(`⏳ Waiting 2 seconds before retrying...`);
           await sleep(2000);
         }
       }
@@ -248,11 +256,11 @@ async function generateWithMidjourney({
 
   const taskId = startData?.data?.taskId;
   if (!taskId) {
-    console.error("MidJourney start response:", startData);
+    logger.error("MidJourney start response:", startData);
     throw new Error("No taskId returned from MidJourney");
   }
 
-  console.log(`🆔 MidJourney taskId: ${taskId}`);
+  logger.info(`🆔 MidJourney taskId: ${taskId}`);
 
   // Polling loop
   const maxPolls = 60;
@@ -261,7 +269,7 @@ async function generateWithMidjourney({
   while (polls < maxPolls) {
     polls++;
     await sleep(5000);
-    console.log(`📡 [MidJourney] Attempt ${polls}/${maxPolls}`);
+    logger.info(`📡 [MidJourney] Attempt ${polls}/${maxPolls}`);
 
     const statusRes = await fetch(
       `${MIDJOURNEY_API_BASE}/record-info?taskId=${taskId}`,
@@ -337,7 +345,7 @@ export async function generateMultiImages(
     // Retry Gemini up to 3 times for each image
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        console.log(`🎨 [Multi-Image ${i + 1}/${prompts.length}] Gemini Attempt ${attempt}/3...`);
+        logger.info(`🎨 [Multi-Image ${i + 1}/${prompts.length}] Gemini Attempt ${attempt}/3...`);
         const result = await generateWithImagen({
           prompt: safePrompt,
           commonPrompt,
@@ -348,7 +356,7 @@ export async function generateMultiImages(
         });
 
         activeModelTier = result.activeModelTier;
-        log(`✅ [Multi-Image ${i + 1}/${prompts.length}] Successfully generated: ${result.filePath} (Tier: ${activeModelTier})`);
+        logger.info(`✅ [Multi-Image ${i + 1}/${prompts.length}] Successfully generated: ${result.filePath} (Tier: ${activeModelTier})`);
         results.push({
           imageUrl: result.filePath,
           error: null,
@@ -356,16 +364,16 @@ export async function generateMultiImages(
         success = true;
         break;
       } catch (err) {
-        console.warn(`⚠️ [Multi-Image ${i + 1}/${prompts.length}] Gemini Attempt ${attempt} failed: ${err.message || err}`);
+        logger.warn(`⚠️ [Multi-Image ${i + 1}/${prompts.length}] Gemini Attempt ${attempt} failed: ${err.message || err}`);
         if (attempt < 3) {
-          console.log(`🧼 Sanitizing prompt before retry...`);
+          logger.info(`🧼 Sanitizing prompt before retry...`);
           safePrompt = await sanitizePrompt(safePrompt);
         }
       }
     }
 
     if (!success) {
-      console.warn(`🔄 [Multi-Image ${i + 1}/${prompts.length}] Gemini failed all retries. Falling back to MidJourney...`);
+      logger.warn(`🔄 [Multi-Image ${i + 1}/${prompts.length}] Gemini failed all retries. Falling back to MidJourney...`);
 
       const mjPrompt = commonPrompt ? `${commonPrompt} ${safePrompt}` : safePrompt;
 
@@ -376,10 +384,10 @@ export async function generateMultiImages(
           tempDir,
           aspectRatio,
         });
-        log(`✅ [Multi-Image ${i + 1}/${prompts.length}] MidJourney succeeded: ${filePath}`);
+        logger.info(`✅ [Multi-Image ${i + 1}/${prompts.length}] MidJourney succeeded: ${filePath}`);
         results.push({ imageUrl: filePath, error: null });
       } catch (mjErr) {
-        log(`❌ [Multi-Image ${i + 1}/${prompts.length}] MidJourney also failed: ${mjErr.message}`);
+        logger.info(`❌ [Multi-Image ${i + 1}/${prompts.length}] MidJourney also failed: ${mjErr.message}`);
         results.push({
           imageUrl: null,
           error: mjErr.message,
@@ -405,11 +413,12 @@ export async function generateImage(
   let safePrompt = prompt;
   let lastError = null;
   let activeModelTier = null;
+  let resolution = "4K";
 
   // Gemini attempts
   for (let i = 0; i < 3; i++) {
     try {
-      log(`🎨 [Single Image] Gemini Attempt ${i + 1}/3...`);
+      logger.info(`🎨 [Single Image] Gemini Attempt ${i + 1}/3...`);
       const result = await generateWithImagen({
         prompt: safePrompt,
         commonPrompt,
@@ -417,37 +426,39 @@ export async function generateImage(
         tempDir,
         aspectRatio,
         activeModelTier,
+        resolution,
       });
-      log(`✅ [Single Image] Gemini succeeded: ${result.filePath}`);
+      logger.info(`✅ [Single Image] Gemini succeeded: ${result.filePath}`);
       return { imageUrl: result.filePath, error: null };
     } catch (err) {
       lastError = err;
-      log(`⚠️ [Single Image] Gemini Attempt ${i + 1} failed: ${err.message || err}`);
+      logger.info(`⚠️ [Single Image] Gemini Attempt ${i + 1} failed: ${err.message || err}`);
       if (i < 2) {
-        log(`🧼 Sanitizing prompt before retry...`);
+        logger.info(`🧼 Sanitizing prompt before retry...`);
         safePrompt = await sanitizePrompt(safePrompt);
       }
     }
   }
 
-  log("🔄 [Single Image] Gemini failed all retries. Trying MidJourney...");
+  logger.info("🔄 [Single Image] Gemini failed all retries. Trying MidJourney...");
   // MidJourney fallback
   for (let i = 0; i < 3; i++) {
     try {
-      log(`🎨 [Single Image] MidJourney Attempt ${i + 1}/3...`);
+      logger.info(`🎨 [Single Image] MidJourney Attempt ${i + 1}/3...`);
       const filePath = await generateWithMidjourney({
         prompt: safePrompt,
         index,
         tempDir,
         aspectRatio,
+        resolution,
       });
-      log(`✅ [Single Image] MidJourney succeeded: ${filePath}`);
+      logger.info(`✅ [Single Image] MidJourney succeeded: ${filePath}`);
       return { imageUrl: filePath, error: null };
     } catch (err) {
       lastError = err;
-      log(`⚠️ [Single Image] MidJourney Attempt ${i + 1} failed: ${err.message || err}`);
+      logger.info(`⚠️ [Single Image] MidJourney Attempt ${i + 1} failed: ${err.message || err}`);
       if (i < 2) {
-        log(`🧼 Sanitizing prompt before retry...`);
+        logger.info(`🧼 Sanitizing prompt before retry...`);
         safePrompt = await sanitizePrompt(safePrompt);
       }
     }

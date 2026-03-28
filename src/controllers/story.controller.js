@@ -1,4 +1,7 @@
 import prisma from "../config/prisma.client.js";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("StoryController");
 import { fork } from "child_process";
 import path from "path";
 import { generateStory } from "../services/storyService.js";
@@ -80,9 +83,9 @@ export const createWorkflow = async (req, res) => {
     // Optional: log worker results (not sent to frontend)
     worker.on("message", (msg) => {
       if (msg.status === "success") {
-        console.log("Workflow finished:", msg.result);
+        logger.info("Workflow finished");
       } else {
-        console.error("Workflow worker error:", msg.error);
+        logger.error("Workflow worker error:", msg.error);
       }
     });
 
@@ -93,7 +96,7 @@ export const createWorkflow = async (req, res) => {
       status: "processing",
     });
   } catch (err) {
-    console.error("Error running workflow:", err);
+    logger.error("Error running workflow:", err);
     return res.status(500).json({ error: err.message || "Workflow failed" });
   }
 };
@@ -129,7 +132,7 @@ export const createStory = async (req, res) => {
 
     return res.status(200).json({ outline, script });
   } catch (err) {
-    console.error("Error generating story:", err);
+    logger.error("Error generating story:", err);
     return res
       .status(500)
       .json({ error: err.message || "Failed to generate story" });
@@ -169,7 +172,7 @@ export const getScheduledStories = async (req, res) => {
 
     return res.status(200).json(formatted);
   } catch (err) {
-    console.error("Error fetching scheduled stories:", err);
+    logger.error("Error fetching scheduled stories:", err);
     return res.status(500).json({ error: "Failed to fetch scheduled stories" });
   }
 };
@@ -219,7 +222,7 @@ export const getStories = async (req, res) => {
 
     return res.status(200).json(result);
   } catch (error) {
-    console.error("Get Stories Error:", error);
+    logger.error("Get Stories Error:", error);
     return res.status(500).json({ error: "Failed to fetch stories" });
   }
 };
@@ -271,7 +274,7 @@ export const getStoryById = async (req, res) => {
       })),
     });
   } catch (error) {
-    console.error("Get Story Error:", error);
+    logger.error("Get Story Error:", error);
     return res.status(500).json({ error: "Failed to fetch story" });
   }
 };
@@ -319,7 +322,7 @@ export const deleteStory = async (req, res) => {
       message: "✅ Story and all related data deleted successfully",
     });
   } catch (err) {
-    console.error("❌ Error deleting story:", err);
+    logger.error("❌ Error deleting story:", err);
     return res.status(500).json({
       error: err.message || "Failed to delete story and related data",
     });
@@ -349,7 +352,7 @@ export const deleteScheduledStory = async (req, res) => {
       .status(200)
       .json({ message: "Scheduled story cancelled successfully" });
   } catch (error) {
-    console.error("Cancel Scheduled Story Error:", error);
+    logger.error("Cancel Scheduled Story Error:", error);
     return res.status(500).json({ error: "Failed to cancel scheduled story" });
   }
 };

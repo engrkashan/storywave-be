@@ -1,4 +1,7 @@
 import prisma from "../config/prisma.client.js";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("CreationsController");
 
 // GET My Creations
 export const getMyCreations = async (req, res) => {
@@ -55,7 +58,7 @@ export const getMyCreations = async (req, res) => {
       data: { stories },
     });
   } catch (error) {
-    console.error("Get My Creations Error:", error);
+    logger.error("Get My Creations Error:", error);
     return res.status(500).json({ error: "Failed to fetch creations" });
   }
 };

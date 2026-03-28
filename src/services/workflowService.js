@@ -13,6 +13,9 @@ import { getAudioDuration } from "./audioService.js";
 import { createVideo, generateVideoClips, createMultiMediaVideo } from "./videoService.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
 import { extractStoryMetadata, generateMasterPrompts, generateCommonVisualPrompt } from "./promptService.js";
+import { createLogger, loggingStorage } from "../utils/logger.js";
+
+const logger = createLogger("WorkflowService");
 
 import {
   generateBackgroundMusic,
@@ -22,15 +25,6 @@ import { generateCharacterBible } from "./characterService.js";
 
 const TEMP_ROOT = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
-
-const log = (msg, ...args) => {
-  const time = new Date().toISOString().split("T")[1].split(".")[0];
-  let color = "\x1b[36m";
-  if (args.length > 0 && typeof args[0] === "string" && args[0].startsWith("\x1b[")) {
-    color = args.shift();
-  }
-  console.log(`${color}[${time}] ${msg}\x1b[0m`, ...args);
-};
 
 async function recordWorkflowWarning(workflowId, step, error) {
   await prisma.workflow.update({
@@ -65,10 +59,8 @@ export async function runScheduledWorkflows() {
       orderBy: { scheduledAt: "asc" },
     });
 
-    console.log(workflow);
 
     if (!workflow) {
-      console.log("⏳ No scheduled workflows to process.");
       return;
     }
 
@@ -105,16 +97,14 @@ export async function runScheduledWorkflows() {
     worker.send(payload);
 
     worker.on("message", (msg) => {
-      console.log(`Worker message for workflow ${workflow.id}:`, msg);
+      logger.info(`Worker message for workflow ${workflow.id}: ${msg}`);
     });
 
     worker.on("exit", (code) => {
-      console.log(
-        `Worker for workflow ${workflow.id} exited with code ${code}`,
-      );
+      logger.info(`Worker for workflow ${workflow.id} exited with code ${code}`);
     });
   } catch (err) {
-    console.error("Scheduler error:", err);
+    logger.error(`Scheduler error: ${err.message}`, err);
   }
 }
 
@@ -149,7 +139,7 @@ function uploadLargePromise(filePath, options) {
 
 async function uploadVideoToCloud(videoPath, filename) {
   const stats = fs.statSync(videoPath);
-  console.log("📦 Video size:", (stats.size / 1024 / 1024).toFixed(2), "MB");
+  logger.info("📦 Video size:", (stats.size / 1024 / 1024).toFixed(2), "MB");
 
   const uploaded = await uploadLargePromise(videoPath, {
     resource_type: "video",
@@ -159,7 +149,7 @@ async function uploadVideoToCloud(videoPath, filename) {
     overwrite: true,
   });
 
-  log(`Video uploaded: ${uploaded.secure_url}`);
+  logger.info(`Video uploaded: ${uploaded.secure_url}`);
   return uploaded.secure_url;
 }
 
@@ -167,7 +157,16 @@ async function uploadVideoToCloud(videoPath, filename) {
  * Main workflow execution function
  * Supports podcast-only mode when shouldGenerateImage = false
  */
-export async function runWorkflow({
+export async function runWorkflow(args) {
+  return await loggingStorage.run({ title: args.title }, async () => {
+    return await _runWorkflow(args);
+  });
+}
+
+/**
+ * Internal workflow execution function
+ */
+async function _runWorkflow({
   userId,
   title,
   url = null,
@@ -190,7 +189,7 @@ export async function runWorkflow({
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
   const isScheduled = scheduledUTC && new Date(scheduledUTC) > new Date(nowUTC);
-  log(
+  logger.info(
     isScheduled
       ? `🕒 Scheduled workflow: "${title}" for ${scheduledAt}`
       : `🚀 Starting workflow: "${title}"`,
@@ -231,7 +230,7 @@ export async function runWorkflow({
     });
   }
 
-  log(`Workflow ID: ${workflow.id}`);
+  logger.info(`Workflow ID: ${workflow.id}`);
 
   if (isScheduled) {
     return { success: true, workflowId: workflow.id, status: "SCHEDULED" };
@@ -244,15 +243,15 @@ export async function runWorkflow({
 
   try {
     // 1. Prepare input text
-    log("Step 1: Preparing input...");
+    logger.info("Step 1: Preparing input...");
     let inputText = textIdea || "";
 
     if (url) {
-      log("Extracting from URL...");
+      logger.info("Extracting from URL...");
       inputText = await extractContentFromUrl(url);
     }
     if (videoFile) {
-      log("Transcribing video...");
+      logger.info("Transcribing video...");
       inputText = await transcribeVideo(videoFile);
     }
 
@@ -272,7 +271,7 @@ export async function runWorkflow({
     // 2. Generate story outline & script
     let outline, script;
     if (url || videoFile) {
-      log("Step 2: Generating story...");
+      logger.info("Step 2: Generating story...");
       ({ outline, script } = await generateStory({
         textIdea: inputText,
         storyType,
@@ -299,7 +298,7 @@ export async function runWorkflow({
       data: { storyId: story.id },
     });
 
-    log("Step 2.1: Extracting story metadata and master prompts...");
+    logger.info("Step 2.1: Extracting story metadata and master prompts...");
     const storyMetadata = await extractStoryMetadata(script);
     const masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
     const commonPrompt = generateCommonVisualPrompt(storyMetadata);
@@ -321,19 +320,19 @@ export async function runWorkflow({
 
     let characterAssets = [];
     if (mediaType === "video" && hasCharacter) {
-      log("Step 2.2: Generating Character Bible (Anchor Images)...");
+      logger.info("Step 2.2: Generating Character Bible (Anchor Images)...");
       try {
         characterAssets = await generateCharacterBible(workflow.id.toString(), storyMetadata.demographic, workflowTempDir);
       } catch (err) {
-        log(`⚠️ Character Bible failed: ${err.message}`, "\x1b[31m");
+        logger.info(`⚠️ Character Bible failed: ${err.message}`, "\x1b[31m");
         await recordWorkflowWarning(workflow.id, "Character Bible", err);
       }
     } else {
-      log("Step 2.2: Skipping Character Bible (Criteria not met).");
+      logger.info("Step 2.2: Skipping Character Bible (Criteria not met).");
     }
 
     // 3. Generate voiceover (always) - pure voice (used for accurate subtitle timestamps)
-    log("Step 3: Generating voiceover...");
+    logger.info("Step 3: Generating voiceover...");
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
     const { url: pureVoiceURL, localPath: voiceLocalPath } =
       await generateVoiceover(script, voiceFilename, voice, workflowTempDir);
@@ -341,7 +340,7 @@ export async function runWorkflow({
     let finalAudioLocalPath = voiceLocalPath;
 
     if (backgroundMusic === true) {
-      log("Step 3.5: Generating background music...");
+      logger.info("Step 3.5: Generating background music...");
       const musicPath = await generateBackgroundMusic({
         title,
         storyType,
@@ -355,7 +354,7 @@ export async function runWorkflow({
       finalAudioLocalPath = mixedLocalPath;
     }
 
-    log("Uploading final audio to Cloudinary...");
+    logger.info("Uploading final audio to Cloudinary...");
     const uploadRes = await cloudinary.uploader.upload(finalAudioLocalPath, {
       folder: "voiceovers",
       resource_type: "video",
@@ -367,7 +366,7 @@ export async function runWorkflow({
 
     // Detect actual audio duration for synchronization
     const actualAudioDuration = await getAudioDuration(finalAudioLocalPath);
-    log(`📊 Actual audio duration: ${actualAudioDuration.toFixed(2)}s`);
+    logger.info(`📊 Actual audio duration: ${actualAudioDuration.toFixed(2)}s`);
 
     await prisma.voiceover.create({
       data: {
@@ -384,14 +383,14 @@ export async function runWorkflow({
 
     // 4+5+6. Media + Subtitles + Video
     if (shouldGenerateImage === true) {
-      log(`Step 4: Handling ${mediaType} generation...`);
+      logger.info(`Step 4: Handling ${mediaType} generation...`);
 
       // const dualPlatform = workflow.metadata?.dualPlatform === true || dualPlatform === true;
       const ratiosToGenerate = dualPlatform ? ["16:9", "9:16"] : [aspectRatio];
 
-      log(`Generating for ratios: ${ratiosToGenerate.join(", ")} (Dual: ${dualPlatform})`);
+      logger.info(`Generating for ratios: ${ratiosToGenerate.join(", ")} (Dual: ${dualPlatform})`);
 
-      log("Step 5: Generating subtitles...");
+      logger.info("Step 5: Generating subtitles...");
       const srtContent = await transcribeWithTimestamps(voiceLocalPath);
       srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);
       fs.writeFileSync(srtPath, srtContent);
@@ -399,7 +398,7 @@ export async function runWorkflow({
       const videoResults = {};
 
       for (const currentRatio of ratiosToGenerate) {
-        log(`🎬 Processing ratio: ${currentRatio}`);
+        logger.info(`🎬 Processing ratio: ${currentRatio}`);
         const ratioDir = path.join(workflowTempDir, currentRatio.replace(":", "_"));
         fs.mkdirSync(ratioDir, { recursive: true });
 
@@ -412,7 +411,7 @@ export async function runWorkflow({
           const count = mediaType === "multi_image" ? imageCount : dynamicCount;
           scenePrompts = await generateScenePrompts(script, count, storyMetadata);
         }
-        log("Scene Prompts:", scenePrompts);
+        logger.info("Scene Prompts:", scenePrompts);
         // 2. Generate Media Items for this ratio
         let mediaItems = [];
         if (mediaType === "video") {
@@ -428,7 +427,7 @@ export async function runWorkflow({
 
         // 3. Create Video for this ratio
         if (mediaItems.length > 0) {
-          log(`Step 5: Stitching video for ${currentRatio}...`);
+          logger.info(`Step 5: Stitching video for ${currentRatio}...`);
           const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
           const videoPath = path.join(workflowTempDir, videoFilename);
 
@@ -474,11 +473,11 @@ export async function runWorkflow({
 
         isPodcast = false;
       } else {
-        log("⚠️ Media generation failed → creating as podcast", "\x1b[33m");
+        logger.info("⚠️ Media generation failed → creating as podcast", "\x1b[33m");
         isPodcast = true;
       }
     } else {
-      log("🎧 Podcast-only mode", "\x1b[36m");
+      logger.info("🎧 Podcast-only mode", "\x1b[36m");
       isPodcast = true;
     }
 
@@ -508,7 +507,7 @@ export async function runWorkflow({
       },
     });
 
-    log("🎉 Workflow completed successfully", "\x1b[32m");
+    logger.info("🎉 Workflow completed successfully", "\x1b[32m");
 
     deleteTempFiles(workflowTempDir);
 
@@ -537,7 +536,7 @@ export async function runWorkflow({
       },
     };
   } catch (err) {
-    log(`Workflow failed: ${err.message}`, "\x1b[31m");
+    logger.info(`Workflow failed: ${err.message}`, "\x1b[31m");
 
     if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
     deleteTempFiles(workflowTempDir);

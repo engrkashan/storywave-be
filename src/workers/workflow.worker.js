@@ -1,8 +1,12 @@
 import { runWorkflow } from "../services/workflowService.js";
+import { createLogger, loggingStorage } from "../utils/logger.js";
+
+const logger = createLogger("Worker");
 
 process.on("message", async (workflowData) => {
-  try {
-    console.log("Worker started for workflow:", workflowData.title);
+  await loggingStorage.run({ title: workflowData.title }, async () => {
+    try {
+      logger.info("Worker started for workflow:", workflowData.title);
 
     const result = await runWorkflow(workflowData);
 
@@ -10,13 +14,14 @@ process.on("message", async (workflowData) => {
       process.send({ status: "success", result });
     }
 
-    console.log("Worker completed successfully.");
-    process.exit(0);
-  } catch (err) {
-    console.error("Worker failed:", err.message);
-    if (process.send) {
-      process.send({ status: "error", error: err.message });
+      logger.info("Worker completed successfully.");
+      process.exit(0);
+    } catch (err) {
+      logger.error("Worker failed:", err.message);
+      if (process.send) {
+        process.send({ status: "error", error: err.message });
+      }
+      process.exit(1);
     }
-    process.exit(1);
-  }
+  });
 });

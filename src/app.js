@@ -3,6 +3,9 @@ import dns from "dns";
 import dotenv from "dotenv";
 import express from "express";
 import cron from "node-cron";
+import { createLogger } from "./utils/logger.js";
+
+const logger = createLogger("App");
 
 // Load environment variables
 dotenv.config();
@@ -45,7 +48,6 @@ app.use("/api/voice", voiceRoutes);
 dns.setDefaultResultOrder("ipv4first");
 
 cron.schedule("* * * * *", async () => {
-  console.log("⏰ Checking for scheduled workflows...");
   await runScheduledWorkflows();
 });
 
@@ -53,5 +55,5 @@ cron.schedule("* * * * *", async () => {
 // Start Server
 const port = process.env.PORT || 4002;
 app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+  logger.info(`Server is running on port ${port}`);
 });

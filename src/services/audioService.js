@@ -1,6 +1,9 @@
 import fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import path from "path";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("AudioService");
 
 /**
  * Merge multiple MP3 audio files into one MP3 sequentially.
@@ -15,7 +18,7 @@ export async function mergeAudioFiles(files, outputFile) {
         // If only one file → just copy it
         if (files.length === 1) {
             fs.copyFileSync(files[0], outputFile);
-            console.log(`Single file copied to ${outputFile}`);
+            logger.info(`Single file copied to ${outputFile}`);
             return resolve(outputFile);
         }
 
@@ -39,12 +42,12 @@ export async function mergeAudioFiles(files, outputFile) {
             .inputOptions(["-f concat", "-safe 0"])
             .save(outputFile)
             .on("end", () => {
-                console.log(`Audio merged successfully to ${outputFile}`);
+                logger.info(`Audio merged successfully to ${outputFile}`);
                 fs.unlinkSync(listFile);
                 resolve(outputFile);
             })
             .on("error", (err) => {
-                console.error("FFMPEG Merge Error:", err.message);
+                logger.error("FFMPEG Merge Error:", err.message);
                 reject(err);
             });
     });
@@ -57,7 +60,7 @@ export async function getAudioDuration(filePath) {
     return new Promise((resolve, reject) => {
         ffmpeg.ffprobe(filePath, (err, metadata) => {
             if (err) {
-                console.error("FFMPEG Duration Error:", err.message);
+                logger.error("FFMPEG Duration Error:", err.message);
                 return reject(err);
             }
             const duration = metadata?.format?.duration || 0;

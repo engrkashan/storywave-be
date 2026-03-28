@@ -1,5 +1,8 @@
 import jwt from "jsonwebtoken";
 import prisma from "../config/prisma.client.js";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("AuthController");
 
 // REGISTER User
 export const registerUser = async (req, res) => {
@@ -38,7 +41,7 @@ export const registerUser = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Register Error:", error);
+    logger.error("Register Error:", error);
     return res.status(500).json({ error: "Failed to register user" });
   }
 };
@@ -81,7 +84,7 @@ export const loginUser = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Login Error:", error);
+    logger.error("Login Error:", error);
     return res.status(500).json({ error: "Failed to login" });
   }
 };
@@ -104,7 +107,7 @@ export const getAllUsers = async (req, res) => {
 
     return res.status(200).json({ users });
   } catch (error) {
-    console.error("Get All Users Error:", error);
+    logger.error("Get All Users Error:", error);
     return res.status(500).json({ error: "Failed to fetch users" });
   }
 };
@@ -155,7 +158,7 @@ export const updateUser = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Update User Error:", error);
+    logger.error("Update User Error:", error);
     return res.status(500).json({ error: "Failed to update user" });
   }
 };
@@ -180,7 +183,7 @@ export const deleteUser = async (req, res) => {
 
     return res.status(200).json({ message: "User deleted successfully" });
   } catch (error) {
-    console.error("Delete User Error:", error);
+    logger.error("Delete User Error:", error);
     return res.status(500).json({ error: "Failed to delete user" });
   }
 };

@@ -2,6 +2,9 @@ import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("MusicService");
 
 export async function generateBackgroundMusic({ title, storyType, tempDir }) {
   const apiUrl = "https://api.sunoapi.org/api/v1/generate";
@@ -43,7 +46,7 @@ export async function generateBackgroundMusic({ title, storyType, tempDir }) {
   };
 
   try {
-    console.log(
+    logger.info(
       `[Background Music] Generating for story type: ${storyType || "general"}`,
     );
 
@@ -57,7 +60,7 @@ export async function generateBackgroundMusic({ title, storyType, tempDir }) {
     }
 
     const taskId = generateRes.data.data.taskId;
-    console.log(`[Background Music] Task created: ${taskId}`);
+    logger.info(`[Background Music] Task created: ${taskId}`);
 
     // Step 2: Poll for completion
     const pollUrl = "https://api.sunoapi.org/api/v1/generate/record-info";
@@ -79,7 +82,7 @@ export async function generateBackgroundMusic({ title, storyType, tempDir }) {
       }
 
       status = pollRes.data.data.status || "UNKNOWN";
-      console.log(
+      logger.info(
         `[Background Music] Status (${pollCount}/${maxPolls}): ${status}`,
       );
 
@@ -94,30 +97,30 @@ export async function generateBackgroundMusic({ title, storyType, tempDir }) {
     }
 
     if (!audioUrl || !audioUrl.startsWith("http")) {
-      console.log("Invalid audioUrl:", audioUrl);
+      logger.info("Invalid audioUrl:", audioUrl);
       throw new Error("Invalid or missing audio URL");
     }
 
     // Step 3: Download the music file
     const musicFilename = `bg-music-${Date.now()}.mp3`;
     const musicPath = path.join(tempDir, musicFilename);
-    console.log("Downloading music from:", audioUrl);
+    logger.info("Downloading music from:", audioUrl);
     const downloadRes = await axios.get(audioUrl, {
       responseType: "arraybuffer",
     });
     fs.writeFileSync(musicPath, Buffer.from(downloadRes.data));
 
-    console.log(`[Background Music] Saved: ${musicPath}`);
+    logger.info(`[Background Music] Saved: ${musicPath}`);
     return musicPath;
   } catch (err) {
-    console.error(`[Background Music] Failed: ${err.message}`);
+    logger.error(`[Background Music] Failed: ${err.message}`);
     return null;
   }
 }
 
 export async function mixAudioWithBackground(voicePath, musicPath, outputPath) {
   if (!musicPath || !fs.existsSync(musicPath)) {
-    console.log("[Audio Mix] No background music → copying voice only");
+    logger.info("[Audio Mix] No background music → copying voice only");
     fs.copyFileSync(voicePath, outputPath);
     return;
   }
@@ -134,11 +137,11 @@ export async function mixAudioWithBackground(voicePath, musicPath, outputPath) {
 
   // `-filter_complex "[1:a]volume=0.2,highpass=f=100,lowpass=f=8000[bg]; [0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]"`,
   try {
-    console.log("[Audio Mix] Mixing voice + background music (looping)...");
+    logger.info("[Audio Mix] Mixing voice + background music (looping)...");
     execSync(cmd, { stdio: "inherit" });
-    console.log("[Audio Mix] Success →", outputPath);
+    logger.info("[Audio Mix] Success →", outputPath);
   } catch (err) {
-    console.error("[Audio Mix] FFmpeg failed:", err.message);
+    logger.error("[Audio Mix] FFmpeg failed:", err.message);
     fs.copyFileSync(voicePath, outputPath);
   }
 }

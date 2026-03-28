@@ -2,6 +2,9 @@ import axios from "axios";
 import fs from "fs";
 import OpenAI from "openai";
 import path from "path";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("VoiceoverService");
 import { FishAudioClient } from "fish-audio";
 import { cloudinary } from "../config/cloudinary.config.js";
 import { mergeAudioFiles } from "./audioService.js";
@@ -110,7 +113,7 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
   const fishVoiceId = isFish ? voiceObj.id : null;
   const openAiVoice = !isFish ? voiceObj.id : null;
 
-  console.log(
+  logger.info(
     `🔊 Generating voiceover using: ${isFish ? "FISH AUDIO S1" : "OPENAI"} (${voiceObj.label})`,
   );
 
@@ -127,7 +130,7 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
 
   try {
     for (let i = 0; i < chunks.length; i++) {
-      console.log(
+      logger.info(
         `🎙️ TTS chunk ${i + 1}/${chunks.length} (${isFish ? "FISH AUDIO S1" : "OPENAI"})`,
       );
 
@@ -162,7 +165,7 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
 
     return { url: uploadRes.secure_url, localPath };
   } catch (err) {
-    console.error("❌ Voiceover generation failed:", err);
+    logger.error("❌ Voiceover generation failed:", err);
     throw err;
   }
 }

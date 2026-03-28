@@ -1,5 +1,8 @@
 import fs from "fs";
 import path from "path";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("CharacterService");
 import { generateImage } from "./imageService.js";
 import { generateCharacterBiblePrompts } from "./promptService.js";
 
@@ -8,14 +11,14 @@ export async function generateCharacterBible(workflowId, demographic, tempDir) {
     const workflowAssetsDir = path.join(tempDir, "characters");
     fs.mkdirSync(workflowAssetsDir, { recursive: true });
 
-    console.log(`👤 Generating Character Bible for workflow: ${workflowId}`);
+    logger.info(`👤 Generating Character Bible for workflow: ${workflowId}`);
 
     const prompts = generateCharacterBiblePrompts(demographic);
     const anchorImages = [];
 
     for (let i = 0; i < prompts.length; i++) {
         const viewName = i === 0 ? "front" : i === 1 ? "profile" : "three_quarter";
-        console.log(`📸 Generating anchor image: ${viewName}`);
+        logger.info(`📸 Generating anchor image: ${viewName}`);
 
         // We use a high-quality generation for the bible
         const result = await generateImage(prompts[i], i + 1, workflowAssetsDir, "16:9");
@@ -34,6 +37,6 @@ export async function generateCharacterBible(workflowId, demographic, tempDir) {
         throw new Error("Failed to generate any character anchor images.");
     }
 
-    console.log(`✅ Character Bible complete with ${anchorImages.length} images.`);
+    logger.info(`✅ Character Bible complete with ${anchorImages.length} images.`);
     return anchorImages;
 }

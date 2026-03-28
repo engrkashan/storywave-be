@@ -4,6 +4,9 @@ import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import ffmpeg from "fluent-ffmpeg"; // make sure this is installed: npm i fluent-ffmpeg
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("TranscribeService");
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -49,7 +52,7 @@ async function splitAudioFile(audioPath, outputDir) {
  * Transcribes a single audio file using Whisper API.
  */
 async function transcribeChunk(chunkPath) {
-  console.log(`🎧 Transcribing: ${path.basename(chunkPath)}`);
+  logger.info(`🎧 Transcribing: ${path.basename(chunkPath)}`);
   const result = await openai.audio.transcriptions.create({
     file: fs.createReadStream(chunkPath),
     model: "whisper-1",
@@ -117,7 +120,7 @@ export async function transcribeWithTimestamps(audioPath) {
   }
 
   try {
-    console.log("🗣️ Starting large-audio transcription...");
+    logger.info("🗣️ Starting large-audio transcription...");
 
     const outputDir = path.join(path.dirname(audioPath), "chunks");
     const stats = fs.statSync(audioPath);
@@ -125,7 +128,7 @@ export async function transcribeWithTimestamps(audioPath) {
     let srtChunks = [];
 
     if (stats.size > 24 * 1024 * 1024) {
-      console.log("⚙️ Large file detected. Splitting into smaller chunks...");
+      logger.info("⚙️ Large file detected. Splitting into smaller chunks...");
       const chunkPaths = await splitAudioFile(audioPath, outputDir);
       for (const chunk of chunkPaths) {
         const srt = await transcribeChunk(chunk);
@@ -138,10 +141,10 @@ export async function transcribeWithTimestamps(audioPath) {
     }
 
     const finalSRT = mergeSRTs(srtChunks);
-    console.log("✅ Transcription complete!");
+    logger.info("✅ Transcription complete!");
     return finalSRT;
   } catch (error) {
-    console.error("❌ Whisper API Transcription Error:", error);
+    logger.error("❌ Whisper API Transcription Error:", error);
     throw new Error("Failed to transcribe audio with Whisper.");
   }
 }

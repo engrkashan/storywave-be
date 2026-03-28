@@ -1,5 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("PromptService");
 
 if (process.env.GEMINI_API_KEY && process.env.GOOGLE_API_KEY) {
   // Prevent SDK conflict
@@ -61,7 +64,7 @@ ${storyText}
 
     return JSON.parse(text);
   } catch (err) {
-    console.error("❌ Failed to extract story metadata:", err);
+    logger.error("❌ Failed to extract story metadata:", err);
 
     return {
       artStyle: "Cinematic Realistic Film",

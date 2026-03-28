@@ -1,5 +1,8 @@
-import OpenAI from "openai";
 import { extractFromUrl, transcribeVideo } from "./inputService.js";
+import { createLogger } from "../utils/logger.js";
+import OpenAI from "openai";
+
+const logger = createLogger("StoryService");
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -197,7 +200,7 @@ async function generateIntro({
       let content = res.choices[0].message.content.trim();
       return content;
     } catch (err) {
-      console.warn(
+      logger.warn(
         `Intro generation failed (Attempt ${attempt}):`,
         err.message
       );
@@ -268,7 +271,7 @@ async function generateBodyPart({
       let content = res.choices[0].message.content.trim();
       return content;
     } catch (err) {
-      console.warn(
+      logger.warn(
         `Body part ${partNum} generation failed (Attempt ${attempt}):`,
         err.message
       );
@@ -339,7 +342,7 @@ async function generateClosing({
       let content = res.choices[0].message.content.trim();
       return content;
     } catch (err) {
-      console.warn(
+      logger.warn(
         `Closing generation failed (Attempt ${attempt}):`,
         err.message
       );
@@ -367,13 +370,13 @@ export async function generateStory({
 
   // 🔪 Limit token size before prompt (trim or summarize)
   if (inputText.length > 8000) {
-    console.log(" Input too long, summarizing before story generation...");
+    logger.info(" Input too long, summarizing before story generation...");
     inputText = await summarizeText(inputText);
   }
 
   // Parse storyLength to get minutes (e.g., "30 minutes" -> 30)
   const minutes = Math.max(10, parseInt(storyLength) || 30); // Min 10
-  console.log(`📝 Story length: ${minutes} minutes`);
+  logger.info(`📝 Story length: ${minutes} minutes`);
 
   // Calculate total minimum words based on user specification
   let totalWords;
@@ -526,7 +529,7 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
     if (parsed.prompts && Array.isArray(parsed.prompts)) return parsed.prompts;
     return Object.values(parsed).find(Array.isArray) || [];
   } catch (err) {
-    console.error("Failed to generate scene prompts:", err);
+    logger.error("Failed to generate scene prompts:", err);
     return [];
   }
 }

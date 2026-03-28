@@ -5,6 +5,9 @@ import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
 import ytdlp from "yt-dlp-exec"; //for local video download
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("InputService");
 
 const TEMP_DIR = path.join(process.cwd(), "temp");
 fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -27,17 +30,17 @@ function isVideoUrl(url) {
  */
 export async function extractContentFromUrl(url) {
   if (isVideoUrl(url)) {
-    console.log("🎬 Detected video URL — downloading and transcribing...");
+    logger.info("🎬 Detected video URL — downloading and transcribing...");
     const videoPath = await downloadVideo(url);
     const transcript = await transcribeVideo(videoPath);
     try {
       fs.unlinkSync(videoPath);
     } catch (e) {
-      console.warn("⚠️ Failed to delete video:", e.message);
+      logger.warn("⚠️ Failed to delete video:", e.message);
     }
     return transcript;
   } else {
-    console.log("📰 Detected webpage — scraping text content...");
+    logger.info("📰 Detected webpage — scraping text content...");
     return await extractFromUrl(url);
   }
 }
@@ -55,12 +58,12 @@ export const downloadVideo = async (url) => {
     // Command identical to terminal test
     const command = `${ytDlpPath} "${url}" --cookies ${cookiesPath} -o "${outputPath}"`;
 
-    console.log("▶ Running command:", command);
+    logger.info("▶ Running command:", command);
     execSync(command, { stdio: "inherit" }); // inherit to log live output
 
     return outputPath;
   } catch (err) {
-    console.error("❌ Video download failed:", err.message);
+    logger.error("❌ Video download failed:", err.message);
     throw new Error("Video download failed");
   }
 };
@@ -68,7 +71,7 @@ export const downloadVideo = async (url) => {
 // LOCAL
 // async function downloadVideo(url) {
 //   const outputPath = path.join(TEMP_DIR, `video-${Date.now()}.mp4`);
-//   console.log("⬇️ Downloading video with yt-dlp...");
+//   logger.info("⬇️ Downloading video with yt-dlp...");
 
 //   try {
 //     await ytdlp(url, {
@@ -77,10 +80,10 @@ export const downloadVideo = async (url) => {
 //       quiet: true,
 //     });
 
-//     console.log("✅ Video downloaded:", outputPath);
+//     logger.info("✅ Video downloaded:", outputPath);
 //     return outputPath;
 //   } catch (error) {
-//     console.error("❌ Video download failed:", error.message);
+//     logger.error("❌ Video download failed:", error.message);
 //     throw new Error("Video download failed");
 //   }
 // }
@@ -104,7 +107,7 @@ export async function transcribeVideo(filePath) {
   const baseAudio = path.join(tempDir, `audio-${Date.now()}.wav`);
 
   // ✅ Step 1: Convert video to 16kHz mono WAV
-  console.log("🎧 Extracting audio...");
+  logger.info("🎧 Extracting audio...");
   execSync(
     `ffmpeg -y -i "${filePath}" -ac 1 -ar 16000 -vn -f wav "${baseAudio}"`,
     { stdio: "ignore" }
@@ -119,7 +122,7 @@ export async function transcribeVideo(filePath) {
       .trim()
   );
 
-  console.log(`🎞️ Audio duration: ${formatTime(duration)}`);
+  logger.info(`🎞️ Audio duration: ${formatTime(duration)}`);
 
   const chunkDuration = 300; // 5 minutes per chunk
   let offset = 0;
@@ -136,7 +139,7 @@ export async function transcribeVideo(filePath) {
     );
 
     const sizeMB = fs.statSync(chunkFile).size / (1024 * 1024);
-    console.log(
+    logger.info(
       `🎙️ Transcribing chunk ${formatTime(offset)} → ${formatTime(
         end
       )} (${sizeMB.toFixed(2)} MB)`
@@ -146,13 +149,13 @@ export async function transcribeVideo(filePath) {
       const text = await safeTranscribe(chunkFile);
       allText += text + " ";
     } catch (err) {
-      console.error("❌ Skipping chunk due to repeated errors:", chunkFile);
+      logger.error("❌ Skipping chunk due to repeated errors:", chunkFile);
     }
 
     try {
       fs.unlinkSync(chunkFile);
     } catch (e) {
-      console.warn("⚠️ Failed to delete chunk:", e.message);
+      logger.warn("⚠️ Failed to delete chunk:", e.message);
     }
 
     offset = end;
@@ -163,7 +166,7 @@ export async function transcribeVideo(filePath) {
     fs.unlinkSync(baseAudio);
     fs.rmSync(tempDir, { recursive: true, force: true });
   } catch (e) {
-    console.warn("⚠️ Cleanup failed:", e.message);
+    logger.warn("⚠️ Cleanup failed:", e.message);
   }
 
   return allText.trim();
@@ -185,7 +188,7 @@ async function safeTranscribe(chunkFile) {
       return response.text.trim();
     } catch (err) {
       attempt++;
-      console.warn(
+      logger.warn(
         `⚠️ Whisper API failed (attempt ${attempt}): ${err.message}`
       );
       if (attempt >= maxRetries) throw err;
