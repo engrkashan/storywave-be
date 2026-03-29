@@ -32,14 +32,14 @@ Pay special attention to demographic accuracy:
 
 Return STRICT valid JSON:
 {
-  "artStyle": "Specific photographic style (e.g., 35mm film, anamorphic, oil painting)",
-  "colorPalette": "Dominant tones and accent colors",
-  "demographic": "Specific ethnic/regional identity based on setting",
-  "personality": "Traits influencing facial expressions/posture",
-  "environment": "Setting details accurate to the narrative",
-  "physicality": "A pose or reaction reflecting the character's state",
-  "anchor": "A recurring object for visual consistency",
-  "texture": "Tactile details (e.g., weathered skin, coarse wool)",
+  "artStyle": "Specific cinematic photographic style (e.g., Anamorphic 35mm film, IMAX digital, Hand-held documentary, Grainy noir)",
+  "colorPalette": "Dominant tones, contrast ratios, and accent colors (e.g., Teal and Orange with high-key highlights)",
+  "demographic": "Specific ethnic/regional identity, age range, and attire based on setting",
+  "personality": "Traits influencing micro-expressions, posture, and gaze",
+  "environment": "Setting details accurate to the narrative, including weather, time of day, and architectural style",
+  "physicality": "A specific pose, muscle tension, or visceral reaction reflecting the character's internal state",
+  "anchor": "A recurring high-detail object for visual consistency",
+  "texture": "Macro tactile details (e.g., weathered skin pores, coarse wool fibers, rain-slicked pavement)",
   "synopsis": "The visual-narrative blueprint described above."
 }
 
@@ -119,7 +119,7 @@ export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
 export function generateCommonVisualPrompt(metadata) {
   const { artStyle, colorPalette, demographic, personality, environment, texture, synopsis } = metadata;
   const synopsisPart = synopsis ? ` Narrative Context: ${synopsis}` : "";
-  return `Art Style: ${artStyle}.${synopsisPart} Visual Identity: ${demographic} with a ${personality} personality. Setting: ${environment}. Color Palette: ${colorPalette}. Texture Detail: ${texture}. Consistent visual tone: High quality cinematic story illustration, 8k resolution, photorealistic.`.trim();
+  return `Art Style: ${artStyle}.${synopsisPart} Visual Identity: ${demographic} with a ${personality} personality. Setting: ${environment}. Color Palette: ${colorPalette}. Texture Detail: ${texture}. Consistent visual tone: High-end cinematic movie still, shot on 35mm lens, 8k resolution, hyper-realistic, volumetric lighting, ray-traced reflections, masterwork quality, IMAX aesthetic.`.trim();
 }
 
 /**

@@ -484,9 +484,9 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
     - Anchor: ${anchor}
     - Textures: ${texture}
     
-    Technical: All scenes must be cinematic "Medium-Close" or "Wide-Close" shots. 8k, HDR, ray-traced reflections. NO TEXT.
-    Quality: Ensure high visual coherence. Every image must look like it belongs to the same ${artStyle} movie.
-    Cinematic Effects: [VIBRATE] for high-frequency kinetic energy and visual intensity. [PULSATE] for rhythmic shifts in ambient atmosphere and lighting.
+    Technical: Use "Extreme Close-Up", "Medium-Long Shot", or "Low-Angle Hero Shot" depending on the beat. 8k, HDR, ray-traced reflections. NO TEXT.
+    Quality: Ensure high visual coherence. Every image must look like it belongs to the same high-budget ${artStyle} movie.
+    Cinematic Effects: [VIBRATE] for high-frequency kinetic energy. [PULSATE] for rhythmic atmospheric shifts. Use descriptive camera movements like "Slow Tracking", "Dolly Zoom", or "Crane Shot" in the description.
     `.trim();
   }
 

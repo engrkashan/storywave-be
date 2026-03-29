@@ -150,7 +150,6 @@ async function generateWithImagen({
               numberOfImages: 1,
               aspectRatio: aspectRatio,
               personGeneration: "allow_all",
-              imageSize: '2K',
             },
           });
           imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
