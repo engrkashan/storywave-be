@@ -204,7 +204,7 @@ async function _runWorkflow({
         type: "STORY",
         status: isScheduled ? "SCHEDULED" : "PROCESSING",
         scheduledAt: isScheduled ? new Date(scheduledUTC) : null,
-        userId,
+        userId,    
         metadata: {
           url,
           videoFile,
@@ -220,6 +220,8 @@ async function _runWorkflow({
           backgroundMusic,
           aspectRatio,
           dualPlatform,
+          series,
+          coverArtPrompt,
         },
       },
     });

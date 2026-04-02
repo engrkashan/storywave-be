@@ -127,6 +127,19 @@ model Video {
   updatedAt DateTime   @updatedAt
   Workflow  Workflow[]
 }
+model coverArt {
+  id         String  @id @default(auto()) @map("_id") @db.ObjectId
+  title      String
+  fileURL    String?
+  subtitles  String?
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @db.ObjectId
+
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  Workflow  Workflow[]
+}
 
 model Voiceover {
   id       String  @id @default(auto()) @map("_id") @db.ObjectId
@@ -160,6 +173,8 @@ model Workflow {
   status      WorkflowStatus @default(PENDING)
   scheduledAt DateTime?
   metadata    Json?
+  series      String? 
+  seoContent  String?
 
   user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String? @db.ObjectId
@@ -176,6 +191,7 @@ model Workflow {
   storyId   String?  @db.ObjectId
   videoId   String?  @db.ObjectId
 }
+
 
 model Creation {
   id       String       @id @default(auto()) @map("_id") @db.ObjectId
