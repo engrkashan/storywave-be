@@ -317,29 +317,43 @@ async function _runWorkflow({
     const commonPrompt = generateCommonVisualPrompt(storyMetadata);
 
     // 2.2 Generate Cover Art if coverArtPrompt is provided
-    let generatedCoverArtURL = null;
     if (coverArtPrompt) {
-      logger.info(`🎨 Generating cover art: ${coverArtPrompt}`);
+      logger.info(`🎨 Generating dual cover arts (1:1 & 16:9): ${coverArtPrompt}`);
       try {
         const coverArtDir = path.join(workflowTempDir, "cover_art");
-        const coverArtResult = await generateImage(coverArtPrompt, 1, coverArtDir, "16:9", commonPrompt);
+        fs.mkdirSync(coverArtDir, { recursive: true });
 
-        if (coverArtResult.imageUrl) {
-          logger.info("Uploading cover art to Cloudinary...");
-          const coverArtUpload = await cloudinary.uploader.upload(coverArtResult.imageUrl, {
-            folder: "cover-arts",
-            resource_type: "image",
-            public_id: `cover-${workflow.id}-${Date.now()}`,
-            overwrite: true,
-          });
-          generatedCoverArtURL = coverArtUpload.secure_url;
+        // Helper to generate and upload a single ratio
+        const processRatio = async (ratio) => {
+          const result = await generateImage(coverArtPrompt, 1, coverArtDir, ratio, commonPrompt);
+          if (result.imageUrl) {
+            const upload = await cloudinary.uploader.upload(result.imageUrl, {
+              folder: "cover-arts",
+              resource_type: "image",
+              public_id: `cover-${ratio.replace(":", "_")}-${workflow.id}-${Date.now()}`,
+              overwrite: true,
+            });
+            return upload.secure_url;
+          }
+          return null;
+        };
 
-          // Update story with cover art URL
+        // Generate both in parallel
+        const [url16_9, url1_1] = await Promise.all([
+          processRatio("16:9"),
+          processRatio("1:1")
+        ]);
+
+        if (url16_9 || url1_1) {
           await prisma.story.update({
             where: { id: story.id },
-            data: { coverArtURL: generatedCoverArtURL },
+            data: { 
+              coverArtURL: url16_9 || url1_1, // Legacy compatibility
+              coverArtURL_16_9: url16_9,
+              coverArtURL_1_1: url1_1
+            },
           });
-          logger.info(`✅ Cover art generated: ${generatedCoverArtURL}`);
+          logger.info(`✅ Dual cover arts generated: 16:9(${url16_9}) | 1:1(${url1_1})`);
         }
       } catch (err) {
         logger.error(`⚠️ Cover art generation failed: ${err.message}`);

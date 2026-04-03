@@ -109,6 +109,8 @@ model Story {
   series            String?
   coverArtPrompt    String?
   coverArtURL       String?
+  coverArtURL_1_1   String?
+  coverArtURL_16_9  String?
   seoContent        Json?
   visualSuggestions String?
 

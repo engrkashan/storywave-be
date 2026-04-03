@@ -153,6 +153,8 @@ export const getWorkflowById = async (req, res) => {
           series: workflow.story.series,
           coverArtPrompt: workflow.story.coverArtPrompt,
           coverArtURL: workflow.story.coverArtURL,
+          coverArtURL_1_1: workflow.story.coverArtURL_1_1,
+          coverArtURL_16_9: workflow.story.coverArtURL_16_9,
           seoContent: workflow.story.seoContent,
           visualSuggestions: workflow.story.visualSuggestions,
         }
