@@ -36,6 +36,10 @@ export const createWorkflow = async (req, res) => {
       backgroundMusic,
       aspectRatio,
       dualPlatform,
+      series,
+      coverArtPrompt,
+      seoContent,
+      visualSuggestions,
     } = req.body;
 
     if (!userId) {
@@ -69,6 +73,10 @@ export const createWorkflow = async (req, res) => {
       backgroundMusic,
       aspectRatio,
       dualPlatform,
+      series,
+      coverArtPrompt,
+      seoContent,
+      visualSuggestions,
     };
 
     // 👉 PATH to worker file

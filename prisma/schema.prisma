@@ -106,6 +106,12 @@ model Story {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String @db.ObjectId
 
+  series            String?
+  coverArtPrompt    String?
+  coverArtURL       String?
+  seoContent        Json?
+  visualSuggestions String?
+
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
   Workflow  Workflow[]

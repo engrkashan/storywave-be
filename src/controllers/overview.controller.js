@@ -137,17 +137,24 @@ export const getWorkflowById = async (req, res) => {
       createdAt: workflow.createdAt,
       updatedAt: workflow.updatedAt,
       metadata: workflow.metadata || {},
-      owner: {
-        id: workflow.user.id,
-        name: workflow.user.fullName,
-        role: workflow.user.role,
-      },
+      owner: workflow.user
+        ? {
+          id: workflow.user.id,
+          name: workflow.user.fullName,
+          role: workflow.user.role,
+        }
+        : null,
       story: workflow.story
         ? {
           id: workflow.story.id,
           title: workflow.story.title,
           outline: workflow.story.outline,
           content: workflow.story.content,
+          series: workflow.story.series,
+          coverArtPrompt: workflow.story.coverArtPrompt,
+          coverArtURL: workflow.story.coverArtURL,
+          seoContent: workflow.story.seoContent,
+          visualSuggestions: workflow.story.visualSuggestions,
         }
         : null,
       voiceover: workflow.voiceover

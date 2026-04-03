@@ -74,7 +74,7 @@ export async function runScheduledWorkflows() {
 
     const meta = workflow.metadata || {};
     const payload = {
-      userId: req.user || null,
+      userId: workflow.userId || null,
       title: workflow.title,
       url: meta.url || null,
       videoFile: meta.videoFile || null,
@@ -185,6 +185,10 @@ async function _runWorkflow({
   backgroundMusic = true,
   aspectRatio = "16:9", // Default to 16:9
   dualPlatform = false,
+  series = null,
+  coverArtPrompt = null,
+  seoContent = null,
+  visualSuggestions = null,
 }) {
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
@@ -205,6 +209,7 @@ async function _runWorkflow({
         status: isScheduled ? "SCHEDULED" : "PROCESSING",
         scheduledAt: isScheduled ? new Date(scheduledUTC) : null,
         userId,
+        
         metadata: {
           url,
           videoFile,
@@ -220,6 +225,10 @@ async function _runWorkflow({
           backgroundMusic,
           aspectRatio,
           dualPlatform,
+          series,
+          coverArtPrompt,
+          seoContent,
+          visualSuggestions,
         },
       },
     });
@@ -290,6 +299,10 @@ async function _runWorkflow({
         userId,
         isPodcast: false, // Will be updated later based on image/video generation
         audioURL: null, // Will be set after voiceover generation
+        series,
+        coverArtPrompt,
+        seoContent,
+        visualSuggestions,
       },
     });
 
@@ -302,6 +315,37 @@ async function _runWorkflow({
     const storyMetadata = await extractStoryMetadata(script);
     const masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
     const commonPrompt = generateCommonVisualPrompt(storyMetadata);
+
+    // 2.2 Generate Cover Art if coverArtPrompt is provided
+    let generatedCoverArtURL = null;
+    if (coverArtPrompt) {
+      logger.info(`🎨 Generating cover art: ${coverArtPrompt}`);
+      try {
+        const coverArtDir = path.join(workflowTempDir, "cover_art");
+        const coverArtResult = await generateImage(coverArtPrompt, 1, coverArtDir, "16:9", commonPrompt);
+
+        if (coverArtResult.imageUrl) {
+          logger.info("Uploading cover art to Cloudinary...");
+          const coverArtUpload = await cloudinary.uploader.upload(coverArtResult.imageUrl, {
+            folder: "cover-arts",
+            resource_type: "image",
+            public_id: `cover-${workflow.id}-${Date.now()}`,
+            overwrite: true,
+          });
+          generatedCoverArtURL = coverArtUpload.secure_url;
+
+          // Update story with cover art URL
+          await prisma.story.update({
+            where: { id: story.id },
+            data: { coverArtURL: generatedCoverArtURL },
+          });
+          logger.info(`✅ Cover art generated: ${generatedCoverArtURL}`);
+        }
+      } catch (err) {
+        logger.error(`⚠️ Cover art generation failed: ${err.message}`);
+        await recordWorkflowWarning(workflow.id, "Cover Art", err);
+      }
+    }
 
     await prisma.workflow.update({
       where: { id: workflow.id },
@@ -409,7 +453,7 @@ async function _runWorkflow({
         } else {
           const dynamicCount = Math.max(5, Math.ceil(actualAudioDuration / 5));
           const count = mediaType === "multi_image" ? imageCount : dynamicCount;
-          scenePrompts = await generateScenePrompts(script, count, storyMetadata);
+          scenePrompts = await generateScenePrompts(script, count, storyMetadata, visualSuggestions);
         }
         logger.info("Scene Prompts:", scenePrompts);
         // 2. Generate Media Items for this ratio

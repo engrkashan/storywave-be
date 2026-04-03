@@ -469,12 +469,13 @@ export async function generateStory({
 /**
  * Break story into visual scene prompts for image/video generation
  */
-export async function generateScenePrompts(storyScript, count = 5, metadata = null) {
+export async function generateScenePrompts(storyScript, count = 5, metadata = null, visualSuggestions = null) {
   let consistencyInstructions = "";
   if (metadata) {
     const { artStyle, colorPalette, demographic, personality, environment, physicality, anchor, texture, synopsis } = metadata;
     consistencyInstructions = `
     VISUAL CONSISTENCY RULES (MANDATORY):
+    ${visualSuggestions ? `- Visual Reference Idea: ${visualSuggestions}` : ""}
     - Narrative Synopsis: ${synopsis} (Use this for overall context and nature of the story)
     - Art Style: ${artStyle} (Strictly follow this medium/style)
     - Color Palette: ${colorPalette} (Use these colors for lighting and atmosphere)
@@ -484,7 +485,7 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
     - Anchor: ${anchor}
     - Textures: ${texture}
     
-    Technical: Use "Extreme Close-Up", "Medium-Long Shot", or "Low-Angle Hero Shot" depending on the beat. 8k, HDR, ray-traced reflections. NO TEXT.
+    Technical: On priority keeping visualSuggestions in mind, Use "Extreme Close-Up", "Medium-Long Shot", or "Low-Angle Hero Shot" depending on the beat. 8k, HDR, ray-traced reflections. NO TEXT.
     Quality: Ensure high visual coherence. Every image must look like it belongs to the same high-budget ${artStyle} movie.
     Cinematic Effects: [VIBRATE] for high-frequency kinetic energy. [PULSATE] for rhythmic atmospheric shifts. Use descriptive camera movements like "Slow Tracking", "Dolly Zoom", or "Crane Shot" in the description.
     `.trim();
