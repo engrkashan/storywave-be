@@ -64,6 +64,7 @@ model User {
   stories     Story[]
   videos      Video[]
   voiceovers  Voiceover[]
+  coverArts   coverArt[]
 }
 
 model Input {
@@ -136,9 +137,11 @@ model coverArt {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String @db.ObjectId
 
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowId String   @unique @db.ObjectId
+
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
-  Workflow  Workflow[]
 }
 
 model Voiceover {
@@ -182,6 +185,7 @@ model Workflow {
   inputs    Input[]
   story     Story?     @relation(fields: [storyId], references: [id], onDelete: Cascade)
   voiceover Voiceover?
+  coverArt  coverArt?
   video     Video?     @relation(fields: [videoId], references: [id], onDelete: Cascade)
   media     Media[]
   tasks     Task[]

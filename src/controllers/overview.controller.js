@@ -116,6 +116,7 @@ export const getWorkflowById = async (req, res) => {
         story: true,
         voiceover: true,
         video: true,
+        coverArt: true,
         inputs: true,
         media: true,
         tasks: true,
@@ -156,6 +157,13 @@ export const getWorkflowById = async (req, res) => {
           script: workflow.voiceover.script,
           audioURL: workflow.voiceover.audioURL,
           voice: workflow.voiceover.voice,
+        }
+        : null,
+      coverArt: workflow.coverArt
+        ? {
+          id: workflow.coverArt.id,
+          title: workflow.coverArt.title,
+          fileURL: workflow.coverArt.fileURL,
         }
         : null,
       video: workflow.video

@@ -185,6 +185,9 @@ async function _runWorkflow({
   backgroundMusic = true,
   aspectRatio = "16:9", // Default to 16:9
   dualPlatform = false,
+  series = null,
+  seoContent = null,
+  coverArtPrompt = null,
 }) {
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
@@ -205,6 +208,8 @@ async function _runWorkflow({
         status: isScheduled ? "SCHEDULED" : "PROCESSING",
         scheduledAt: isScheduled ? new Date(scheduledUTC) : null,
         userId,    
+        series,
+        seoContent,
         metadata: {
           url,
           videoFile,
@@ -220,7 +225,6 @@ async function _runWorkflow({
           backgroundMusic,
           aspectRatio,
           dualPlatform,
-          series,
           coverArtPrompt,
         },
       },
@@ -316,6 +320,34 @@ async function _runWorkflow({
         }
       },
     });
+
+    let finalCoverArtURL = null;
+    if (coverArtPrompt) {
+      logger.info("Step 2.1.5: Generating Cover Art...");
+      try {
+        const coverArtResult = await generateImage(coverArtPrompt, "cover", workflowTempDir, "1:1", commonPrompt);
+        if (coverArtResult.imageUrl) {
+          const uploadRes = await cloudinary.uploader.upload(coverArtResult.imageUrl, {
+            folder: "coverArts",
+            public_id: `cover_${workflow.id}_${Date.now()}`,
+            overwrite: true,
+          });
+          finalCoverArtURL = uploadRes.secure_url;
+
+          await prisma.coverArt.create({
+            data: {
+              title: `${title} Cover`,
+              fileURL: finalCoverArtURL,
+              userId,
+              workflowId: workflow.id,
+            }
+          });
+        }
+      } catch (err) {
+        logger.info(`⚠️ Cover Art generation failed: ${err.message}`, "\x1b[31m");
+        await recordWorkflowWarning(workflow.id, "Cover Art", err);
+      }
+    }
 
     // 2.2 Generate Character Bible for consistency (Only if video media and character exists)
     const hasCharacter = script.toLowerCase().includes("character:") || script.toLowerCase().includes("protagonist:") || storyMetadata.demographic?.toLowerCase().includes("person") || storyMetadata.demographic?.toLowerCase().includes("man") || storyMetadata.demographic?.toLowerCase().includes("woman");
@@ -524,6 +556,7 @@ async function _runWorkflow({
       voiceover: mixedVoiceURL,
       video: videoURL,
       media: mediaUrls,
+      coverArt: finalCoverArtURL,
       metadata: {
         title,
         storyType,
@@ -535,6 +568,9 @@ async function _runWorkflow({
         imageCount,
         backgroundMusic,
         aspectRatio,
+        series,
+        seoContent,
+        coverArtPrompt,
       },
     };
   } catch (err) {
