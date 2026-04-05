@@ -209,7 +209,7 @@ async function _runWorkflow({
         status: isScheduled ? "SCHEDULED" : "PROCESSING",
         scheduledAt: isScheduled ? new Date(scheduledUTC) : null,
         userId,
-        
+
         metadata: {
           url,
           videoFile,
@@ -325,7 +325,7 @@ async function _runWorkflow({
 
         // Helper to generate and upload a single ratio
         const processRatio = async (ratio) => {
-          const result = await generateImage(coverArtPrompt, 1, coverArtDir, ratio, commonPrompt);
+          const result = await generateImage(coverArtPrompt, 1, coverArtDir, ratio);
           if (result.imageUrl) {
             const upload = await cloudinary.uploader.upload(result.imageUrl, {
               folder: "cover-arts",
@@ -347,7 +347,7 @@ async function _runWorkflow({
         if (url16_9 || url1_1) {
           await prisma.story.update({
             where: { id: story.id },
-            data: { 
+            data: {
               coverArtURL: url16_9 || url1_1, // Legacy compatibility
               coverArtURL_16_9: url16_9,
               coverArtURL_1_1: url1_1

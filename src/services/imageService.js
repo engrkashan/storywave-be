@@ -96,6 +96,7 @@ async function generateWithImagen({
   resolution = "4K",
 }) {
   await ensureDir(tempDir);
+  logger.info(`🎨 Generating image for scene ${index} with prompt: ${prompt} with common prompt: ${commonPrompt}`);
 
   const finalPrompt = commonPrompt
     ? `${commonPrompt} UNIQUE SCENE DETAIL: ${prompt}`
