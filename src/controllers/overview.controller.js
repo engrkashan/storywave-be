@@ -15,14 +15,31 @@ export const getOverview = async (req, res) => {
     // Role-based access
     const whereByRole = role === "CREATOR" ? { userId } : {};
 
-    // Counts (parallel)
-    const [totalStories, videosCreated, voiceovers, podcasts] =
-      await Promise.all([
-        prisma.story.count({ where: whereByRole }),
-        prisma.video.count({ where: whereByRole }),
-        prisma.voiceover.count({ where: whereByRole }),
-        prisma.story.count({ where: { ...whereByRole, isPodcast: true } }),
-      ]);
+    // Status counts (parallel)
+    const [
+      totalStories,
+      videosCreated,
+      voiceovers,
+      podcasts,
+      pendingStories,
+      completedStories,
+      failedStories,
+    ] = await Promise.all([
+      prisma.story.count({ where: whereByRole }),
+      prisma.video.count({ where: whereByRole }),
+      prisma.voiceover.count({ where: whereByRole }),
+      prisma.story.count({ where: { ...whereByRole, isPodcast: true } }),
+      prisma.workflow.count({
+        where: {
+          ...whereByRole,
+          status: { in: ["PENDING", "PROCESSING", "SCHEDULED"] },
+        },
+      }),
+      prisma.workflow.count({ where: { ...whereByRole, status: "COMPLETED" } }),
+      prisma.workflow.count({
+        where: { ...whereByRole, status: { in: ["FAILED", "CANCELLED"] } },
+      }),
+    ]);
 
     //  Recent workflows
     const workflows = await prisma.workflow.findMany({
@@ -40,6 +57,8 @@ export const getOverview = async (req, res) => {
             id: true,
             isPodcast: true,
             audioURL: true,
+            coverArtURL: true,
+            coverArtURL_16_9: true,
           },
         },
         video: {
@@ -66,19 +85,14 @@ export const getOverview = async (req, res) => {
       status: w.status,
       createdAt: w.createdAt,
       error: w.metadata?.error || null,
-      metadata: w.metadata || {},
       isPodcast: w.story?.isPodcast || false,
       audioURL: w.story?.audioURL || null,
+      thumbnail: w.story?.coverArtURL_16_9 || w.story?.coverArtURL || null,
       owner: {
         id: w.user?.id,
         name: w.user?.fullName,
         role: w.user?.role,
       },
-      video: w.video ? {
-        url: w.video.fileURL,
-        video_16_9: w.video.video_16_9,
-        video_9_16: w.video.video_9_16,
-      } : null,
     }));
 
     return res.status(200).json({
@@ -87,6 +101,11 @@ export const getOverview = async (req, res) => {
       videosCreated,
       voiceovers,
       podcasts,
+      stats: {
+        pending: pendingStories,
+        completed: completedStories,
+        cancelled: failedStories,
+      },
       stories,
     });
   } catch (error) {
