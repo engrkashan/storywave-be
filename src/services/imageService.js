@@ -107,7 +107,10 @@ ${prompt}
 
 # TECHNICAL SPECS: 
 Shot on Arri Alexa, 8K detail, sharp focus, volumetric lighting, masterpiece quality.
+${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
 `;
+
+  logger.info(`Final prompt: ${finalPrompt}`);
 
   // Fallback chain: Gemini Premium -> Imagen Fast
   const fallbackChain =
