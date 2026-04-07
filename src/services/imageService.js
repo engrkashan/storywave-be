@@ -11,7 +11,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const MIDJOURNEY_API_BASE = "https://api.midapi.ai/api/v1/mj";
 
 const MODELS = {
-  PREMIUM: "gemini-3-pro-image-preview",
+  PREMIUM: "gemini-3.1-flash-image",
   FAST: "imagen-4.0-fast-generate-001",
 };
 
@@ -98,9 +98,16 @@ async function generateWithImagen({
   await ensureDir(tempDir);
   logger.info(`🎨 Generating image for scene ${index} with prompt: ${prompt} with common prompt: ${commonPrompt}`);
 
-  const finalPrompt = commonPrompt
-    ? `${commonPrompt} UNIQUE SCENE DETAIL: ${prompt}`
-    : `High quality cinematic story illustration: ${prompt}`;
+  const finalPrompt = `
+# VISUAL STYLE GUIDE: 
+${commonPrompt || "Cinematic, hyper-realistic, professional photography"}
+
+# SCENE DESCRIPTION: 
+${prompt}
+
+# TECHNICAL SPECS: 
+Shot on Arri Alexa, 8K detail, sharp focus, volumetric lighting, masterpiece quality.
+`;
 
   // Fallback chain: Imagen Fast -> Gemini 3 Pro
   const fallbackChain =
@@ -127,14 +134,16 @@ async function generateWithImagen({
         let imageBytes = null;
         if (isPro) {
           const response = await ai.models.generateContent({
-            model: "gemini-3.1-flash-image-preview",
+            model: "gemini-3.1-flash-image",
             contents: finalPrompt,
             generationConfig: {
-              responseMimeType: "image/png",
+              candidateCount: 1,
+              quality: "pro",
             },
             imageConfig: {
               aspectRatio: aspectRatio,
-              imageSize: resolution,
+              imageSize: '4K',
+              responseMimeType: "image/png",
             },
           });
 
