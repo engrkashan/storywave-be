@@ -109,11 +109,11 @@ ${prompt}
 Shot on Arri Alexa, 8K detail, sharp focus, volumetric lighting, masterpiece quality.
 `;
 
-  // Fallback chain: Imagen Fast -> Gemini 3 Pro
+  // Fallback chain: Gemini Premium -> Imagen Fast
   const fallbackChain =
     activeModelTier === "PREMIUM"
       ? [MODELS.PREMIUM]
-      : [MODELS.FAST, MODELS.PREMIUM];
+      : [MODELS.PREMIUM, MODELS.FAST];
 
   let lastError = null;
   let updatedTier = activeModelTier;
@@ -142,13 +142,15 @@ Shot on Arri Alexa, 8K detail, sharp focus, volumetric lighting, masterpiece qua
             },
             imageConfig: {
               aspectRatio: aspectRatio,
-              imageSize: '4K',
+              imageSize: "4K",
               responseMimeType: "image/png",
             },
           });
 
           // Wait for response to resolve and grab the part
-          const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+          const part = response.candidates?.[0]?.content?.parts?.find(
+            (p) => p.inlineData,
+          );
 
           imageBytes = part?.inlineData?.data;
         } else {
@@ -171,29 +173,37 @@ Shot on Arri Alexa, 8K detail, sharp focus, volumetric lighting, masterpiece qua
 
         const filePath = path.join(
           tempDir,
-          `scene_${String(index).padStart(3, "0")}.png`
+          `scene_${String(index).padStart(3, "0")}.png`,
         );
 
         await fs.promises.writeFile(
           filePath,
-          Buffer.from(imageBytes, "base64")
+          Buffer.from(imageBytes, "base64"),
         );
-        logger.info(`✅ Image generated successfully with ${modelId}:`, filePath);
-        return { filePath, activeModelTier: updatedTier };
+        logger.info(
+          `✅ Image generated successfully with ${modelId}:`,
+          filePath,
+        );
+        return { filePath, activeModelTier: isPro ? "PREMIUM" : "FAST" };
       } catch (err) {
         lastError = err;
-        logger.info(`❌ Image generation failed for ${modelId} (Attempt ${attempt}/${maxRetries}):`, err.message || err);
+        logger.info(
+          `❌ Image generation failed for ${modelId} (Attempt ${attempt}/${maxRetries}):`,
+          err.message || err,
+        );
 
         if (attempt === maxRetries) {
-          if (isFast) {
-            logger.warn(`⚠️ ${modelId} failed max retries (${err.message || "Unknown Error"}). Switching to ${MODELS.PREMIUM}`);
-            updatedTier = "PREMIUM";
-            break; // Break attempt loop to move to the next model in fallbackChain
+          if (isPro && fallbackChain.length > 1 && modelId === fallbackChain[0]) {
+            logger.warn(
+              `⚠️ ${modelId} failed max retries (${err.message || "Unknown Error"}). Switching to ${MODELS.FAST}`,
+            );
+            break; // Break attempt loop for Premium to move to Fast
           }
 
-          if (isPro) {
-            logger.warn(`⚠️ ${modelId} failed max retries. Falling back to MidJourney.`);
-            throw err;
+          if (isFast) {
+            logger.warn(
+              `⚠️ ${modelId} failed max retries. Falling back to MidJourney.`,
+            );
           }
           throw err;
         } else {

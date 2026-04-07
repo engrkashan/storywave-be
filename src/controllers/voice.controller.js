@@ -7,7 +7,6 @@ const fishAudio = new FishAudioClient({ apiKey: process.env.FISH_API_KEY });
 // Predefined list of specific Fish Audio voice IDs
 const FISH_VOICE_IDS = [
     "9d1efa1645a34f219cfb0ac605960a14",
-    "",
     "98544e744e754814a6aa22229f63f475",
     "3ad4d432023c47ee9e6c7805b973630a",
     "80e34d5e0b2b4577a486f3a77e357261",
@@ -30,7 +29,6 @@ const FISH_VOICE_IDS = [
     "933563129e564b19a115bedd57b7406a",
     "e3cd384158934cc9a01029cd7d278634",
     "b347db033a6549378b48d00acb0d06cd",
-    "",
     "31a18e2d02c340bf896c39ed27f7e8c5",
     "16b2981936f34328886f4f230e7fe196",
     "0327fdb5da9e4fd782899a8058c8ae2b",
@@ -52,7 +50,6 @@ const FISH_VOICE_IDS = [
     "001262690f2a4eea84aa764cc536df24",
     "75049ca2fdc5491eb9e12eec434c1f63",
     "10d94e1796c24ff094175985167699b7",
-    "",
     "47eec8ee3b7941b58ef57b1b7294202e",
     "159619a64f754162bc02f023ef97edf9",
     "490cf0f3d7bb4eb28a0799a34ba2d7aa",
@@ -64,7 +61,6 @@ const FISH_VOICE_IDS = [
     "783e4bc723494007a7d84c458d14d1ba",
     "45b9c65115fc4eee8c8df5b0782cc9ff",
     "7cefff1c89464d7dbc412482f909ec2d",
-    "",
     "42e70f5bc7b34a9e84abbbd6ec5572d0",
     "7561330e2bf34a76a80508fafcf81327",
     "329ff0b9604444ec982526af54630427",
