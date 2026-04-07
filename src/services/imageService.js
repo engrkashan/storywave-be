@@ -11,7 +11,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const MIDJOURNEY_API_BASE = "https://api.midapi.ai/api/v1/mj";
 
 const MODELS = {
-  PREMIUM: "gemini-3.1-flash-image",
+  PREMIUM: "gemini-3.1-flash-image-preview",
   FAST: "imagen-4.0-fast-generate-001",
 };
 
@@ -134,7 +134,7 @@ Shot on Arri Alexa, 8K detail, sharp focus, volumetric lighting, masterpiece qua
         let imageBytes = null;
         if (isPro) {
           const response = await ai.models.generateContent({
-            model: "gemini-3.1-flash-image",
+            model: "gemini-3.1-flash-image-preview",
             contents: finalPrompt,
             generationConfig: {
               candidateCount: 1,
