@@ -150,38 +150,45 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
           //   },
           // });
 
-          const response = await ai.models.generateContent({
-            model: "gemini-3.1-flash-image-preview",
-            contents: finalPrompt,
-            generationConfig: {
-              candidateCount: 1,
-              // Move these inside generationConfig
+
+          // // Wait for response to resolve and grab the part
+          // const part = response.candidates?.[0]?.content?.parts?.find(
+          //   (p) => p.inlineData,
+          // );
+
+          // imageBytes = part?.inlineData?.data;
+
+          const response = await ai.models.generateImages({
+            model: "imagen-3.0-generate-002", // The High-Fidelity engine
+            prompt: prompt,
+            config: {
+              numberOfImages: 1,
+              aspectRatio: ratio,
+              imageSize: "4K", // Explicitly requesting the 4K bucket
+              // 'pro' quality level ensures higher sampling steps
               quality: "pro",
-              imageSize: "4K",
-              aspectRatio: aspectRatio,
+              // Ensures the output is clean for professional use
+              safetySetting: "BLOCK_ONLY_HIGH",
+              // Required for Tier 3 features in some regions
+              personGeneration: "allow_all",
             },
-            // Keep this as a duplicate safety measure
-            imageConfig: {
-              aspectRatio: aspectRatio,
-              imageSize: "4K",
-              responseMimeType: "image/png",
-            },
-            parameters: {
-              "sampleCount": 1,
-              "includeDescription": true,
-              "outputOptions": {
-                "resolution": "4K",
-                "fileFormat": "png"
-              }
-            }
           });
 
-          // Wait for response to resolve and grab the part
-          const part = response.candidates?.[0]?.content?.parts?.find(
-            (p) => p.inlineData,
-          );
+          const image = response.generatedImages?.[0]?.image;
 
-          imageBytes = part?.inlineData?.data;
+          if (!image || !image.imageBytes) {
+            throw new Error("Imagen 3.0 failed to return image bytes.");
+          }
+
+          // Convert to Buffer for filesystem or Cloudinary
+          const buffer = Buffer.from(image.imageBytes, "base64");
+
+          // Check local resolution logic
+          // const metadata = await sharp(buffer).metadata();
+          // logger.info(`✅ Success! Resolution: ${metadata.width}x${metadata.height}`);
+
+          return buffer;
+
         } else {
           // imagen-4.0-fast uses generateImages
           const response = await ai.models.generateImages({
