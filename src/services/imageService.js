@@ -166,6 +166,14 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
               imageSize: "4K",
               responseMimeType: "image/png",
             },
+            parameters: {
+              "sampleCount": 1,
+              "includeDescription": true,
+              "outputOptions": {
+                "resolution": "4K",
+                "fileFormat": "png"
+              }
+            }
           });
 
           // Wait for response to resolve and grab the part
