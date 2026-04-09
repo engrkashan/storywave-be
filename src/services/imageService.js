@@ -136,13 +136,31 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
 
         let imageBytes = null;
         if (isPro) {
+          // const response = await ai.models.generateContent({
+          //   model: "gemini-3.1-flash-image-preview",
+          //   contents: finalPrompt,
+          //   generationConfig: {
+          //     candidateCount: 1,
+          //     quality: "pro",
+          //   },
+          //   imageConfig: {
+          //     aspectRatio: aspectRatio,
+          //     imageSize: "4K",
+          //     responseMimeType: "image/png",
+          //   },
+          // });
+
           const response = await ai.models.generateContent({
             model: "gemini-3.1-flash-image-preview",
             contents: finalPrompt,
             generationConfig: {
               candidateCount: 1,
+              // Move these inside generationConfig
               quality: "pro",
+              imageSize: "4K",
+              aspectRatio: aspectRatio,
             },
+            // Keep this as a duplicate safety measure
             imageConfig: {
               aspectRatio: aspectRatio,
               imageSize: "4K",
