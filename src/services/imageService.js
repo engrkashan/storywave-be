@@ -163,7 +163,7 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
             prompt: prompt,
             config: {
               numberOfImages: 1,
-              aspectRatio: ratio,
+              aspectRatio: aspectRatio,
               imageSize: "4K", // Explicitly requesting the 4K bucket
               // 'pro' quality level ensures higher sampling steps
               quality: "pro",
