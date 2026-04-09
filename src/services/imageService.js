@@ -187,6 +187,10 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
           `✅ Image generated successfully with ${modelId}:`,
           filePath,
         );
+        // Add this right after you save the file
+        const stats = await fs.promises.stat(filePath);
+        logger.info(`💾 File saved. Size on disk: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+        // If the file is ~1MB, it's 1024x1024. If it's >10MB, it's likely 4K.
         return { filePath, activeModelTier: isPro ? "PREMIUM" : "FAST" };
       } catch (err) {
         lastError = err;

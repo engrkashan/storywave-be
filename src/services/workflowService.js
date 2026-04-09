@@ -325,18 +325,32 @@ async function _runWorkflow({
 
         // Helper to generate and upload a single ratio
         const processRatio = async (ratio) => {
+          // 1. Generate the image (Ensure generateImage is using 'imageSize: "4K"')
           const result = await generateImage(coverArtPrompt, 1, coverArtDir, ratio);
+
           if (result.imageUrl) {
             const upload = await cloudinary.uploader.upload(result.imageUrl, {
               folder: "cover-arts",
               resource_type: "image",
               public_id: `cover-${ratio.replace(":", "_")}-${workflow.id}-${Date.now()}`,
               overwrite: true,
+              // 2. Add these specific params to preserve 4K quality
+              transformation: [
+                { quality: "original" }, // No compression on upload
+              ],
+              // This forces Cloudinary to return the metadata so we can track resolution
+              metadata: true
             });
+
+            // 3. LOG THE RESOLUTION HERE
+            // This is the moment of truth. If this says 1024, the issue is in generateImage.
+            logger.info(`🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.width}x${upload.height}px`);
+            logger.info(`🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.secure_url}`);
             return upload.secure_url;
           }
           return null;
         };
+
 
         // Generate both in parallel
         const [url16_9, url1_1] = await Promise.all([
