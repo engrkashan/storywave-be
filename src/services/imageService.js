@@ -136,59 +136,28 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
 
         let imageBytes = null;
         if (isPro) {
-          // const response = await ai.models.generateContent({
-          //   model: "gemini-3.1-flash-image-preview",
-          //   contents: finalPrompt,
-          //   generationConfig: {
-          //     candidateCount: 1,
-          //     quality: "pro",
-          //   },
-          //   imageConfig: {
-          //     aspectRatio: aspectRatio,
-          //     imageSize: "4K",
-          //     responseMimeType: "image/png",
-          //   },
-          // });
-
-
-          // // Wait for response to resolve and grab the part
-          // const part = response.candidates?.[0]?.content?.parts?.find(
-          //   (p) => p.inlineData,
-          // );
-
-          // imageBytes = part?.inlineData?.data;
-
-          const response = await ai.models.generateImages({
-            model: "imagen-3.0-generate-002", // The High-Fidelity engine
-            prompt: prompt,
+          const response = await ai.models.generateContent({
+            model: "gemini-3.1-flash-image-preview",
+            contents: finalPrompt,
             config: {
-              numberOfImages: 1,
-              aspectRatio: aspectRatio,
-              imageSize: "4K", // Explicitly requesting the 4K bucket
-              // 'pro' quality level ensures higher sampling steps
-              quality: "pro",
-              // Ensures the output is clean for professional use
-              safetySetting: "BLOCK_ONLY_HIGH",
-              // Required for Tier 3 features in some regions
-              personGeneration: "allow_all",
-            },
+              generationConfig: {
+                candidateCount: 1,
+                quality: "pro",
+              },
+              imageConfig: {
+                aspectRatio: aspectRatio,
+                imageSize: "4K",
+                responseMimeType: "image/png",
+              },
+            }
           });
 
-          const image = response.generatedImages?.[0]?.image;
+          // Wait for response to resolve and grab the part
+          const part = response.candidates?.[0]?.content?.parts?.find(
+            (p) => p.inlineData,
+          );
 
-          if (!image || !image.imageBytes) {
-            throw new Error("Imagen 3.0 failed to return image bytes.");
-          }
-
-          // Convert to Buffer for filesystem or Cloudinary
-          const buffer = Buffer.from(image.imageBytes, "base64");
-
-          // Check local resolution logic
-          // const metadata = await sharp(buffer).metadata();
-          // logger.info(`✅ Success! Resolution: ${metadata.width}x${metadata.height}`);
-
-          return buffer;
-
+          imageBytes = part?.inlineData?.data;
         } else {
           // imagen-4.0-fast uses generateImages
           const response = await ai.models.generateImages({
@@ -220,10 +189,6 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
           `✅ Image generated successfully with ${modelId}:`,
           filePath,
         );
-        // Add this right after you save the file
-        const stats = await fs.promises.stat(filePath);
-        logger.info(`💾 File saved. Size on disk: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-        // If the file is ~1MB, it's 1024x1024. If it's >10MB, it's likely 4K.
         return { filePath, activeModelTier: isPro ? "PREMIUM" : "FAST" };
       } catch (err) {
         lastError = err;
