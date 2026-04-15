@@ -6,8 +6,10 @@ import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("ImageService");
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  timeout: 180000 // 180 seconds for high-res images
+});
 const MIDJOURNEY_API_BASE = "https://api.midapi.ai/api/v1/mj";
 
 const MODELS = {
