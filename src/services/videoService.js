@@ -9,6 +9,10 @@ const logger = createLogger("VideoService");
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+const ZOOM_CYCLE_SECONDS = 12; // Total time for one full In-Out pulse (6s in, 6s out)
+const MAX_ZOOM_LEVEL = 1.2;   // Maximum zoom factor
+const FPS = 30;               // Standard frame rate
+
 export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspectRatio = "16:9") {
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -37,7 +41,20 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   const width = isVertical ? 1080 : 1920;
   const height = isVertical ? 1920 : 1080;
 
-  const filterComplex = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,subtitles='${escapedAssPath}'`;
+  // Cinematic Zoom Pulse calculations
+  const cycleFrames = ZOOM_CYCLE_SECONDS * FPS;
+  const center = (1 + MAX_ZOOM_LEVEL) / 2;
+  const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
+  const totalFrames = Math.ceil(audioDuration * FPS);
+
+  const filterComplex = [
+    `scale=${width}:${height}:force_original_aspect_ratio=increase`,
+    `crop=${width}:${height}`,
+    `setsar=1`,
+    `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}`,
+    `subtitles='${escapedAssPath}'`
+  ].join(",");
+
   const cmd = [
     `ffmpeg -y -loop 1`,
     `-i "${imagePath}"`,
@@ -285,11 +302,15 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
       inputs += `-i "${item}" `;
       filter += `[${i}:v]setpts=PTS-STARTPTS,${commonScale},fps=30,trim=duration=${clipDuration}[v${i}]; `;
     } else {
-      // 🎬 SIMPLIFIED CINEMATIC ZOOM
-      // No rembg. Single layer FFmpeg zoom-in effect
+      // 🎬 CINEMATIC ZOOM PULSE
+      const cycleFrames = ZOOM_CYCLE_SECONDS * FPS;
+      const center = (1 + MAX_ZOOM_LEVEL) / 2;
+      const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
+      const totalFrames = Math.ceil(clipDuration * FPS);
+
       inputs += `-loop 1 -t ${clipDuration} -i "${item}" `;
       filter += `[${i}:v]${commonScale},` +
-        `zoompan=z='min(zoom+0.0015,1.5)':d=${Math.ceil(clipDuration * 30)}` +
+        `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}` +
         `:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}[v${i}]; `;
     }
   });

@@ -143,3 +143,42 @@ export function generateCharacterBiblePrompts(demographic) {
     `.trim();
   });
 }
+
+/**
+ * Scene Prompt Instructions - Version 1 (Previous)
+ */
+export const SCENE_PROMPT_VERSION_ONE = `
+Scene Rules:
+- Focus on Action: Describe the specific movement, reaction, or interaction in this scene.
+- Narrative Beat: Each prompt must reflect a unique part of the story timeline.
+- Synergy: Assume these unique details will be combined with a "Common Visual Prompt" containing the art style, characters, and color palette.
+- Cinematic Essence: Capture the exact physical intensity of the moment.
+`.trim();
+
+/**
+ * Scene Prompt Instructions - Version 2 (Detailed Paragraph)
+ */
+export const SCENE_PROMPT_VERSION_TWO = `
+*For each shot, incorporate ALL of the following elements into one flowing, descriptive paragraph:*
+
+- Scene number and shot number
+- Camera angle (e.g., close-up, wide shot, over-the-shoulder, bird's eye view)
+- Camera movement (e.g., static, pan, tilt, dolly, tracking, handheld, crane)
+- Subject/characters in frame (with brief descriptions)
+- Action or activity occurring
+- Lighting conditions (e.g., natural light, dramatic, soft, high-key, low-key)
+- Setting/location details
+- Mood or tone (e.g., tense, romantic, mysterious, energetic)
+- Relevant props or background elements
+- Character wardrobe/costume details
+- Dialogue, background music, or sound effects (if applicable)
+- Duration or timing (if applicable)
+
+*Required Format:*
+
+*Scene [X], Shot [Y]:* [Complete description incorporating all relevant attributes from the list above in a single, cohesive paragraph that reads naturally and provides a complete visual and auditory picture of the shot]
+
+*Example:*
+
+*Scene 1, Shot 1:* Wide shot of a dimly lit coffee shop interior at dusk, with warm amber lighting from overhead pendant lamps casting soft shadows across wooden tables. The camera slowly dollies forward toward a woman in her 30s wearing a gray cardigan and jeans, sitting alone at a corner table, staring pensively out the window. The mood is melancholic and contemplative. Visible props include a half-empty coffee cup, an open laptop with a blue screen glow, and rain-streaked windows in the background. Soft jazz piano music plays faintly in the background, mixed with the ambient sound of rain. Duration: 8 seconds.
+`.trim();

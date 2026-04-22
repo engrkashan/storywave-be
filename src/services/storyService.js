@@ -1,6 +1,8 @@
 import { extractFromUrl, transcribeVideo } from "./inputService.js";
 import { createLogger } from "../utils/logger.js";
 import OpenAI from "openai";
+import { SCENE_PROMPT_VERSION_ONE, SCENE_PROMPT_VERSION_TWO } from "./promptService.js";
+
 
 const logger = createLogger("StoryService");
 
@@ -492,24 +494,21 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
   }
 
   const prompt = `
-    Split the following story into ${count} distinct visual scenes.
-    Act as a Visual Creative Director. For each scene, provide a detailed, cinematic generation prompt focusing ONLY on the UNIQUE narrative actions and specific environmental changes of that moment.
+    Split the following story into ${count} distinct visual scenes/shots.
+    Act as a Visual Creative Director. For each scene, provide a detailed, cinematic generation prompt following the Version Two instructions below.
     
     ${consistencyInstructions}
 
-    Scene Rules:
-    - Focus on Action: Describe the specific movement, reaction, or interaction in this scene.
-    - Narrative Beat: Each prompt must reflect a unique part of the story timeline.
-    - Synergy: Assume these unique details will be combined with a "Common Visual Prompt" containing the art style, characters, and color palette.
-    - Cinematic Essence: Capture the exact physical intensity of the moment.
+    Scene Rules (Version One):
+    ${SCENE_PROMPT_VERSION_TWO}
 
     Story: ${storyScript}
 
     Return the results as a JSON object with a single key "scenes" which contains an array of strings:
     {
       "scenes": [
-        "unique scene prompt 1",
-        "unique scene prompt 2"
+        "Scene 1, Shot 1: [description...]",
+        "Scene 2, Shot 1: [description...]"
       ]
     }
   `;
