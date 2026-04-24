@@ -474,7 +474,7 @@ export async function generateStory({
 export async function generateScenePrompts(storyScript, count = 5, metadata = null, visualSuggestions = null) {
   let consistencyInstructions = "";
   if (metadata) {
-    const { artStyle, colorPalette, demographic, personality, environment, physicality, anchor, texture, synopsis } = metadata;
+    const { artStyle, colorPalette, demographic, characterAppearance, personality, environmentSignature, physicality, anchor, texture, cinematicSpecs, synopsis } = metadata;
     consistencyInstructions = `
     VISUAL CONSISTENCY RULES (MANDATORY):
     ${visualSuggestions ? `- Visual Reference Idea: ${visualSuggestions}` : ""}
