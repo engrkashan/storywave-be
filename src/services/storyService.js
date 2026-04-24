@@ -494,13 +494,16 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
     `.trim();
   }
 
-  const prompt = `
-    Split the following story into ${count} distinct visual scenes/shots.
-    Act as a Visual Creative Director. For each scene, provide a detailed, cinematic generation prompt following the Version Two instructions below.
+    const prompt = `
+    Split the following story into EXACTLY ${count} distinct visual scenes.
+    For EACH scene, provide EXACTLY ONE cinematic generation prompt (Shot 1).
+    Total number of prompts in the "scenes" array MUST BE EXACTLY ${count}.
+    
+    Act as a Visual Creative Director. Follow the Version Two instructions below for each shot.
     
     ${consistencyInstructions}
 
-    Scene Rules (Version One):
+    Scene Rules:
     ${SCENE_PROMPT_VERSION_TWO}
 
     Story: ${storyScript}
@@ -509,7 +512,10 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
     {
       "scenes": [
         "Scene 1, Shot 1: [description...]",
-        "Scene 2, Shot 1: [description...]"
+        "Scene 2, Shot 1: [description...]",
+        "Scene 3, Shot 1: [description...]",
+        "Scene 4, Shot 1: [description...]",
+        "Scene 5, Shot 1: [description...]"
       ]
     }
   `;
