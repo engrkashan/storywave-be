@@ -316,6 +316,31 @@ async function _runWorkflow({
     const masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
     const commonPrompt = generateCommonVisualPrompt(storyMetadata);
 
+    let characterReferenceUrl = null;
+    let styleReferenceUrl = null;
+
+    // 2.2 Generate Style Reference Image (MANDATORY for consistency)
+    logger.info("Step 2.1.5: Generating Style Reference Image (Visual Baseline)...");
+    try {
+      const styleRefDir = path.join(workflowTempDir, "style_ref");
+      fs.mkdirSync(styleRefDir, { recursive: true });
+      // Generate a master cinematic shot to serve as style reference
+      const styleRefResult = await generateImage(masterPrompts.cinematic, 0, styleRefDir, aspectRatio, commonPrompt);
+      if (styleRefResult.imageUrl) {
+        // Upload to Cloudinary to get a permanent URL for Midjourney
+        const upload = await cloudinary.uploader.upload(styleRefResult.imageUrl, {
+          folder: "style-references",
+          resource_type: "image",
+          public_id: `style-ref-${workflow.id}-${Date.now()}`,
+          overwrite: true,
+        });
+        styleReferenceUrl = upload.secure_url;
+        logger.info(`✅ Style Reference URL: ${styleReferenceUrl}`);
+      }
+    } catch (err) {
+      logger.error(`⚠️ Style reference generation failed: ${err.message}`);
+    }
+
     // 2.2 Generate Cover Art if coverArtPrompt is provided
     if (coverArtPrompt) {
       logger.info(`🎨 Generating dual cover arts (1:1 & 16:9): ${coverArtPrompt}`);
@@ -371,6 +396,8 @@ async function _runWorkflow({
           storyMetadata,
           masterPrompts,
           commonPrompt,
+          characterReferenceUrl,
+          styleReferenceUrl,
         }
       },
     });
@@ -383,6 +410,19 @@ async function _runWorkflow({
       logger.info("Step 2.2: Generating Character Bible (Anchor Images)...");
       try {
         characterAssets = await generateCharacterBible(workflow.id.toString(), storyMetadata.demographic, workflowTempDir);
+        
+        // If we have character assets, upload the front view to Cloudinary for Midjourney reference
+        if (characterAssets && characterAssets.length > 0) {
+           const frontView = characterAssets.find(p => p.includes("front")) || characterAssets[0];
+           const upload = await cloudinary.uploader.upload(frontView, {
+             folder: "character-references",
+             resource_type: "image",
+             public_id: `char-ref-${workflow.id}-${Date.now()}`,
+             overwrite: true,
+           });
+           characterReferenceUrl = upload.secure_url;
+           logger.info(`✅ Character Reference URL: ${characterReferenceUrl}`);
+        }
       } catch (err) {
         logger.info(`⚠️ Character Bible failed: ${err.message}`, "\x1b[31m");
         await recordWorkflowWarning(workflow.id, "Character Bible", err);
@@ -478,10 +518,10 @@ async function _runWorkflow({
           const clips = await generateVideoClips(scenePrompts, ratioDir, currentRatio, characterAssets, commonPrompt);
           mediaItems = clips.filter(c => c.filePath).map(c => c.filePath);
         } else if (mediaType === "multi_image") {
-          const images = await generateMultiImages(scenePrompts, ratioDir, currentRatio, commonPrompt);
+          const images = await generateMultiImages(scenePrompts, ratioDir, currentRatio, commonPrompt, characterReferenceUrl, styleReferenceUrl);
           mediaItems = images.filter(img => img.imageUrl).map(img => img.imageUrl);
         } else {
-          const imageResult = await generateImage(scenePrompts[0], 1, ratioDir, currentRatio, commonPrompt);
+          const imageResult = await generateImage(scenePrompts[0], 1, ratioDir, currentRatio, commonPrompt, characterReferenceUrl, styleReferenceUrl);
           if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
         }
 

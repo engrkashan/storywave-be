@@ -35,11 +35,13 @@ Return STRICT valid JSON:
   "artStyle": "Specific cinematic photographic style (e.g., Anamorphic 35mm film, IMAX digital, Hand-held documentary, Grainy noir)",
   "colorPalette": "Dominant tones, contrast ratios, and accent colors (e.g., Teal and Orange with high-key highlights)",
   "demographic": "Specific ethnic/regional identity, age range, and attire based on setting",
+  "characterAppearance": "Extremely detailed physical description of the protagonist (hair texture, eye color, facial features, skin details, and specific outfit)",
   "personality": "Traits influencing micro-expressions, posture, and gaze",
-  "environment": "Setting details accurate to the narrative, including weather, time of day, and architectural style",
+  "environmentSignature": "A visual blueprint of the main setting. Describe architectural style, key furniture/objects, wall textures, and lighting atmosphere (e.g., 'Modernist concrete apartment with floor-to-ceiling glass and soft recessed amber lighting')",
   "physicality": "A specific pose, muscle tension, or visceral reaction reflecting the character's internal state",
   "anchor": "A recurring high-detail object for visual consistency",
   "texture": "Macro tactile details (e.g., weathered skin pores, coarse wool fibers, rain-slicked pavement)",
+  "cinematicSpecs": "Professional camera and lighting setup (e.g., 'Shot on 35mm Panavision lenses, deep depth of field, chiaroscuro lighting')",
   "synopsis": "The visual-narrative blueprint described above."
 }
 
@@ -70,11 +72,13 @@ ${storyText}
       artStyle: "Cinematic Realistic Film",
       colorPalette: "Natural Cinematic Colors",
       demographic: "A person matching the story's ethnic and regional context",
+      characterAppearance: "Detailed features consistent with the setting",
       personality: "Determined and focused",
-      environment: "A setting accurate to the narrative",
+      environmentSignature: "A setting accurate to the narrative",
       physicality: "A natural reaction",
       anchor: "An object from the story",
       texture: "Realistic textures",
+      cinematicSpecs: "High-end cinematic lighting and camera setup",
       synopsis: "A cinematic story with deep emotional resonance.",
     };
   }
@@ -84,7 +88,7 @@ ${storyText}
  * Generates the Universal Story-to-Cover Master Prompts (v5.0)
  */
 export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
-  const { artStyle, colorPalette, demographic, personality, environment, physicality, anchor, texture } = metadata;
+  const { artStyle, colorPalette, demographic, characterAppearance, personality, environmentSignature, physicality, anchor, texture, cinematicSpecs } = metadata;
 
   const commonVisuals = generateCommonVisualPrompt(metadata);
 
@@ -94,7 +98,7 @@ export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
     ${commonVisuals}
     Physical Action: ${physicality}.
     Shot Detail: 85mm lens compression, making the subject feel intimate and physically close. Every pore, bead of sweat, and individual hair is crisp and tactile.
-    Background: ${environment}.
+    Background: ${environmentSignature}.
     Lighting: Intense cinematic "Key Lighting" that casts deep, dramatic shadows, highlighting the contours of the face.
     Typography: Bold, stylized 3D typography for the title "${title}" is placed with a "shallow depth of field," allowing it to sit naturally within the scene's atmosphere. STRICT RULE: Use the title exactly as provided. No subtitles or creative additions allowed.
   `.trim();
@@ -117,9 +121,9 @@ export function generateMasterPrompts(metadata, title, aspectRatio = "16:9") {
  * This should be concatenated with unique scene-specific prompts.
  */
 export function generateCommonVisualPrompt(metadata) {
-  const { artStyle, colorPalette, demographic, personality, environment, texture, synopsis } = metadata;
+  const { artStyle, colorPalette, demographic, characterAppearance, personality, environmentSignature, texture, cinematicSpecs, synopsis } = metadata;
   const synopsisPart = synopsis ? ` Narrative Context: ${synopsis}` : "";
-  return `Art Style: ${artStyle}.${synopsisPart} Visual Identity: ${demographic} with a ${personality} personality. Setting: ${environment}. Color Palette: ${colorPalette}. Texture Detail: ${texture}. Consistent visual tone: High-end cinematic movie still, shot on 35mm lens, 8k resolution, hyper-realistic, volumetric lighting, ray-traced reflections, masterwork quality, IMAX aesthetic.`.trim();
+  return `Art Style: ${artStyle}.${synopsisPart} Visual Identity: ${demographic}, ${characterAppearance} with a ${personality} personality. Setting: ${environmentSignature}. Color Palette: ${colorPalette}. Texture Detail: ${texture}. Technical Specs: ${cinematicSpecs}. Consistent visual tone: High-end cinematic movie still, shot on professional lenses, 8k resolution, hyper-realistic, volumetric lighting, ray-traced reflections, masterwork quality, IMAX aesthetic.`.trim();
 }
 
 /**

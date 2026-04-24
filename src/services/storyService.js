@@ -481,8 +481,9 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
     - Narrative Synopsis: ${synopsis} (Use this for overall context and nature of the story)
     - Art Style: ${artStyle} (Strictly follow this medium/style)
     - Color Palette: ${colorPalette} (Use these colors for lighting and atmosphere)
-    - Protagonist: ${demographic} with a ${personality} personality (Maintain same physical features and emotional baseline)
-    - Environment: ${environment} (Consistent setting throughout)
+    - Protagonist Persona: ${demographic}, ${characterAppearance} with a ${personality} personality (Maintain same physical features and emotional baseline in every shot)
+    - Environment Signature: ${environmentSignature} (Maintain this visual blueprint for the setting in every shot)
+    - Cinematic Technical Specs: ${cinematicSpecs}
     - Details: ${physicality}
     - Anchor: ${anchor}
     - Textures: ${texture}

@@ -96,6 +96,8 @@ async function generateWithImagen({
   aspectRatio = "16:9",
   activeModelTier,
   resolution = "4K",
+  characterUrl = null,
+  styleUrl = null,
 }) {
   await ensureDir(tempDir);
   logger.info(`🎨 Generating image for scene ${index} with prompt: ${prompt} with common prompt: ${commonPrompt}`);
@@ -233,6 +235,8 @@ async function generateWithMidjourney({
   index,
   tempDir,
   aspectRatio = "16:9",
+  characterUrl = null,
+  styleUrl = null,
 }) {
   await ensureDir(tempDir);
 
@@ -240,10 +244,14 @@ async function generateWithMidjourney({
     throw new Error("MIDJOURNEY_API_KEY not set in environment");
   }
 
+  let finalPrompt = prompt;
+  if (characterUrl) finalPrompt += ` --cref ${characterUrl}`;
+  if (styleUrl) finalPrompt += ` --sref ${styleUrl}`;
+
   const payload = {
     taskType: "mj_txt2img",
     speed: "relaxed",
-    prompt: prompt,
+    prompt: finalPrompt,
     fileUrls: [],
     aspectRatio: aspectRatio,
     version: "7",
@@ -359,7 +367,9 @@ export async function generateMultiImages(
   prompts,
   tempDir,
   aspectRatio = "16:9",
-  commonPrompt = null
+  commonPrompt = null,
+  characterUrl = null,
+  styleUrl = null
 ) {
   let activeModelTier = null;
   const results = [];
@@ -379,6 +389,8 @@ export async function generateMultiImages(
           tempDir,
           aspectRatio,
           activeModelTier,
+          characterUrl,
+          styleUrl,
         });
 
         activeModelTier = result.activeModelTier;
@@ -409,6 +421,8 @@ export async function generateMultiImages(
           index: i + 1,
           tempDir,
           aspectRatio,
+          characterUrl,
+          styleUrl,
         });
         logger.info(`✅ [Multi-Image ${i + 1}/${prompts.length}] MidJourney succeeded: ${filePath}`);
         results.push({ imageUrl: filePath, error: null });
@@ -434,7 +448,9 @@ export async function generateImage(
   index = 1,
   tempDir,
   aspectRatio = "16:9",
-  commonPrompt = null
+  commonPrompt = null,
+  characterUrl = null,
+  styleUrl = null
 ) {
   let safePrompt = prompt;
   let lastError = null;
@@ -453,6 +469,8 @@ export async function generateImage(
         aspectRatio,
         activeModelTier,
         resolution,
+        characterUrl,
+        styleUrl,
       });
       logger.info(`✅ [Single Image] Gemini succeeded: ${result.filePath}`);
       return { imageUrl: result.filePath, error: null };
@@ -477,6 +495,8 @@ export async function generateImage(
         tempDir,
         aspectRatio,
         resolution,
+        characterUrl,
+        styleUrl,
       });
       logger.info(`✅ [Single Image] MidJourney succeeded: ${filePath}`);
       return { imageUrl: filePath, error: null };
