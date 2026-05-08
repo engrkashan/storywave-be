@@ -45,7 +45,6 @@ export const getOverview = async (req, res) => {
     const workflows = await prisma.workflow.findMany({
       where: whereByRole,
       orderBy: { createdAt: "desc" },
-      take: 20,
       select: {
         id: true,
         title: true,
@@ -59,6 +58,7 @@ export const getOverview = async (req, res) => {
             audioURL: true,
             coverArtURL: true,
             coverArtURL_16_9: true,
+            series: true,
           },
         },
         video: {
