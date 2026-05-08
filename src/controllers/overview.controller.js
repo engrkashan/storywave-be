@@ -83,6 +83,7 @@ export const getOverview = async (req, res) => {
       workflow: w.id,
       title: w.title || "Untitled Workflow",
       status: w.status,
+      series: w.story?.series || null,
       createdAt: w.createdAt,
       error: w.metadata?.error || null,
       isPodcast: w.story?.isPodcast || false,
