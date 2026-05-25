@@ -1,7 +1,8 @@
 import fs from "fs";
 import path from "path";
-import { fork } from "child_process";
 import { cloudinary } from "../config/cloudinary.config.js";
+import { addWorkflowJob } from "./queueService.js";
+import { config } from "../config/workflow.config.js";
 import prisma from "../config/prisma.client.js";
 import { deleteTempFiles } from "../utils/deleteTemp.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
@@ -69,9 +70,6 @@ export async function runScheduledWorkflows() {
       data: { status: "PROCESSING" },
     });
 
-    const workerPath = path.resolve("src/workers/workflow.worker.js");
-    const worker = fork(workerPath);
-
     const meta = workflow.metadata || {};
     const payload = {
       userId: workflow.userId || null,
@@ -94,15 +92,12 @@ export async function runScheduledWorkflows() {
       existingWorkflow: workflow,
     };
 
-    worker.send(payload);
-
-    worker.on("message", (msg) => {
-      logger.info(`Worker message for workflow ${workflow.id}: ${msg}`);
-    });
-
-    worker.on("exit", (code) => {
-      logger.info(`Worker for workflow ${workflow.id} exited with code ${code}`);
-    });
+    if (config.workflow.enableQueue) {
+      await addWorkflowJob(payload);
+    } else {
+      logger.warn("Queue is disabled, but falling back to queue anyway as fork is removed. Please enableQueue in config.");
+      await addWorkflowJob(payload);
+    }
   } catch (err) {
     logger.error(`Scheduler error: ${err.message}`, err);
   }

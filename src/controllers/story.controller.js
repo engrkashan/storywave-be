@@ -2,9 +2,9 @@ import prisma from "../config/prisma.client.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("StoryController");
-import { fork } from "child_process";
-import path from "path";
 import { generateStory } from "../services/storyService.js";
+import { addWorkflowJob } from "../services/queueService.js";
+import { config } from "../config/workflow.config.js";
 import crypto from "crypto";
 
 // Helper — consistent random title
@@ -79,29 +79,19 @@ export const createWorkflow = async (req, res) => {
       visualSuggestions,
     };
 
-    // 👉 PATH to worker file
-    const workerPath = path.resolve("src/workers/workflow.worker.js");
-
-    // 👉 Start worker
-    const worker = fork(workerPath);
-
-    // Send data to worker
-    worker.send(workflowPayload);
-
-    // Optional: log worker results (not sent to frontend)
-    worker.on("message", (msg) => {
-      if (msg.status === "success") {
-        logger.info("Workflow finished");
-      } else {
-        logger.error("Workflow worker error:", msg.error);
-      }
-    });
+    // 👉 Add job to BullMQ
+    if (config.workflow.enableQueue) {
+      await addWorkflowJob(workflowPayload);
+    } else {
+      logger.warn("Queue is disabled, but falling back to queue anyway as fork is removed. Please enableQueue in config.");
+      await addWorkflowJob(workflowPayload);
+    }
 
     // Immediate response
     return res.status(200).json({
-      message: "Workflow started in background",
+      message: "Workflow added to queue",
       title: finalTitle,
-      status: "processing",
+      status: "queued",
     });
   } catch (err) {
     logger.error("Error running workflow:", err);

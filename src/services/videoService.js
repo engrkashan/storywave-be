@@ -4,6 +4,7 @@ import path from "path";
 import { getAudioDuration } from "./audioService.js";
 import { GoogleGenAI } from "@google/genai";
 import { createLogger } from "../utils/logger.js";
+import { config } from "../config/workflow.config.js";
 
 const logger = createLogger("VideoService");
 
@@ -61,7 +62,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
     `-i "${audioPath}"`,
     `-filter_complex "${filterComplex}"`,
     `-map 0:v -map 1:a`,
-    `-c:v libx264 -crf 17 -preset veryfast -pix_fmt yuv420p -c:a copy -shortest`,
+    `-c:v libx264 -crf 17 -preset veryfast -pix_fmt yuv420p -c:a copy -shortest -threads ${config.workflow.ffmpegThreads}`,
     audioDuration ? `-t ${audioDuration}` : "",
     `"${outputPath}"`,
   ].join(" ");
@@ -363,7 +364,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
     `-i "${audioPath}"`,
     `-filter_complex "${filter}${mixingFilter}"`,
     `-map "[finalv]" -map ${audioIndex}:a`, // Point to narration audio
-    `-c:v libx264 -crf 18 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k -shortest`,
+    `-c:v libx264 -crf 18 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -threads ${config.workflow.ffmpegThreads}`,
     `-t ${audioDuration}`,
     `"${outputPath}"`,
   ].join(" ");
