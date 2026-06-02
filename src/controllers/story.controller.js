@@ -40,6 +40,7 @@ export const createWorkflow = async (req, res) => {
       coverArtPrompt,
       seoContent,
       visualSuggestions,
+      uploadedMediaUrl,
     } = req.body;
 
     if (!userId) {
@@ -77,6 +78,7 @@ export const createWorkflow = async (req, res) => {
       coverArtPrompt,
       seoContent,
       visualSuggestions,
+      uploadedMediaUrl,
     };
 
     // 👉 Add job to BullMQ

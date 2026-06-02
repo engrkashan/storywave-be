@@ -89,6 +89,7 @@ export async function runScheduledWorkflows() {
       backgroundMusic: meta.backgroundMusic ?? true,
       aspectRatio: meta.aspectRatio || "16:9",
       dualPlatform: meta.dualPlatform || false,
+      uploadedMediaUrl: meta.uploadedMediaUrl || null,
       existingWorkflow: workflow,
     };
 
@@ -184,6 +185,7 @@ async function _runWorkflow({
   coverArtPrompt = null,
   seoContent = null,
   visualSuggestions = null,
+  uploadedMediaUrl = null,
 }) {
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
@@ -224,6 +226,7 @@ async function _runWorkflow({
           coverArtPrompt,
           seoContent,
           visualSuggestions,
+          uploadedMediaUrl,
         },
       },
     });
@@ -497,27 +500,35 @@ async function _runWorkflow({
         const ratioDir = path.join(workflowTempDir, currentRatio.replace(":", "_"));
         fs.mkdirSync(ratioDir, { recursive: true });
 
-        // 1. Generate Scenic Prompts
-        let scenePrompts = [];
-        if (mediaType === "single_image") {
-          scenePrompts = [imagePrompt || script || "Cinematic storytelling scene"];
-        } else {
-          const dynamicCount = Math.max(5, Math.ceil(actualAudioDuration / 5));
-          const count = mediaType === "multi_image" ? imageCount : dynamicCount;
-          scenePrompts = await generateScenePrompts(script, count, storyMetadata, visualSuggestions);
-        }
-        logger.info("Scene Prompts:", scenePrompts);
-        // 2. Generate Media Items for this ratio
+        // 1. Determine media items — use direct upload or AI generation
         let mediaItems = [];
-        if (mediaType === "video") {
-          const clips = await generateVideoClips(scenePrompts, ratioDir, currentRatio, characterAssets, commonPrompt);
-          mediaItems = clips.filter(c => c.filePath).map(c => c.filePath);
-        } else if (mediaType === "multi_image") {
-          const images = await generateMultiImages(scenePrompts, ratioDir, currentRatio, commonPrompt, characterReferenceUrl, styleReferenceUrl);
-          mediaItems = images.filter(img => img.imageUrl).map(img => img.imageUrl);
+
+        if (uploadedMediaUrl) {
+          // ✅ Direct media path: skip AI generation entirely
+          logger.info(`⬆️ Using directly uploaded media: ${uploadedMediaUrl}`);
+          mediaItems = [uploadedMediaUrl];
         } else {
-          const imageResult = await generateImage(scenePrompts[0], 1, ratioDir, currentRatio, commonPrompt, characterReferenceUrl, styleReferenceUrl);
-          if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
+          // AI generation path
+          let scenePrompts = [];
+          if (mediaType === "single_image") {
+            scenePrompts = [imagePrompt || script || "Cinematic storytelling scene"];
+          } else {
+            const dynamicCount = Math.max(5, Math.ceil(actualAudioDuration / 5));
+            const count = mediaType === "multi_image" ? imageCount : dynamicCount;
+            scenePrompts = await generateScenePrompts(script, count, storyMetadata, visualSuggestions);
+          }
+          logger.info("Scene Prompts:", scenePrompts);
+
+          if (mediaType === "video") {
+            const clips = await generateVideoClips(scenePrompts, ratioDir, currentRatio, characterAssets, commonPrompt);
+            mediaItems = clips.filter(c => c.filePath).map(c => c.filePath);
+          } else if (mediaType === "multi_image") {
+            const images = await generateMultiImages(scenePrompts, ratioDir, currentRatio, commonPrompt, characterReferenceUrl, styleReferenceUrl);
+            mediaItems = images.filter(img => img.imageUrl).map(img => img.imageUrl);
+          } else {
+            const imageResult = await generateImage(scenePrompts[0], 1, ratioDir, currentRatio, commonPrompt, characterReferenceUrl, styleReferenceUrl);
+            if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
+          }
         }
 
         // 3. Create Video for this ratio
