@@ -6,6 +6,10 @@ const fishAudio = new FishAudioClient({ apiKey: process.env.FISH_API_KEY });
 
 // Predefined list of specific Fish Audio voice IDs
 const FISH_VOICE_IDS = [
+    "abee33f40b5142669c2c4104a6f74a2b",
+    "2e1e181ae1e54f188117783f6a24d4f9",
+    "359a3874136047a3b35265f48f525e65",
+    "e75e1618ff544059be71409c5126b4c0",
     "9d1efa1645a34f219cfb0ac605960a14",
     "98544e744e754814a6aa22229f63f475",
     "3ad4d432023c47ee9e6c7805b973630a",
