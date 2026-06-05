@@ -32,13 +32,23 @@ Pay special attention to demographic accuracy:
 
 Return STRICT valid JSON:
 {
+  "characters": [
+    {
+      "id": "char_1",
+      "name": "Character Name (or description if unnamed)",
+      "color": "Skin color, race, or ethnicity (e.g. Black, Caucasian, Asian, olive skin, dark skin)",
+      "age": "Approximate age in years (e.g. 25) or age range (e.g. mid-30s)",
+      "sex": "male or female",
+      "appearance": "Extremely detailed physical description (hair texture, eye color, facial features, skin details, and specific outfit). Avoid naming actors.",
+      "personality": "Traits influencing micro-expressions, posture, and gaze",
+      "isMainCharacter": true
+    }
+  ],
   "artStyle": "Specific cinematic photographic style (e.g., Anamorphic 35mm film, IMAX digital, Hand-held documentary, Grainy noir)",
   "colorPalette": "Dominant tones, contrast ratios, and accent colors (e.g., Teal and Orange with high-key highlights)",
   "demographic": "Specific ethnic/regional identity, age range, and attire based on setting",
-  "characterAppearance": "Extremely detailed physical description of the protagonist (hair texture, eye color, facial features, skin details, and specific outfit)",
-  "personality": "Traits influencing micro-expressions, posture, and gaze",
   "environmentSignature": "A visual blueprint of the main setting. Describe architectural style, key furniture/objects, wall textures, and lighting atmosphere (e.g., 'Modernist concrete apartment with floor-to-ceiling glass and soft recessed amber lighting')",
-  "physicality": "A specific pose, muscle tension, or visceral reaction reflecting the character's internal state",
+  "physicality": "A specific pose, muscle tension, or visceral reaction reflecting the protagonist's internal state",
   "anchor": "A recurring high-detail object for visual consistency",
   "texture": "Macro tactile details (e.g., weathered skin pores, coarse wool fibers, rain-slicked pavement)",
   "cinematicSpecs": "Professional camera and lighting setup (e.g., 'Shot on 35mm Panavision lenses, deep depth of field, chiaroscuro lighting')",
@@ -166,7 +176,7 @@ export const SCENE_PROMPT_VERSION_TWO = `
 *For each shot, incorporate ALL of the following elements into one flowing, descriptive paragraph:*
 
 - Scene number and shot number
-- Camera angle (e.g., close-up, wide shot, over-the-shoulder, bird's eye view)
+- Camera angle (Choose the best angle for the narrative: wide establishing shot, medium shot, over-the-shoulder, bird's eye view, etc. Avoid using close-ups unless emotionally necessary)
 - Camera movement (e.g., static, pan, tilt, dolly, tracking, handheld, crane)
 - Subject/characters in frame (with brief descriptions)
 - Action or activity occurring

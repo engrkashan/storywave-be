@@ -472,69 +472,157 @@ export async function generateStory({
  * Break story into visual scene prompts for image/video generation
  */
 export async function generateScenePrompts(storyScript, count = 5, metadata = null, visualSuggestions = null) {
-  let consistencyInstructions = "";
-  if (metadata) {
-    const { artStyle, colorPalette, demographic, characterAppearance, personality, environmentSignature, physicality, anchor, texture, cinematicSpecs, synopsis } = metadata;
-    consistencyInstructions = `
-    VISUAL CONSISTENCY RULES (MANDATORY):
-    ${visualSuggestions ? `- Visual Reference Idea: ${visualSuggestions}` : ""}
-    - Narrative Synopsis: ${synopsis} (Use this for overall context and nature of the story)
-    - Art Style: ${artStyle} (Strictly follow this medium/style)
-    - Color Palette: ${colorPalette} (Use these colors for lighting and atmosphere)
-    - Protagonist Persona: ${demographic}, ${characterAppearance} with a ${personality} personality (Maintain same physical features and emotional baseline in every shot)
-    - Environment Signature: ${environmentSignature} (Maintain this visual blueprint for the setting in every shot)
-    - Cinematic Technical Specs: ${cinematicSpecs}
-    - Details: ${physicality}
-    - Anchor: ${anchor}
-    - Textures: ${texture}
-    
-    Technical: On priority keeping visualSuggestions in mind, Use "Extreme Close-Up", "Medium-Long Shot", or "Low-Angle Hero Shot" depending on the beat. 8k, HDR, ray-traced reflections. NO TEXT.
-    Quality: Ensure high visual coherence. Every image must look like it belongs to the same high-budget ${artStyle} movie.
-    Cinematic Effects: [VIBRATE] for high-frequency kinetic energy. [PULSATE] for rhythmic atmospheric shifts. Use descriptive camera movements like "Slow Tracking", "Dolly Zoom", or "Crane Shot" in the description.
-    `.trim();
+  // ── Step 1: Mechanically split the script into N equal word chunks ──────────
+  // Each image represents the exact moment that chunk is being narrated.
+  const words = storyScript.split(/\s+/).filter(Boolean);
+  const chunkSize = Math.ceil(words.length / count);
+  const chunks = [];
+  for (let i = 0; i < count; i++) {
+    const slice = words.slice(i * chunkSize, (i + 1) * chunkSize).join(" ");
+    if (slice.trim()) chunks.push(slice);
   }
 
-    const prompt = `
-    Split the following story into EXACTLY ${count} distinct visual scenes.
-    For EACH scene, provide EXACTLY ONE cinematic generation prompt (Shot 1).
-    Total number of prompts in the "scenes" array MUST BE EXACTLY ${count}.
+  // ── Step 2: Build visual consistency context from metadata ──────────────────
+  let consistencyInstructions = "";
+  let characterRoster = "";
+  if (metadata) {
+    const { artStyle, colorPalette, environmentSignature, cinematicSpecs, synopsis, characters } = metadata;
     
-    Act as a Visual Creative Director. Follow the Version Two instructions below for each shot.
-    
-    ${consistencyInstructions}
+    // Build a character ID map so the LLM can tag scenes correctly
+    if (characters && characters.length > 0) {
+      characterRoster = `
+CHARACTER ROSTER (for reference — only tag a character if they naturally appear in this scene):
+${characters.map(c => `- ID: "${c.id}" | Name: ${c.name} | ${c.sex || ""}, ${c.age || ""}, ${c.color || ""} | Appearance: ${c.appearance?.slice(0, 120) || ""}`).join("\n")}
 
-    Scene Rules:
-    ${SCENE_PROMPT_VERSION_TWO}
-
-    Story: ${storyScript}
-
-    Return the results as a JSON object with a single key "scenes" which contains an array of strings:
-    {
-      "scenes": [
-        "Scene 1, Shot 1: [description...]",
-        "Scene 2, Shot 1: [description...]",
-        "Scene 3, Shot 1: [description...]",
-        "Scene 4, Shot 1: [description...]",
-        "Scene 5, Shot 1: [description...]"
-      ]
+IMPORTANT: The character reference images provided to the image model are APPEARANCE/LIKENESS references only — they show what the character looks like (face, skin, hair). The character's ACTION and POSE in the generated image must come entirely from the scene description you write. Do NOT describe the reference image pose.
+`;
     }
-  `;
+
+    consistencyInstructions = `
+VISUAL CONSISTENCY RULES (MANDATORY — apply to EVERY prompt):
+${visualSuggestions ? `- User Visual Style Note: ${visualSuggestions}` : ""}
+- Narrative Synopsis: ${synopsis}
+- Art Style: ${artStyle} (Strictly follow this style)
+- Color Palette: ${colorPalette} (Lighting and atmosphere)
+- Environment: ${environmentSignature}
+- Cinematic Specs: ${cinematicSpecs}
+- Technical: Choose the most natural shot type for this story beat (wide establishing, medium, over-the-shoulder, aerial, insert, etc.). 8K, HDR. STRICTLY NO TEXT OR LETTERS IN THE IMAGE.
+- Coherence: Every image must look like it belongs to the same high-budget ${artStyle} production.`.trim();
+  }
+
+  // ── Step 2.5: Pre-analyze scene continuity for wardrobe consistency ─────────
+  let outfitContexts = new Array(chunks.length).fill("");
+  if (metadata?.characters && metadata.characters.length > 0) {
+    const continuityPrompt = `You are a Costume Designer and Script Supervisor.
+    
+Analyze the following sequential story chunks. Your job is to determine the wardrobe/outfits for the characters across these chunks.
+- Group consecutive chunks that happen in the same continuous scene (same time and location).
+- For each continuous scene, define the EXACT clothing worn by each character. The clothing MUST stay consistent across all chunks within that continuous scene.
+- If the story jumps to a new location or a new day, logically determine if the outfit should change or stay the same.
+
+${characterRoster}
+
+STORY CHUNKS:
+${chunks.map((chunk, i) => `[CHUNK ${i}]: ${chunk.slice(0, 300)}...`).join("\n\n")}
+
+OUTPUT FORMAT — Return STRICT valid JSON mapping each chunk index to an outfit description string:
+{
+  "outfits": [
+    {
+      "chunkIndex": 0,
+      "outfitContext": "Ethan is wearing a tailored charcoal suit with a crisp white shirt, slightly wrinkled from travel. Sarah is wearing a burgundy trench coat over a black turtleneck."
+    }
+  ]
+}`;
+
+    try {
+      logger.info("👕 Pre-analyzing script for wardrobe continuity...");
+      const res = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: continuityPrompt }],
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+      });
+      const parsed = JSON.parse(res.choices[0].message.content.trim());
+      if (parsed.outfits && Array.isArray(parsed.outfits)) {
+        parsed.outfits.forEach(o => {
+          if (o.chunkIndex >= 0 && o.chunkIndex < chunks.length) {
+            outfitContexts[o.chunkIndex] = o.outfitContext;
+          }
+        });
+      }
+      logger.info("✅ Wardrobe continuity analysis complete.");
+    } catch (err) {
+      logger.warn(`⚠️ Wardrobe continuity analysis failed: ${err.message}. Proceeding without strict wardrobe contexts.`);
+    }
+  }
+
+  // ── Step 3: Generate one tight prompt per chunk, anchored to opening line ───
+  const scenePromises = chunks.map(async (chunk, i) => {
+    // The opening sentence is literally what the narrator says when this image appears
+    const openingSentence = (chunk.match(/[^.!?]+[.!?]/)?.[0] ?? chunk.slice(0, 150)).trim();
+
+    let wardrobeInstruction = "";
+    if (outfitContexts[i]) {
+      wardrobeInstruction = `\nWARDROBE INSTRUCTIONS FOR THIS SCENE:\n${outfitContexts[i]}\nIMPORTANT: You must incorporate these exact clothing details into your prompt if the character is visible.`;
+    }
+
+    const singlePrompt = `You are a world-class Cinematic Art Director and Storyboard Supervisor.
+
+${consistencyInstructions}
+
+${characterRoster}${wardrobeInstruction}
+
+${SCENE_PROMPT_VERSION_TWO}
+
+NARRATION ANCHOR — this is the exact sentence being SPOKEN when this image appears on screen:
+"${openingSentence}"
+
+Full narration chunk (for context only):
+"${chunk.slice(0, 500)}"
+
+TASK: Write ONE cinematic image-generation prompt for this exact spoken moment.
+
+Critical Rules:
+- The prompt describes a FREEZE-FRAME from a high-budget film — single moment, no motion blur descriptions.
+- Determine naturally from the narration: does a specific named character physically appear in this shot, or is it a wide environment/object/action shot? NOT every scene needs a character in frame.
+- If a character IS in the scene, describe their PHYSICAL ACTIONS, EXPRESSION, and POSE for this specific moment. DO NOT describe the reference image itself — that is handled separately for likeness matching.
+- If the scene is about an environment, object, or abstract moment — write it as such. No need to force a character into frame.
+- Choose the shot type that best serves the emotional and narrative beat — wide, medium, two-shot, POV, insert, overhead, etc. Avoid defaulting to close-ups.
+- Specify: chosen shot type, subject, lighting, atmosphere, lens, mood.
+- STRICTLY NO text, captions, subtitles, or letters in the image.
+
+OUTPUT FORMAT — Return STRICT valid JSON:
+{
+  "prompt": "The detailed cinematic prompt string (environment, action, lighting, mood, shot type)",
+  "charactersInScene": ["list ONLY character IDs from the CHARACTER ROSTER above that physically appear in this specific shot. Use [] if no named character is in frame."]
+}`;
+
+    try {
+      const res = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: singlePrompt }],
+        temperature: 0.8,
+        max_tokens: 400,
+        response_format: { type: "json_object" },
+      });
+      
+      const rawText = res.choices[0].message.content.trim();
+      const parsed = JSON.parse(rawText);
+      const charIds = (parsed.charactersInScene || []).filter(id => typeof id === "string" && id.startsWith("char_"));
+      
+      logger.info(`✅ Scene ${i + 1}/${chunks.length}: "${parsed.prompt.slice(0, 80)}..." | chars: [${charIds.join(", ") || "none"}]`);
+      return { prompt: parsed.prompt, charactersInScene: charIds };
+    } catch (err) {
+      logger.warn(`⚠️ Scene ${i + 1} prompt failed: ${err.message} — using opening sentence fallback`);
+      return { prompt: openingSentence, charactersInScene: [] };
+    }
+  });
 
   try {
-    const result = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-      temperature: 0.7,
-    });
-
-    const content = result.choices[0].message.content;
-    const parsed = JSON.parse(content);
-    // Handle potential object keys like { "scenes": [...] }
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed.scenes && Array.isArray(parsed.scenes)) return parsed.scenes;
-    if (parsed.prompts && Array.isArray(parsed.prompts)) return parsed.prompts;
-    return Object.values(parsed).find(Array.isArray) || [];
+    const scenes = await Promise.all(scenePromises);
+    logger.info(`✅ Generated ${scenes.length} chunk-anchored scene prompts`);
+    return scenes;
   } catch (err) {
     logger.error("Failed to generate scene prompts:", err);
     return [];

@@ -3,7 +3,17 @@ import * as cheerio from "cheerio";
 import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
+import { exec } from "child_process";
+
+// Promisified exec helper
+function execAsync(cmd, options = {}) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, options, (error, stdout, stderr) => {
+      if (error) return reject(error);
+      resolve(stdout);
+    });
+  });
+}
 import ytdlp from "yt-dlp-exec"; //for local video download
 import { createLogger } from "../utils/logger.js";
 
@@ -59,7 +69,7 @@ export const downloadVideo = async (url) => {
     const command = `${ytDlpPath} "${url}" --cookies ${cookiesPath} -o "${outputPath}"`;
 
     logger.info("▶ Running command:", command);
-    execSync(command, { stdio: "inherit" }); // inherit to log live output
+    await execAsync(command);
 
     return outputPath;
   } catch (err) {
@@ -108,19 +118,13 @@ export async function transcribeVideo(filePath) {
 
   // ✅ Step 1: Convert video to 16kHz mono WAV
   logger.info("🎧 Extracting audio...");
-  execSync(
-    `ffmpeg -y -i "${filePath}" -ac 1 -ar 16000 -vn -f wav "${baseAudio}"`,
-    { stdio: "ignore" }
-  );
+  await execAsync(`ffmpeg -y -i "${filePath}" -ac 1 -ar 16000 -vn -f wav "${baseAudio}"`);
 
   // ✅ Step 2: Get total duration
-  const duration = parseFloat(
-    execSync(
-      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${baseAudio}"`
-    )
-      .toString()
-      .trim()
+  const durationStr = await execAsync(
+    `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${baseAudio}"`
   );
+  const duration = parseFloat(durationStr.toString().trim());
 
   logger.info(`🎞️ Audio duration: ${formatTime(duration)}`);
 
@@ -133,10 +137,7 @@ export async function transcribeVideo(filePath) {
     const end = Math.min(offset + chunkDuration, duration);
     const chunkFile = path.join(tempDir, `chunk-${offset}.wav`);
 
-    execSync(
-      `ffmpeg -y -i "${baseAudio}" -ss ${offset} -to ${end} -c copy "${chunkFile}"`,
-      { stdio: "ignore" }
-    );
+    await execAsync(`ffmpeg -y -i "${baseAudio}" -ss ${offset} -to ${end} -c copy "${chunkFile}"`);
 
     const sizeMB = fs.statSync(chunkFile).size / (1024 * 1024);
     logger.info(

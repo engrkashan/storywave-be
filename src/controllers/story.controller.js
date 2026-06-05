@@ -3,7 +3,7 @@ import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("StoryController");
 import { generateStory } from "../services/storyService.js";
-import { addWorkflowJob } from "../services/queueService.js";
+import { addWorkflowJob, cancelWorkflowJob } from "../services/queueService.js";
 import { config } from "../config/workflow.config.js";
 import crypto from "crypto";
 
@@ -17,6 +17,7 @@ function generateRandomTitle(storyType = "Story") {
 // POST Create Workflow (Start background process)
 export const createWorkflow = async (req, res) => {
   try {
+    logger.info(`📥 Incoming POST /workflow request body size: ${JSON.stringify(req.body).length} bytes`);
     const userId = req.user?.userId;
 
     const {
@@ -41,6 +42,7 @@ export const createWorkflow = async (req, res) => {
       seoContent,
       visualSuggestions,
       uploadedMediaUrl,
+      characterReferenceBase64,
     } = req.body;
 
     if (!userId) {
@@ -54,9 +56,55 @@ export const createWorkflow = async (req, res) => {
     }
 
     const finalTitle = title || generateRandomTitle(storyType);
+    const nowUTC = new Date().toISOString();
+    const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
+    const isScheduled = scheduledUTC && new Date(scheduledUTC) > new Date(nowUTC);
 
-    // 👉 Build the payload for worker process
+    // ✅ Step 1: Create the DB record FIRST so we have a workflowId to link to the BullMQ job
+    const workflow = await prisma.workflow.create({
+      data: {
+        title: finalTitle,
+        type: "STORY",
+        status: isScheduled ? "SCHEDULED" : "PENDING",
+        scheduledAt: isScheduled ? new Date(scheduledUTC) : null,
+        userId,
+        metadata: {
+          url,
+          videoFile,
+          textIdea,
+          imagePrompt,
+          shouldGenerateImage,
+          storyType,
+          voice,
+          voiceTone,
+          storyLength,
+          mediaType,
+          imageCount,
+          backgroundMusic,
+          aspectRatio,
+          dualPlatform,
+          series,
+          coverArtPrompt,
+          seoContent,
+          visualSuggestions,
+          uploadedMediaUrl,
+          characterReferenceBase64: characterReferenceBase64 || null,
+        },
+      },
+    });
+
+    if (isScheduled) {
+      return res.status(200).json({
+        message: "Story scheduled successfully",
+        title: finalTitle,
+        workflowId: workflow.id,
+        status: "scheduled",
+      });
+    }
+
+    // ✅ Step 2: Queue the job with the workflowId embedded in the payload
     const workflowPayload = {
+      workflowId: workflow.id, // 🔑 Critical link
       userId,
       title: finalTitle,
       url,
@@ -68,7 +116,7 @@ export const createWorkflow = async (req, res) => {
       shouldGenerateImage,
       voiceTone,
       storyLength,
-      scheduledAt,
+      scheduledAt: null,
       mediaType,
       imageCount,
       backgroundMusic,
@@ -79,27 +127,37 @@ export const createWorkflow = async (req, res) => {
       seoContent,
       visualSuggestions,
       uploadedMediaUrl,
+      characterReferenceBase64: characterReferenceBase64 || null,
     };
 
-    // 👉 Add job to BullMQ
-    if (config.workflow.enableQueue) {
-      await addWorkflowJob(workflowPayload);
-    } else {
-      logger.warn("Queue is disabled, but falling back to queue anyway as fork is removed. Please enableQueue in config.");
-      await addWorkflowJob(workflowPayload);
-    }
+    const job = await addWorkflowJob(workflowPayload);
 
-    // Immediate response
+    // ✅ Step 3: Save the bullJobId back to the workflow DB record so cancellation can find it
+    await prisma.workflow.update({
+      where: { id: workflow.id },
+      data: {
+        metadata: {
+          ...workflow.metadata,
+          bullJobId: job.id,
+        },
+      },
+    });
+
+    logger.info(`✅ Workflow ${workflow.id} queued as BullMQ job ${job.id}`);
+
     return res.status(200).json({
       message: "Workflow added to queue",
       title: finalTitle,
+      workflowId: workflow.id,
       status: "queued",
+      bullJobId: job.id,
     });
   } catch (err) {
     logger.error("Error running workflow:", err);
     return res.status(500).json({ error: err.message || "Workflow failed" });
   }
 };
+
 
 // POST Create Story (No workflow, just logic)
 export const createStory = async (req, res) => {
@@ -289,12 +347,12 @@ export const deleteStory = async (req, res) => {
       return res.status(401).json({ error: "Unauthorized: missing user" });
     }
 
-    // Check story ownership and get workflows
+    // Check story ownership and get workflows with BullMQ job reference
     const story = await prisma.story.findFirst({
       where: { id: storyId, userId },
       include: {
         Workflow: {
-          select: { id: true },
+          select: { id: true, status: true, metadata: true },
         },
       },
     });
@@ -303,13 +361,29 @@ export const deleteStory = async (req, res) => {
       return res.status(404).json({ error: "Story not found or not allowed" });
     }
 
-    // MongoDB doesn't support cascade deletes, so we need to manually delete workflows
-    // Delete all workflows associated with this story
+    // Kill any active BullMQ jobs + mark as cancelled so the worker stops
     if (story.Workflow && story.Workflow.length > 0) {
+      for (const wf of story.Workflow) {
+        // Mark as CANCELLATION_REQUESTED so the in-flight worker stops at next checkpoint
+        try {
+          await prisma.workflow.update({
+            where: { id: wf.id },
+            data: { status: "CANCELLATION_REQUESTED" },
+          });
+        } catch (_) {} // may already be deleted
+
+        // Also forcefully remove the BullMQ job if it's still queued/waiting
+        const bullJobId = wf.bullJobId || wf.metadata?.bullJobId;
+        if (bullJobId) {
+          try { await cancelWorkflowJob(bullJobId); } catch (_) {}
+        }
+      }
+
+      // Give the worker a moment to catch the cancellation signal
+      await new Promise(r => setTimeout(r, 500));
+
       await prisma.workflow.deleteMany({
-        where: {
-          id: { in: story.Workflow.map((w) => w.id) },
-        },
+        where: { id: { in: story.Workflow.map((w) => w.id) } },
       });
     }
 
@@ -354,5 +428,60 @@ export const deleteScheduledStory = async (req, res) => {
   } catch (error) {
     logger.error("Cancel Scheduled Story Error:", error);
     return res.status(500).json({ error: "Failed to cancel scheduled story" });
+  }
+};
+
+// CANCEL a workflow (queued or actively processing)
+export const cancelWorkflow = async (req, res) => {
+  try {
+    const { id } = req.params; // workflow DB id
+    const userId = req.user?.userId;
+
+    const workflow = await prisma.workflow.findFirst({
+      where: { id, userId },
+    });
+
+    if (!workflow) {
+      return res.status(404).json({ error: "Workflow not found" });
+    }
+
+    const { status } = workflow;
+
+    if (status === "COMPLETED" || status === "CANCELLED" || status === "FAILED") {
+      return res.status(400).json({ error: `Cannot cancel a workflow with status '${status}'` });
+    }
+
+    // If it is still PENDING / waiting in BullMQ, try to remove the job directly
+    if (status === "PENDING") {
+      const bullJobId = workflow.metadata?.bullJobId;
+      if (bullJobId) {
+        await cancelWorkflowJob(bullJobId);
+      }
+      await prisma.workflow.update({
+        where: { id },
+        data: { status: "CANCELLED", metadata: { ...(workflow.metadata || {}), cancelledAt: new Date().toISOString() } },
+      });
+      return res.status(200).json({ message: "Queued workflow cancelled" });
+    }
+
+    // If PROCESSING, request cooperative cancellation AND immediately try to evict the BullMQ job
+    const bullJobId = workflow.metadata?.bullJobId;
+    if (bullJobId) {
+      try { await cancelWorkflowJob(bullJobId); } catch (_) {}
+    }
+
+    await prisma.workflow.update({
+      where: { id },
+      data: { status: "CANCELLATION_REQUESTED" },
+    });
+
+    logger.info(`🚦 Cancellation requested for workflow ${id}`);
+    return res.status(200).json({
+      message: "Cancellation requested. The workflow will stop at the next checkpoint.",
+      workflowId: id,
+    });
+  } catch (err) {
+    logger.error("Cancel Workflow Error:", err);
+    return res.status(500).json({ error: "Failed to cancel workflow" });
   }
 };

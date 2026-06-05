@@ -4,9 +4,9 @@
   "type": "module",
   "main": "src/app.js",
   "scripts": {
-    "dev": "nodemon src/app.js",
+    "dev": "concurrently \"nodemon src/app.js\" \"nodemon src/workers/index.js\"",
     "start": "node src/app.js",
-    "worker": "node src/workers/bullmq.worker.js",
+    "worker": "node src/workers/index.js",
     "prisma:generate": "prisma generate",
     "prisma:reset": "prisma migrate reset",
     "prisma:studio": "prisma studio",
@@ -34,7 +34,7 @@
     "googleapis": "^160.0.0",
     "ioredis": "^5.10.1",
     "jsonwebtoken": "^9.0.2",
-    "morgan": "^1.10.0",
+    "morgan": "^1.11.0",
     "multer": "^2.0.1",
     "multer-storage-cloudinary": "^4.0.0",
     "node-cron": "^4.2.1",
@@ -43,5 +43,8 @@
     "prisma": "^6.16.2",
     "voice": "^0.0.0",
     "yt-dlp-exec": "^1.0.2"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
   }
 }

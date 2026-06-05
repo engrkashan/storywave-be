@@ -1,3 +1,6 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 export const config = {
   workflow: {
     maxWorkerConcurrency: parseInt(process.env.MAX_WORKER_CONCURRENCY || "1", 10),

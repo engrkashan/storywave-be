@@ -14,6 +14,8 @@ const app = express();
 
 
 // Middleware
+import morgan from "morgan";
+app.use(morgan("dev")); // Log all API requests to the terminal
 app.use(cors());
 app.use(express.json({ limit: "500mb" }));
 app.use(express.urlencoded({ extended: true, limit: "500mb" }));
@@ -36,6 +38,7 @@ import overviewRoutes from "./routes/overview.routes.js";
 import storyRoutes from "./routes/story.routes.js";
 import voiceRoutes from "./routes/voice.routes.js";
 import { runScheduledWorkflows } from "./services/workflowService.js";
+// Start BullMQ worker in-process (REMOVED: runs in separate process now)
 
 app.use("/api/auth", authRoutes);
 app.use("/api/story", storyRoutes);

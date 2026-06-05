@@ -8,6 +8,7 @@ import {
   deleteStory,
   getScheduledStories,
   deleteScheduledStory,
+  cancelWorkflow,
 } from "../controllers/story.controller.js";
 
 const router = express.Router();
@@ -17,6 +18,7 @@ const router = express.Router();
  * Start a new workflow (background process)
  */
 router.post("/workflow", verifyToken, createWorkflow);
+router.delete("/workflow/:id", verifyToken, cancelWorkflow); // Cancel queued or processing workflow
 router.post("/", verifyToken, createStory);
 router.get("/", verifyToken, getStories);
 router.get("/scheduled", verifyToken, getScheduledStories);

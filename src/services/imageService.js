@@ -85,6 +85,26 @@ async function throttleImagen() {
 }
 
 /* --------------------------------------------------
+   CHARACTER REF: Fetch remote image → base64 for Gemini multimodal
+-------------------------------------------------- */
+async function fetchImageAsBase64(url) {
+  // If it's already a base64 data URL from the frontend, parse it directly
+  if (url.startsWith("data:image")) {
+    const match = url.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
+    if (match) {
+      return { mimeType: match[1], base64: match[2] };
+    }
+  }
+
+  // Otherwise, fetch it (for backward compatibility with old Cloudinary URLs)
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Failed to fetch character reference: ${response.statusText}`);
+  const buffer = await response.buffer();
+  const mimeType = response.headers.get("content-type") || "image/jpeg";
+  return { base64: buffer.toString("base64"), mimeType };
+}
+
+/* --------------------------------------------------
    GEMINI / IMAGEN
 -------------------------------------------------- */
 
@@ -96,25 +116,74 @@ async function generateWithImagen({
   aspectRatio = "16:9",
   activeModelTier,
   resolution = "4K",
-  characterUrl = null,
+  characterReferences = [],
+  sceneCharacters = [],
   styleUrl = null,
+  onCheckCancelled = null,
 }) {
+
   await ensureDir(tempDir);
-  logger.info(`🎨 Generating image for scene ${index} with prompt: ${prompt} with common prompt: ${commonPrompt}`);
+  logger.info(`🎨 Generating image for scene ${index} with prompt: "${prompt.slice(0, 80)}..."`);
+
+  const styleSection = styleUrl
+    ? `\n# STYLE REFERENCE ANCHOR:\nMatch the exact visual style, color grading, film grain, lens characteristics, and lighting mood of this reference image: ${styleUrl}. Every output image MUST look visually consistent with it.`
+    : "";
+
+  let characterTextSection = "";
+  if (sceneCharacters.length > 0 && characterReferences.length > 0) {
+    characterTextSection = `\n# CHARACTER LIKENESS REFERENCES:\nThe attached reference image(s) define what these characters LOOK LIKE — their face, skin tone, hair texture, body structure, age, and distinctive physical features ONLY.
+    
+CRITICAL INSTRUCTION FOR AI IMAGE GENERATOR:
+1. Extract ONLY the facial features, skin tone, and body structure from the reference image.
+2. COMPLETELY IGNORE the action, pose, clothing, and expression shown in the reference image.
+3. The characters MUST be performing the exact action and showing the exact expression described in the SCENE DESCRIPTION below.
+4. If the scene says they are running, they must be running. If it says they are crying, they must be crying. Do NOT make them stand still like the reference image!`;
+  } else if (characterReferences.length > 0) {
+    characterTextSection = `\n# CHARACTER LIKENESS REFERENCE:\nThe attached reference image defines what the main character LOOKS LIKE — face, skin tone, hair texture, body structure, age, and features ONLY.
+    
+CRITICAL INSTRUCTION FOR AI IMAGE GENERATOR:
+1. Extract ONLY the facial features, skin tone, and body structure from the reference image.
+2. COMPLETELY IGNORE the action, pose, clothing, and expression shown in the reference image.
+3. The character MUST be performing the exact action and showing the exact expression described in the SCENE DESCRIPTION below.
+4. If the scene says they are running, they must be running. If it says they are crying, they must be crying. Do NOT make them stand still like the reference image!`;
+  }
 
   const finalPrompt = `
 # VISUAL STYLE GUIDE: 
 ${commonPrompt || "Cinematic, hyper-realistic, professional photography"}
+${styleSection}
+${characterTextSection}
 
 # SCENE DESCRIPTION: 
 ${prompt}
 
 # TECHNICAL SPECS: 
 Shot on Arri Alexa, 8K detail, sharp focus, volumetric lighting, masterpiece quality.
+STRICTLY NO TEXT, words, or letters in the image.
 ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
 `;
 
-  logger.info(`Final prompt: ${finalPrompt}`);
+  logger.info(`📝 Final prompt (first 200 chars): ${finalPrompt.slice(0, 200)}`);
+
+  // Pre-fetch character references as base64
+  let inlineImages = [];
+  try {
+    if (sceneCharacters && sceneCharacters.length > 0) {
+      for (const charId of sceneCharacters) {
+        const ref = characterReferences.find(c => c.id === charId);
+        if (ref && ref.url) {
+          const charData = await fetchImageAsBase64(ref.url);
+          inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64 });
+        }
+      }
+    } else if (characterReferences.length > 0 && characterReferences[0].url) {
+       // Fallback for single character mode if sceneCharacters is empty
+       const charData = await fetchImageAsBase64(characterReferences[0].url);
+       inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64 });
+    }
+  } catch (err) {
+    logger.warn(`⚠️ Could not fetch some character reference images: ${err.message}`);
+  }
 
   // Fallback chain: Gemini Premium -> Imagen Fast
   const fallbackChain =
@@ -123,7 +192,6 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
       : [MODELS.PREMIUM, MODELS.FAST];
 
   let lastError = null;
-  let updatedTier = activeModelTier;
 
   for (const modelId of fallbackChain) {
     const isFast = modelId === MODELS.FAST;
@@ -140,9 +208,23 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
 
         let imageBytes = null;
         if (isPro) {
+          // Build multimodal contents: text + optional character reference images
+          const parts = [{ text: finalPrompt }];
+          for (const inlineImg of inlineImages) {
+            parts.push({
+              inlineData: {
+                mimeType: inlineImg.mimeType,
+                data: inlineImg.base64,
+              },
+            });
+          }
+          if (inlineImages.length > 0) {
+            logger.info(`🖼️ ${inlineImages.length} character reference image(s) included as inline data`);
+          }
+
           const response = await ai.models.generateContent({
             model: "gemini-3.1-flash-image-preview",
-            contents: finalPrompt,
+            contents: [{ role: "user", parts }],
             config: {
               generationConfig: {
                 candidateCount: 1,
@@ -156,14 +238,13 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
             }
           });
 
-          // Wait for response to resolve and grab the part
           const part = response.candidates?.[0]?.content?.parts?.find(
             (p) => p.inlineData,
           );
 
           imageBytes = part?.inlineData?.data;
         } else {
-          // imagen-4.0-fast uses generateImages
+          // Imagen Fast — text-only (no multimodal support), character ref is embedded in prompt text
           const response = await ai.models.generateImages({
             model: "imagen-4.0-fast-generate-001",
             prompt: finalPrompt,
@@ -189,16 +270,12 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
           filePath,
           Buffer.from(imageBytes, "base64"),
         );
-        logger.info(
-          `✅ Image generated successfully with ${modelId}:`,
-          filePath,
-        );
+        logger.info(`✅ Image generated successfully with ${modelId}: ${filePath}`);
         return { filePath, activeModelTier: isPro ? "PREMIUM" : "FAST" };
       } catch (err) {
         lastError = err;
         logger.info(
-          `❌ Image generation failed for ${modelId} (Attempt ${attempt}/${maxRetries}):`,
-          err.message || err,
+          `❌ Image generation failed for ${modelId} (Attempt ${attempt}/${maxRetries}): ${err.message || err}`,
         );
 
         if (attempt === maxRetries) {
@@ -218,6 +295,7 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
         } else {
           logger.info(`⏳ Waiting 2 seconds before retrying...`);
           await sleep(2000);
+          if (onCheckCancelled) await onCheckCancelled(); // Check cancellation between retries
         }
       }
     }
@@ -368,14 +446,21 @@ export async function generateMultiImages(
   tempDir,
   aspectRatio = "16:9",
   commonPrompt = null,
-  characterUrl = null,
-  styleUrl = null
+  characterReferences = [],
+  styleUrl = null,
+  onCheckCancelled = null // Optional async callback — throws CancelledError if cancelled
 ) {
   let activeModelTier = null;
   const results = [];
 
   for (let i = 0; i < prompts.length; i++) {
-    let safePrompt = prompts[i];
+    // ✅ Cancellation check between every single image
+    if (onCheckCancelled) await onCheckCancelled();
+
+    const promptObj = prompts[i];
+    let safePrompt = typeof promptObj === "object" ? promptObj.prompt : promptObj;
+    const sceneCharacters = typeof promptObj === "object" ? promptObj.charactersInScene || [] : [];
+
     let success = false;
 
     // Retry Gemini up to 3 times for each image
@@ -389,8 +474,10 @@ export async function generateMultiImages(
           tempDir,
           aspectRatio,
           activeModelTier,
-          characterUrl,
+          characterReferences,
+          sceneCharacters,
           styleUrl,
+          onCheckCancelled,
         });
 
         activeModelTier = result.activeModelTier;
@@ -421,7 +508,7 @@ export async function generateMultiImages(
           index: i + 1,
           tempDir,
           aspectRatio,
-          characterUrl,
+          characterUrl: characterReferences.length > 0 ? characterReferences[0].url : null, // MidJourney fallback only uses first char
           styleUrl,
         });
         logger.info(`✅ [Multi-Image ${i + 1}/${prompts.length}] MidJourney succeeded: ${filePath}`);
@@ -445,14 +532,17 @@ export async function generateMultiImages(
 
 export async function generateImage(
   prompt,
-  index = 1,
+  index,
   tempDir,
   aspectRatio = "16:9",
   commonPrompt = null,
-  characterUrl = null,
+  characterReferences = [],
   styleUrl = null
 ) {
-  let safePrompt = prompt;
+  const promptObj = prompt;
+  let safePrompt = typeof promptObj === "object" ? promptObj.prompt : promptObj;
+  const sceneCharacters = typeof promptObj === "object" ? promptObj.charactersInScene || [] : [];
+
   let lastError = null;
   let activeModelTier = null;
   let resolution = "4K";
@@ -469,7 +559,8 @@ export async function generateImage(
         aspectRatio,
         activeModelTier,
         resolution,
-        characterUrl,
+        characterReferences,
+        sceneCharacters,
         styleUrl,
       });
       logger.info(`✅ [Single Image] Gemini succeeded: ${result.filePath}`);
@@ -495,7 +586,7 @@ export async function generateImage(
         tempDir,
         aspectRatio,
         resolution,
-        characterUrl,
+        characterUrl: characterReferences.length > 0 ? characterReferences[0].url : null,
         styleUrl,
       });
       logger.info(`✅ [Single Image] MidJourney succeeded: ${filePath}`);

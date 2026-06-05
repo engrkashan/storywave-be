@@ -1,7 +1,7 @@
 import axios from "axios";
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
+import { exec } from "child_process";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("MusicService");
@@ -138,7 +138,15 @@ export async function mixAudioWithBackground(voicePath, musicPath, outputPath) {
   // `-filter_complex "[1:a]volume=0.2,highpass=f=100,lowpass=f=8000[bg]; [0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]"`,
   try {
     logger.info("[Audio Mix] Mixing voice + background music (looping)...");
-    execSync(cmd, { stdio: "inherit" });
+    await new Promise((resolve, reject) => {
+      exec(cmd, (error, stdout, stderr) => {
+        if (error) {
+          logger.error("[Audio Mix] FFmpeg error:", stderr || error.message);
+          return reject(error);
+        }
+        resolve();
+      });
+    });
     logger.info("[Audio Mix] Success →", outputPath);
   } catch (err) {
     logger.error("[Audio Mix] FFmpeg failed:", err.message);

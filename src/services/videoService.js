@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { exec } from "child_process";
 import fs from "fs";
 import path from "path";
 import { getAudioDuration } from "./audioService.js";
@@ -68,7 +68,15 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   ].join(" ");
 
   try {
-    execSync(cmd, { stdio: "inherit" });
+    await new Promise((resolve, reject) => {
+      exec(cmd, (error, stdout, stderr) => {
+        if (error) {
+          logger.error(`FFmpeg Error: ${stderr || error.message}`);
+          return reject(error);
+        }
+        resolve();
+      });
+    });
   } catch (err) {
     throw new Error("🎥 Video creation failed. Check FFmpeg output above.");
   } finally {
@@ -165,7 +173,12 @@ export async function extractLastFrame(videoPath, outputPath) {
   // Use FFmpeg to get the last frame: -sseof -0.1 gets near the end
   const cmd = `ffmpeg -y -sseof -0.1 -i "${videoPath}" -vframes 1 "${outputPath}"`;
   try {
-    execSync(cmd, { stdio: "ignore" });
+    await new Promise((resolve, reject) => {
+      exec(cmd, (error) => {
+        if (error) return reject(error);
+        resolve();
+      });
+    });
     return outputPath;
   } catch (err) {
     logger.error("❌ Failed to extract last frame:", err.message);
@@ -173,20 +186,29 @@ export async function extractLastFrame(videoPath, outputPath) {
   }
 }
 
-export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = [], commonPrompt = null) {
+export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = [], commonPrompt = null, onCheckCancelled = null) {
   const results = [];
   let previousClipLastFrame = null;
 
-  // Convert characterAssets to base64 for the API if needed
-  const characterReferences = characterAssets.map(asset => {
-    const data = fs.readFileSync(asset).toString("base64");
-    return {
-      imageBytes: data,
-      mimeType: "image/png"
-    };
-  });
+  // Pre-fetch all available character references
+  const fetchedReferences = {};
+  for (const asset of characterAssets) {
+    if (asset.url) {
+      try {
+        const res = await fetch(asset.url);
+        const buffer = Buffer.from(await res.arrayBuffer());
+        const mimeType = res.headers.get("content-type") || "image/png";
+        fetchedReferences[asset.id] = { imageBytes: buffer.toString("base64"), mimeType };
+      } catch (err) {
+        logger.warn(`Could not fetch video character reference: ${err.message}`);
+      }
+    }
+  }
 
   for (let i = 0; i < prompts.length; i++) {
+    // ✅ Cancellation check between every single video clip
+    if (onCheckCancelled) await onCheckCancelled();
+
     let attempt = 0;
     const MAX_RETRIES = 3;
     let success = false;
@@ -194,7 +216,9 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
     while (attempt < MAX_RETRIES && !success) {
       try {
         attempt++;
-        const uniquePrompt = prompts[i];
+        const promptObj = prompts[i];
+        const uniquePrompt = typeof promptObj === "object" ? promptObj.prompt : promptObj;
+        const sceneCharacters = typeof promptObj === "object" ? promptObj.charactersInScene || [] : [];
         const finalPrompt = commonPrompt ? `${commonPrompt} UNIQUE SCENE DETAIL: ${uniquePrompt}` : uniquePrompt;
 
         logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Veo 3.1 Fast...`);
@@ -207,9 +231,18 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
           }
         };
 
-        // Add character references for identity lock
-        if (characterReferences.length > 0) {
-          videoConfig.referenceImages = characterReferences;
+        // Add character references for identity lock based on characters in scene
+        const activeReferences = [];
+        for (const charId of sceneCharacters) {
+          if (fetchedReferences[charId]) activeReferences.push(fetchedReferences[charId]);
+        }
+        // Fallback for single character mode
+        if (activeReferences.length === 0 && characterAssets.length > 0 && fetchedReferences[characterAssets[0].id]) {
+          activeReferences.push(fetchedReferences[characterAssets[0].id]);
+        }
+
+        if (activeReferences.length > 0) {
+          videoConfig.referenceImages = activeReferences;
         }
 
         // Add bridge logic: use last frame of previous clip as starting point
@@ -228,6 +261,8 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
         while (!operation.done) {
           logger.info(`⏳ Clip ${i + 1}: Waiting for video generation...`);
           await new Promise((resolve) => setTimeout(resolve, 10000));
+          // ✅ Check cancellation on every poll tick (every 10s)
+          if (onCheckCancelled) await onCheckCancelled();
 
           operation = await ai.operations.getVideosOperation({
             operation: operation,
@@ -371,7 +406,15 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
 
   try {
     logger.info(`🎬 Stitching video with ${transitionDuration > 0 ? transitionType : "hard cut"} transitions...`);
-    execSync(cmd, { stdio: "inherit" });
+    await new Promise((resolve, reject) => {
+      exec(cmd, (error, stdout, stderr) => {
+        if (error) {
+          logger.error(`FFmpeg Error: ${stderr || error.message}`);
+          return reject(error);
+        }
+        resolve();
+      });
+    });
   } catch (err) {
     logger.error("FFmpeg Error:", err.message);
     throw new Error("🎥 Multi-media video creation failed.");
