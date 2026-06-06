@@ -57,7 +57,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   ].join(",");
 
   const cmd = [
-    `ffmpeg -y -loop 1`,
+    `ffmpeg -y -loglevel error -loop 1`,
     `-i "${imagePath}"`,
     `-i "${audioPath}"`,
     `-filter_complex "${filterComplex}"`,
@@ -171,7 +171,7 @@ function secToAssTime(sec) {
  */
 export async function extractLastFrame(videoPath, outputPath) {
   // Use FFmpeg to get the last frame: -sseof -0.1 gets near the end
-  const cmd = `ffmpeg -y -sseof -0.1 -i "${videoPath}" -vframes 1 "${outputPath}"`;
+  const cmd = `ffmpeg -y -loglevel error -sseof -0.1 -i "${videoPath}" -vframes 1 "${outputPath}"`;
   try {
     await new Promise((resolve, reject) => {
       exec(cmd, (error) => {
@@ -394,7 +394,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   const audioIndex = mediaItems.length;
 
   const cmd = [
-    `ffmpeg -y`,
+    `ffmpeg -y -loglevel error`,
     inputs,
     `-i "${audioPath}"`,
     `-filter_complex "${filter}${mixingFilter}"`,
