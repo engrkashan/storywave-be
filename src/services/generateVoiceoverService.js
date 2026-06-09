@@ -1,4 +1,3 @@
-import axios from "axios";
 import fs from "fs";
 import OpenAI from "openai";
 import path from "path";
@@ -6,14 +5,33 @@ import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("VoiceoverService");
 import { FishAudioClient } from "fish-audio";
+import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { cloudinary } from "../config/cloudinary.config.js";
-import { mergeAudioFiles } from "./audioService.js";
+import {
+  mergeAudioFiles,
+  mixAudioFiles,
+  getAudioDuration,
+} from "./audioService.js";
 
+// ─── API Clients ──────────────────────────────────────────────────────────────
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const fishAudio = new FishAudioClient({ apiKey: process.env.FISH_API_KEY });
+const elevenlabs = new ElevenLabsClient({
+  apiKey: process.env.ELEVEN_LAB_API_KEY,
+});
+
+// ─── OpenAI voice allowlist (gpt-4o-mini-tts supported values) ───────────────
+const OPENAI_VALID_VOICES = new Set([
+  "alloy", "ash", "ballad", "cedar", "coral",
+  "echo", "fable", "marin", "nova", "onyx",
+  "sage", "shimmer", "verse",
+]);
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Clean script but preserve emotion tags for Fish Audio
+ * Remove markdown formatting and bracketed/parenthetical tags from a script.
+ * Pass preserveEmotions=true for Fish Audio to keep its emotion tags.
  */
 function cleanScript(script, preserveEmotions = false) {
   let cleaned = script
@@ -21,7 +39,6 @@ function cleanScript(script, preserveEmotions = false) {
     .replace(/\*/g, "")
     .replace(/\[.*?\]/g, "");
 
-  // For Fish Audio, preserve emotion tags and add pauses
   if (preserveEmotions) {
     cleaned = cleaned.replace(/\(Pause\)/g, "(break)");
   } else {
@@ -32,130 +49,269 @@ function cleanScript(script, preserveEmotions = false) {
 }
 
 /**
- * Splits text into chunks at sentence boundaries.
- * Each chunk ends with a complete sentence (., !, or ?).
+ * Split text into sentence-boundary chunks of at most maxChunkSize characters.
  */
 function chunkBySentences(text, maxChunkSize = 300) {
   const chunks = [];
   const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-
   let currentChunk = "";
 
   for (const sentence of sentences) {
-    const trimmedSentence = sentence.trim();
-
-    // If adding this sentence exceeds the limit and we have content, save current chunk
-    if (currentChunk && (currentChunk.length + trimmedSentence.length + 1) > maxChunkSize) {
+    const trimmed = sentence.trim();
+    if (currentChunk && currentChunk.length + trimmed.length + 1 > maxChunkSize) {
       chunks.push(currentChunk.trim());
-      currentChunk = trimmedSentence;
+      currentChunk = trimmed;
     } else {
-      // Add sentence to current chunk
-      currentChunk += (currentChunk ? " " : "") + trimmedSentence;
+      currentChunk += (currentChunk ? " " : "") + trimmed;
     }
   }
 
-  // Add the last chunk if it has content
-  if (currentChunk.trim()) {
-    chunks.push(currentChunk.trim());
-  }
-
+  if (currentChunk.trim()) chunks.push(currentChunk.trim());
   return chunks.length > 0 ? chunks : [text];
 }
 
+// ─── Per-provider TTS chunk functions ─────────────────────────────────────────
+
 /**
- * 🔊 FISH AUDIO TTS API CALL with S1 Model & Emotions
+ * ElevenLabs TTS — uses the ElevenLabs voice ID directly, no OpenAI validation.
  */
-async function generateFishChunk(text, fishVoiceId) {
+async function ttsElevenLabs(text, voiceId) {
   try {
+    logger.info(`[ElevenLabs] Converting text with voice ID: ${voiceId}`);
+    const audioStream = await elevenlabs.textToSpeech.convert(voiceId, {
+      text,
+      model_id: "eleven_multilingual_v2",
+    });
 
-    // Use Fish Audio SDK with S1 model
-    const audio = await fishAudio.textToSpeech.convert(
-      {
-        text, // Text with emotion tags like (happy), (narrator), etc.
-        reference_id: fishVoiceId,
-        format: "mp3",
-      },
-      "s1" // Use S1 model for better emotion support
-    );
-
-    // Convert ReadableStream to Buffer
-    const buffer = Buffer.from(await new Response(audio).arrayBuffer());
-    return buffer;
+    const chunks = [];
+    for await (const chunk of audioStream) {
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
   } catch (error) {
-    throw new Error(`Fish Audio generation failed: ${error.message}`);
+    throw new Error(`ElevenLabs TTS failed: ${error.message}`);
   }
 }
 
+/**
+ * ElevenLabs Sound Effects — generates background SFX audio.
+ */
+async function sfxElevenLabs(text) {
+  try {
+    logger.info(`[ElevenLabs SFX] Generating: "${text}"`);
+    const audioStream = await elevenlabs.textToSoundEffects.convert({
+      text,
+      duration_seconds: 12,
+    });
+
+    const chunks = [];
+    for await (const chunk of audioStream) {
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  } catch (error) {
+    throw new Error(`ElevenLabs SFX failed: ${error.message}`);
+  }
+}
 
 /**
- * 🔊 OPENAI TTS CHUNK (your existing version)
+ * Fish Audio TTS — uses Fish Audio reference_id directly, no OpenAI validation.
  */
-async function generateOpenAIChunk(text, voice) {
+async function ttsFishAudio(text, referenceId) {
+  try {
+    logger.info(`[Fish Audio] Converting text with reference ID: ${referenceId}`);
+    const audio = await fishAudio.textToSpeech.convert(
+      { text, reference_id: referenceId, format: "mp3" },
+      "s1",
+    );
+    return Buffer.from(await new Response(audio).arrayBuffer());
+  } catch (error) {
+    throw new Error(`Fish Audio TTS failed: ${error.message}`);
+  }
+}
+
+/**
+ * OpenAI TTS — validates voice against allowed enum BEFORE calling the API.
+ * Never call this with an ElevenLabs or Fish voice ID.
+ */
+async function ttsOpenAI(text, voice) {
+  if (!OPENAI_VALID_VOICES.has(voice)) {
+    throw new Error(
+      `[OpenAI TTS] Invalid voice: "${voice}". ` +
+      `Allowed values: ${[...OPENAI_VALID_VOICES].join(", ")}. ` +
+      `Ensure the voice object has the correct provider field.`
+    );
+  }
+
+  logger.info(`[OpenAI] Converting text with voice: ${voice}`);
   const res = await openai.audio.speech.create({
     model: "gpt-4o-mini-tts",
     voice,
     input: text,
   });
-
-  const buffer = Buffer.from(await res.arrayBuffer());
-  return buffer;
+  return Buffer.from(await res.arrayBuffer());
 }
 
+// ─── Main TTS Generator ───────────────────────────────────────────────────────
+
 /**
- * 🎙️ Main TTS Generator (auto selects OPENAI or FISH AUDIO)
+ * Generate a voiceover for the given script using the correct provider.
+ *
+ * voiceObj shape: { id: string, provider: "elevenlabs" | "fish" | "openai", label: string }
+ *
+ * Routing rules (strict, no cross-provider leakage):
+ *   provider === "elevenlabs" → ttsElevenLabs (+ sfxElevenLabs for [SFX] tags)
+ *   provider === "fish"       → ttsFishAudio
+ *   anything else             → ttsOpenAI (with voice enum validation)
  */
 export async function generateVoiceover(script, filename, voiceObj, tempDir) {
   const localPath = path.join(tempDir, filename);
   fs.mkdirSync(tempDir, { recursive: true });
 
-  // Detect provider based on frontend payload
-  const isFish = voiceObj?.provider === "fish";
-  const fishVoiceId = isFish ? voiceObj.id : null;
-  const openAiVoice = !isFish ? voiceObj.id : null;
+  // ── Determine provider ──────────────────────────────────────────────────────
+  const rawProvider = voiceObj?.provider ?? "";
+  const provider = String(rawProvider).toLowerCase().trim();
+
+  const isElevenLabs = provider === "elevenlabs";
+  const isFish       = provider === "fish";
+  const isOpenAI     = !isElevenLabs && !isFish;
+
+  const providerLabel = isElevenLabs ? "ElevenLabs" : isFish ? "Fish Audio S1" : "OpenAI";
 
   logger.info(
-    `🔊 Generating voiceover using: ${isFish ? "FISH AUDIO S1" : "OPENAI"} (${voiceObj.label})`,
+    `🎙️ [generateVoiceover] provider="${providerLabel}" | ` +
+    `raw="${rawProvider}" | voiceId="${voiceObj?.id}" | label="${voiceObj?.label}"`
   );
 
-  // Process text differently for Fish Audio vs OpenAI
-  let text;
+  // ── Build segment list ───────────────────────────────────────────────────────
+  // ElevenLabs: split script into text + SFX segments (handles [tag] and (tag))
+  // Fish / OpenAI: plain text chunks only (tags are stripped by cleanScript)
+  const segments = [];
 
-  text = cleanScript(script, false);
+  if (isElevenLabs) {
+    const regex = /\[(.*?)\]|\((.*?)\)/g;
+    let lastIndex = 0;
+    let match;
 
+    while ((match = regex.exec(script)) !== null) {
+      if (match.index > lastIndex) {
+        const textPart = script.substring(lastIndex, match.index).trim();
+        if (textPart) {
+          chunkBySentences(textPart, 300).forEach((c) =>
+            segments.push({ type: "text", content: c })
+          );
+        }
+      }
+      const sfxText = (match[1] || match[2])?.trim();
+      if (sfxText) {
+        segments.push({ type: "sfx", content: sfxText });
+      }
+      lastIndex = regex.lastIndex;
+    }
 
-  const CHUNK_SIZE = 300;
-  const chunks = chunkBySentences(text, CHUNK_SIZE);
+    if (lastIndex < script.length) {
+      const textPart = script.substring(lastIndex).trim();
+      if (textPart) {
+        chunkBySentences(textPart, 300).forEach((c) =>
+          segments.push({ type: "text", content: c })
+        );
+      }
+    }
+  } else {
+    // Fish Audio or OpenAI — strip tags, split into plain text chunks
+    const text = cleanScript(script, isFish);
+    chunkBySentences(text, 300).forEach((c) =>
+      segments.push({ type: "text", content: c })
+    );
+  }
 
+  logger.info(`📋 Segments to process: ${segments.length}`);
+
+  // ── Process segments ─────────────────────────────────────────────────────────
   const chunkFiles = [];
+  const sfxLayers  = [];
+
+  // currentDelayMs: total duration of narration chunks processed so far (ms)
+  // lastTextStartMs: where the LAST text chunk BEGAN in the merged timeline
+  //   → SFX uses this so effects play concurrently WITH the preceding words
+  let currentDelayMs  = 0;
+  let lastTextStartMs = 0;
 
   try {
-    for (let i = 0; i < chunks.length; i++) {
-      logger.info(
-        `🎙️ TTS chunk ${i + 1}/${chunks.length} (${isFish ? "FISH AUDIO S1" : "OPENAI"})`,
-      );
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
+      logger.info(`  [${i + 1}/${segments.length}] type=${segment.type}`);
+
+      // ── SFX segment (ElevenLabs only) ──────────────────────────────────────
+      if (segment.type === "sfx") {
+        const sfxBuf  = await sfxElevenLabs(segment.content);
+        const sfxPath = path.join(tempDir, `sfx_${Date.now()}_part_${i}.mp3`);
+        fs.writeFileSync(sfxPath, sfxBuf);
+
+        // Start SFX at the beginning of the preceding text chunk so it plays
+        // IN BACKGROUND WITH those words, not after them.
+        sfxLayers.push({ file: sfxPath, delayMs: lastTextStartMs });
+        logger.info(
+          `  🎵 SFX queued at ${(lastTextStartMs / 1000).toFixed(2)}s: "${segment.content}"`
+        );
+        continue;
+      }
+
+      // ── Text segment ────────────────────────────────────────────────────────
+      // Snapshot start time before generating so SFX following this chunk
+      // can align to its beginning.
+      lastTextStartMs = currentDelayMs;
 
       let buffer;
 
-      if (isFish) {
-        buffer = await generateFishChunk(chunks[i], fishVoiceId);
+      if (isElevenLabs) {
+        // ✅ ElevenLabs provider → ElevenLabs API only
+        buffer = await ttsElevenLabs(segment.content, voiceObj.id);
+
+      } else if (isFish) {
+        // ✅ Fish Audio provider → Fish Audio API only
+        buffer = await ttsFishAudio(segment.content, voiceObj.id);
+
       } else {
-        buffer = await generateOpenAIChunk(chunks[i], openAiVoice);
+        // ✅ OpenAI provider → OpenAI API only (voice enum validated inside)
+        buffer = await ttsOpenAI(segment.content, voiceObj.id);
       }
 
-      const chunkPath = path.join(tempDir, `${path.parse(filename).name}_part_${i}.mp3`);
+      const chunkPath = path.join(
+        tempDir,
+        `${path.parse(filename).name}_part_${i}.mp3`
+      );
       fs.writeFileSync(chunkPath, buffer);
       chunkFiles.push(chunkPath);
+
+      if (isElevenLabs) {
+        const dur = await getAudioDuration(chunkPath);
+        currentDelayMs += dur * 1000;
+        logger.info(
+          `  📏 Chunk duration: ${dur.toFixed(2)}s → timeline at ${(currentDelayMs / 1000).toFixed(2)}s`
+        );
+      }
     }
 
-    // Merge chunks using ffmpeg to ensure smooth transitions
-    await mergeAudioFiles(chunkFiles, localPath);
+    // ── Merge narration chunks ────────────────────────────────────────────────
+    const mainNarrationPath = isElevenLabs
+      ? path.join(tempDir, `main_narration_${Date.now()}.mp3`)
+      : localPath;
 
-    // Cleanup temporary chunk files
-    chunkFiles.forEach((file) => {
-      if (fs.existsSync(file)) fs.unlinkSync(file);
-    });
+    await mergeAudioFiles(chunkFiles, mainNarrationPath);
 
-    // Upload to Cloudinary
+    // ── Mix SFX layers into narration (ElevenLabs only) ──────────────────────
+    if (isElevenLabs) {
+      await mixAudioFiles(mainNarrationPath, sfxLayers, localPath);
+
+      if (fs.existsSync(mainNarrationPath)) fs.unlinkSync(mainNarrationPath);
+      sfxLayers.forEach((l) => { if (fs.existsSync(l.file)) fs.unlinkSync(l.file); });
+    }
+
+    // ── Cleanup chunk files ───────────────────────────────────────────────────
+    chunkFiles.forEach((f) => { if (fs.existsSync(f)) fs.unlinkSync(f); });
+
+    // ── Upload to Cloudinary ──────────────────────────────────────────────────
     const uploadRes = await cloudinary.uploader.upload(localPath, {
       folder: "voiceovers",
       resource_type: "video",
@@ -163,9 +319,11 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
       overwrite: true,
     });
 
+    logger.info(`✅ Voiceover uploaded: ${uploadRes.secure_url}`);
     return { url: uploadRes.secure_url, localPath };
+
   } catch (err) {
-    logger.error("❌ Voiceover generation failed:", err);
+    logger.error(`❌ Voiceover generation failed: ${err.message}`);
     throw err;
   }
 }
