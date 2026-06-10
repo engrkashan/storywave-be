@@ -49,11 +49,11 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   const totalFrames = Math.ceil(audioDuration * FPS);
 
   const filterComplex = [
-    `scale=${width}:${height}:force_original_aspect_ratio=increase`,
+    `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase`,
     `crop=${width}:${height}`,
     `setsar=1`,
     `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}`,
-    `subtitles='${escapedAssPath}'`
+    `subtitles='${escapedAssPath}'[vfinal]`
   ].join(",");
 
   const cmd = [
@@ -61,7 +61,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
     `-i "${imagePath}"`,
     `-i "${audioPath}"`,
     `-filter_complex "${filterComplex}"`,
-    `-map 0:v -map 1:a`,
+    `-map "[vfinal]" -map 1:a`,
     `-c:v libx264 -crf 17 -preset veryfast -pix_fmt yuv420p -c:a copy -shortest -threads ${config.workflow.ffmpegThreads}`,
     audioDuration ? `-t ${audioDuration}` : "",
     `"${outputPath}"`,
