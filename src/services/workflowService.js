@@ -575,6 +575,9 @@ async function _runWorkflow({
 
     // 3. Generate voiceover (always) - pure voice (used for accurate subtitle timestamps)
     logger.info("Step 3: Generating voiceover...");
+    logger.info(
+      `[WorkflowService] voice payload dispatched to generateVoiceover: ${JSON.stringify(voice)}`
+    );
     await checkCancelled(workflow.id); // ✔️ Cancellation check
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
     const { url: pureVoiceURL, localPath: voiceLocalPath } =

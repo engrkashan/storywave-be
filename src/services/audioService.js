@@ -115,7 +115,8 @@ export async function mixAudioFiles(mainFile, sfxLayers, outputFile) {
     // at the start and suddenly louder once the SFX ends — the "slow start" effect.
     // duration=first → output length matches narration (not the longest SFX).
     // dropout_transition=0 → no ramp when a stream ends (instant).
-    filterComplex += `[main]${delayOutputs.join("")}amix=inputs=${inputCount}:duration=first:dropout_transition=0:normalize=0`;
+    // alimiter=limit=-1dB → prevents audio clipping when multiple SFX layers overlap
+    filterComplex += `[main]${delayOutputs.join("")}amix=inputs=${inputCount}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=-1dB`;
 
     command
       .complexFilter(filterComplex)
