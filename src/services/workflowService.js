@@ -11,21 +11,35 @@ import { extractContentFromUrl, transcribeVideo } from "./inputService.js";
 import { generateStory, generateScenePrompts } from "./storyService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { getAudioDuration } from "./audioService.js";
-import { createVideo, generateVideoClips, createMultiMediaVideo } from "./videoService.js";
+import {
+  createVideo,
+  generateVideoClips,
+  createMultiMediaVideo,
+} from "./videoService.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
-import { extractStoryMetadata, generateMasterPrompts, generateCommonVisualPrompt } from "./promptService.js";
+import {
+  extractStoryMetadata,
+  generateMasterPrompts,
+  generateCommonVisualPrompt,
+} from "./promptService.js";
 import { createLogger, loggingStorage } from "../utils/logger.js";
 
 const logger = createLogger("WorkflowService");
 
 // Sentinel error class so we can distinguish a user cancel from a real failure
 class CancelledError extends Error {
-  constructor() { super("Workflow cancelled by user"); this.isCancelled = true; }
+  constructor() {
+    super("Workflow cancelled by user");
+    this.isCancelled = true;
+  }
 }
 
 // Check DB and throw if the user has requested cancellation
 async function checkCancelled(workflowId) {
-  const wf = await prisma.workflow.findUnique({ where: { id: workflowId }, select: { status: true } });
+  const wf = await prisma.workflow.findUnique({
+    where: { id: workflowId },
+    select: { status: true },
+  });
   if (wf?.status === "CANCELLATION_REQUESTED") {
     throw new CancelledError();
   }
@@ -73,7 +87,6 @@ export async function runScheduledWorkflows() {
       orderBy: { scheduledAt: "asc" },
     });
 
-
     if (!workflow) {
       return;
     }
@@ -109,7 +122,9 @@ export async function runScheduledWorkflows() {
     if (config.workflow.enableQueue) {
       await addWorkflowJob(payload);
     } else {
-      logger.warn("Queue is disabled, but falling back to queue anyway as fork is removed. Please enableQueue in config.");
+      logger.warn(
+        "Queue is disabled, but falling back to queue anyway as fork is removed. Please enableQueue in config.",
+      );
       await addWorkflowJob(payload);
     }
   } catch (err) {
@@ -176,7 +191,7 @@ export async function runWorkflow(args) {
  * Internal workflow execution function
  */
 async function _runWorkflow({
-  workflowId = null,   // 🔑 Pre-created DB workflow ID (from controller)
+  workflowId = null, // 🔑 Pre-created DB workflow ID (from controller)
   userId,
   title,
   url = null,
@@ -273,10 +288,21 @@ async function _runWorkflow({
   }
 
   // ✅ Early cancellation guard: if this is a stalled-job retry and the user already cancelled, abort immediately
-  const freshWf = await prisma.workflow.findUnique({ where: { id: workflow.id }, select: { status: true } });
-  if (freshWf?.status === "CANCELLATION_REQUESTED" || freshWf?.status === "CANCELLED") {
-    logger.info(`🚫 Workflow ${workflow.id} is already cancelled — aborting restart.`);
-    await prisma.workflow.update({ where: { id: workflow.id }, data: { status: "CANCELLED" } });
+  const freshWf = await prisma.workflow.findUnique({
+    where: { id: workflow.id },
+    select: { status: true },
+  });
+  if (
+    freshWf?.status === "CANCELLATION_REQUESTED" ||
+    freshWf?.status === "CANCELLED"
+  ) {
+    logger.info(
+      `🚫 Workflow ${workflow.id} is already cancelled — aborting restart.`,
+    );
+    await prisma.workflow.update({
+      where: { id: workflow.id },
+      data: { status: "CANCELLED" },
+    });
     return { success: false, cancelled: true, workflowId: workflow.id };
   }
 
@@ -350,7 +376,11 @@ async function _runWorkflow({
 
     logger.info("Step 2.1: Extracting story metadata and master prompts...");
     const storyMetadata = await extractStoryMetadata(script);
-    const masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
+    const masterPrompts = generateMasterPrompts(
+      storyMetadata,
+      title,
+      aspectRatio,
+    );
     const commonPrompt = generateCommonVisualPrompt(storyMetadata);
 
     await checkCancelled(workflow.id); // ✔️ Cancellation check
@@ -358,56 +388,63 @@ async function _runWorkflow({
     let characterReferenceUrl = null;
     let styleReferenceUrl = null;
 
-    if (userCharacterReferenceBase64) {
-      logger.info("User provided a character reference image. Uploading to Cloudinary...");
-      try {
-        const upload = await cloudinary.uploader.upload(userCharacterReferenceBase64, {
-          folder: "character-references",
-          resource_type: "image",
-          public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
-          overwrite: true,
-        });
-        characterReferenceUrl = upload.secure_url;
-        logger.info(`✅ User Character Reference URL: ${characterReferenceUrl}`);
-      } catch (err) {
-        logger.error(`⚠️ Failed to upload user character reference: ${err.message}`);
-        characterReferenceUrl = userCharacterReferenceBase64; // Fallback to inline base64 if Cloudinary fails
-      }
-      logger.info("Skipping Style Reference generation since character reference is provided.");
-    } else {
-      // 2.2 Generate Style Reference Image (MANDATORY for consistency if no character provided)
-      logger.info("Step 2.1.5: Generating Style Reference Image (Visual Baseline)...");
-      try {
-        const styleRefDir = path.join(workflowTempDir, "style_ref");
-        fs.mkdirSync(styleRefDir, { recursive: true });
-        // Generate a master cinematic shot to serve as style reference
-        const styleRefResult = await generateImage(masterPrompts.cinematic, 0, styleRefDir, aspectRatio, commonPrompt);
-        if (styleRefResult.imageUrl) {
-          // Upload to Cloudinary to get a permanent URL for Midjourney
-          const upload = await cloudinary.uploader.upload(styleRefResult.imageUrl, {
-            folder: "style-references",
-            resource_type: "image",
-            public_id: `style-ref-${workflow.id}-${Date.now()}`,
-            overwrite: true,
-          });
-          styleReferenceUrl = upload.secure_url;
-          logger.info(`✅ Style Reference URL: ${styleReferenceUrl}`);
-        }
-      } catch (err) {
-        logger.error(`⚠️ Style reference generation failed: ${err.message}`);
-      }
-    }
+    // if (userCharacterReferenceBase64) {
+    //   logger.info("User provided a character reference image. Uploading to Cloudinary...");
+    //   try {
+    //     const upload = await cloudinary.uploader.upload(userCharacterReferenceBase64, {
+    //       folder: "character-references",
+    //       resource_type: "image",
+    //       public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
+    //       overwrite: true,
+    //     });
+    //     characterReferenceUrl = upload.secure_url;
+    //     logger.info(`✅ User Character Reference URL: ${characterReferenceUrl}`);
+    //   } catch (err) {
+    //     logger.error(`⚠️ Failed to upload user character reference: ${err.message}`);
+    //     characterReferenceUrl = userCharacterReferenceBase64; // Fallback to inline base64 if Cloudinary fails
+    //   }
+    //   logger.info("Skipping Style Reference generation since character reference is provided.");
+    // } else {
+    //   // 2.2 Generate Style Reference Image (MANDATORY for consistency if no character provided)
+    //   logger.info("Step 2.1.5: Generating Style Reference Image (Visual Baseline)...");
+    //   try {
+    //     const styleRefDir = path.join(workflowTempDir, "style_ref");
+    //     fs.mkdirSync(styleRefDir, { recursive: true });
+    //     // Generate a master cinematic shot to serve as style reference
+    //     const styleRefResult = await generateImage(masterPrompts.cinematic, 0, styleRefDir, aspectRatio, commonPrompt);
+    //     if (styleRefResult.imageUrl) {
+    //       // Upload to Cloudinary to get a permanent URL for Midjourney
+    //       const upload = await cloudinary.uploader.upload(styleRefResult.imageUrl, {
+    //         folder: "style-references",
+    //         resource_type: "image",
+    //         public_id: `style-ref-${workflow.id}-${Date.now()}`,
+    //         overwrite: true,
+    //       });
+    //       styleReferenceUrl = upload.secure_url;
+    //       logger.info(`✅ Style Reference URL: ${styleReferenceUrl}`);
+    //     }
+    //   } catch (err) {
+    //     logger.error(`⚠️ Style reference generation failed: ${err.message}`);
+    //   }
+    // }
 
     // 2.2 Generate Cover Art if coverArtPrompt is provided
     if (coverArtPrompt) {
-      logger.info(`🎨 Generating dual cover arts (1:1 & 16:9): ${coverArtPrompt}`);
+      logger.info(
+        `🎨 Generating dual cover arts (1:1 & 16:9): ${coverArtPrompt}`,
+      );
       try {
         const coverArtDir = path.join(workflowTempDir, "cover_art");
         fs.mkdirSync(coverArtDir, { recursive: true });
 
         // Helper to generate and upload a single ratio
         const processRatio = async (ratio) => {
-          const result = await generateImage(coverArtPrompt, 1, coverArtDir, ratio);
+          const result = await generateImage(
+            coverArtPrompt,
+            1,
+            coverArtDir,
+            ratio,
+          );
           if (result.imageUrl) {
             const upload = await cloudinary.uploader.upload(result.imageUrl, {
               folder: "cover-arts",
@@ -415,8 +452,12 @@ async function _runWorkflow({
               public_id: `cover-${ratio.replace(":", "_")}-${workflow.id}-${Date.now()}`,
               overwrite: true,
             });
-            logger.info(`🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.width}x${upload.height}px`);
-            logger.info(`🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.secure_url}`);
+            logger.info(
+              `🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.width}x${upload.height}px`,
+            );
+            logger.info(
+              `🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.secure_url}`,
+            );
             return upload.secure_url;
           }
           return null;
@@ -425,7 +466,7 @@ async function _runWorkflow({
         // Generate both in parallel
         const [url16_9, url1_1] = await Promise.all([
           processRatio("16:9"),
-          processRatio("1:1")
+          processRatio("1:1"),
         ]);
 
         if (url16_9 || url1_1) {
@@ -434,10 +475,12 @@ async function _runWorkflow({
             data: {
               coverArtURL: url16_9 || url1_1, // Legacy compatibility
               coverArtURL_16_9: url16_9,
-              coverArtURL_1_1: url1_1
+              coverArtURL_1_1: url1_1,
             },
           });
-          logger.info(`✅ Dual cover arts generated: 16:9(${url16_9}) | 1:1(${url1_1})`);
+          logger.info(
+            `✅ Dual cover arts generated: 16:9(${url16_9}) | 1:1(${url1_1})`,
+          );
         }
       } catch (err) {
         logger.error(`⚠️ Cover art generation failed: ${err.message}`);
@@ -455,80 +498,80 @@ async function _runWorkflow({
           commonPrompt,
           characterReferenceUrl,
           styleReferenceUrl,
-        }
+        },
       },
     });
 
     // 2.2 Generate Character References for all characters
-    logger.info("Step 2.2: Processing Multi-Character References...");
-    const characterReferences = [];
-    const charactersList = storyMetadata.characters || [];
-    
-    // Assign user-uploaded image to the main character
-    const mainCharacter = charactersList.find(c => c.isMainCharacter) || charactersList[0];
-    if (characterReferenceUrl && mainCharacter) {
-      characterReferences.push({
-        id: mainCharacter.id,
-        url: characterReferenceUrl, // The Cloudinary URL we generated earlier
-      });
-      logger.info(`✅ Assigned user-uploaded character reference to ${mainCharacter.name || mainCharacter.id}`);
-    }
+    //     logger.info("Step 2.2: Processing Multi-Character References...");
+    //     const characterReferences = [];
+    //     const charactersList = storyMetadata.characters || [];
 
-    if (mediaType === "video" || mediaType === "multi_image" || mediaType === "single_image") {
-      for (const char of charactersList) {
-        if (characterReferences.find(c => c.id === char.id)) continue; // Skip if already assigned
-        
-        await checkCancelled(workflow.id); // ✅ Check between each character portrait
+    //     // Assign user-uploaded image to the main character
+    //     const mainCharacter = charactersList.find(c => c.isMainCharacter) || charactersList[0];
+    //     if (characterReferenceUrl && mainCharacter) {
+    //       characterReferences.push({
+    //         id: mainCharacter.id,
+    //         url: characterReferenceUrl, // The Cloudinary URL we generated earlier
+    //       });
+    //       logger.info(`✅ Assigned user-uploaded character reference to ${mainCharacter.name || mainCharacter.id}`);
+    //     }
 
-        logger.info(`🎨 Generating character portrait for: ${char.name || char.id}...`);
-        const demographicInfo = [char.sex, char.age, char.color].filter(Boolean).join(", ");
-        const charPrompt = `A clinical, neutral character design sheet. Character Identity: ${char.name || char.id}. Demographic: ${demographicInfo}. Description: ${char.appearance}.
-        
-CRITICAL REQUIREMENT: This is a STRICT physical reference image ONLY. The character MUST be standing perfectly still in a neutral A-pose or T-pose, facing the camera directly. NO ACTION. NO EXPRESSION. NO PROPS. Neutral, blank facial expression. Plain studio background. 
-Lighting: Flat, even, clinical studio lighting so all facial features and skin tones are clearly visible. Aesthetic: Hyper-realistic, 8k, cinematic details. No text.`;
-        
-        try {
-          const charRefDir = path.join(workflowTempDir, "char_refs");
-          if (!fs.existsSync(charRefDir)) fs.mkdirSync(charRefDir, { recursive: true });
-          
-          // Use standard generateImage function
-          const charResult = await generateImage(charPrompt, 0, charRefDir, "1:1", commonPrompt);
-          
-          if (charResult.imageUrl) {
-            const upload = await cloudinary.uploader.upload(charResult.imageUrl, {
-              folder: "character-references",
-              resource_type: "image",
-              public_id: `char-ref-${workflow.id}-${char.id}-${Date.now()}`,
-              overwrite: true,
-            });
-            characterReferences.push({
-              id: char.id,
-              url: upload.secure_url,
-            });
-            logger.info(`✅ Generated portrait for ${char.name || char.id}: ${upload.secure_url}`);
-            
-            // If this is the main character and we didn't have one before, set it for legacy compatibility
-            if (char.id === mainCharacter?.id) {
-               characterReferenceUrl = upload.secure_url;
-            }
-          }
-        } catch (err) {
-          if (err.isCancelled) throw err; // Re-throw cancellation errors immediately
-          logger.error(`⚠️ Failed to generate portrait for ${char.name || char.id}: ${err.message}`);
-        }
-      }
-    }
-    
-    // Update the database with the new character references array
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: {
-        metadata: {
-          ...(workflow.metadata || {}),
-          characterReferences,
-        }
-      },
-    });
+    //     if (mediaType === "video" || mediaType === "multi_image" || mediaType === "single_image") {
+    //       for (const char of charactersList) {
+    //         if (characterReferences.find(c => c.id === char.id)) continue; // Skip if already assigned
+
+    //         await checkCancelled(workflow.id); // ✅ Check between each character portrait
+
+    //         logger.info(`🎨 Generating character portrait for: ${char.name || char.id}...`);
+    //         const demographicInfo = [char.sex, char.age, char.color].filter(Boolean).join(", ");
+    //         const charPrompt = `A clinical, neutral character design sheet. Character Identity: ${char.name || char.id}. Demographic: ${demographicInfo}. Description: ${char.appearance}.
+
+    // CRITICAL REQUIREMENT: This is a STRICT physical reference image ONLY. The character MUST be standing perfectly still in a neutral A-pose or T-pose, facing the camera directly. NO ACTION. NO EXPRESSION. NO PROPS. Neutral, blank facial expression. Plain studio background.
+    // Lighting: Flat, even, clinical studio lighting so all facial features and skin tones are clearly visible. Aesthetic: Hyper-realistic, 8k, cinematic details. No text.`;
+
+    //         try {
+    //           const charRefDir = path.join(workflowTempDir, "char_refs");
+    //           if (!fs.existsSync(charRefDir)) fs.mkdirSync(charRefDir, { recursive: true });
+
+    //           // Use standard generateImage function
+    //           const charResult = await generateImage(charPrompt, 0, charRefDir, "1:1", commonPrompt);
+
+    //           if (charResult.imageUrl) {
+    //             const upload = await cloudinary.uploader.upload(charResult.imageUrl, {
+    //               folder: "character-references",
+    //               resource_type: "image",
+    //               public_id: `char-ref-${workflow.id}-${char.id}-${Date.now()}`,
+    //               overwrite: true,
+    //             });
+    //             characterReferences.push({
+    //               id: char.id,
+    //               url: upload.secure_url,
+    //             });
+    //             logger.info(`✅ Generated portrait for ${char.name || char.id}: ${upload.secure_url}`);
+
+    //             // If this is the main character and we didn't have one before, set it for legacy compatibility
+    //             if (char.id === mainCharacter?.id) {
+    //                characterReferenceUrl = upload.secure_url;
+    //             }
+    //           }
+    //         } catch (err) {
+    //           if (err.isCancelled) throw err; // Re-throw cancellation errors immediately
+    //           logger.error(`⚠️ Failed to generate portrait for ${char.name || char.id}: ${err.message}`);
+    //         }
+    //       }
+    //     }
+
+    //     // Update the database with the new character references array
+    //     await prisma.workflow.update({
+    //       where: { id: workflow.id },
+    //       data: {
+    //         metadata: {
+    //           ...(workflow.metadata || {}),
+    //           characterReferences,
+    //         }
+    //       },
+    //     });
 
     // 3. Generate voiceover (always) - pure voice (used for accurate subtitle timestamps)
     logger.info("Step 3: Generating voiceover...");
@@ -589,7 +632,9 @@ Lighting: Flat, even, clinical studio lighting so all facial features and skin t
       // const dualPlatform = workflow.metadata?.dualPlatform === true || dualPlatform === true;
       const ratiosToGenerate = dualPlatform ? ["16:9", "9:16"] : [aspectRatio];
 
-      logger.info(`Generating for ratios: ${ratiosToGenerate.join(", ")} (Dual: ${dualPlatform})`);
+      logger.info(
+        `Generating for ratios: ${ratiosToGenerate.join(", ")} (Dual: ${dualPlatform})`,
+      );
 
       logger.info("Step 5: Generating subtitles...");
       const srtContent = await transcribeWithTimestamps(voiceLocalPath);
@@ -600,7 +645,10 @@ Lighting: Flat, even, clinical studio lighting so all facial features and skin t
 
       for (const currentRatio of ratiosToGenerate) {
         logger.info(`🎬 Processing ratio: ${currentRatio}`);
-        const ratioDir = path.join(workflowTempDir, currentRatio.replace(":", "_"));
+        const ratioDir = path.join(
+          workflowTempDir,
+          currentRatio.replace(":", "_"),
+        );
         fs.mkdirSync(ratioDir, { recursive: true });
 
         // 1. Determine media items — use direct upload or AI generation
@@ -614,22 +662,61 @@ Lighting: Flat, even, clinical studio lighting so all facial features and skin t
           // AI generation path
           let scenePrompts = [];
           if (mediaType === "single_image") {
-            scenePrompts = [{ prompt: imagePrompt || script || "Cinematic storytelling scene", charactersInScene: [] }];
+            scenePrompts = [
+              {
+                prompt: imagePrompt || script || "Cinematic storytelling scene",
+                charactersInScene: [],
+              },
+            ];
           } else {
-            const dynamicCount = Math.max(5, Math.ceil(actualAudioDuration / 5));
-            const count = mediaType === "multi_image" ? imageCount : dynamicCount;
-            scenePrompts = await generateScenePrompts(script, count, storyMetadata, visualSuggestions);
+            const dynamicCount = Math.max(
+              5,
+              Math.ceil(actualAudioDuration / 5),
+            );
+            const count =
+              mediaType === "multi_image" ? imageCount : dynamicCount;
+            scenePrompts = await generateScenePrompts(
+              script,
+              count,
+              storyMetadata,
+              visualSuggestions,
+            );
           }
           logger.info("Scene Prompts:", scenePrompts);
 
           if (mediaType === "video") {
-            const clips = await generateVideoClips(scenePrompts, ratioDir, currentRatio, characterReferences, commonPrompt, () => checkCancelled(workflow.id));
-            mediaItems = clips.filter(c => c.filePath).map(c => c.filePath);
+            const clips = await generateVideoClips(
+              scenePrompts,
+              ratioDir,
+              currentRatio,
+              characterReferences,
+              commonPrompt,
+              () => checkCancelled(workflow.id),
+            );
+            mediaItems = clips.filter((c) => c.filePath).map((c) => c.filePath);
           } else if (mediaType === "multi_image") {
-            const images = await generateMultiImages(scenePrompts, ratioDir, currentRatio, commonPrompt, characterReferences, styleReferenceUrl, () => checkCancelled(workflow.id));
-            mediaItems = images.filter(img => img.imageUrl).map(img => img.imageUrl);
+            const images = await generateMultiImages(
+              scenePrompts,
+              ratioDir,
+              currentRatio,
+              commonPrompt,
+              characterReferences,
+              styleReferenceUrl,
+              () => checkCancelled(workflow.id),
+            );
+            mediaItems = images
+              .filter((img) => img.imageUrl)
+              .map((img) => img.imageUrl);
           } else {
-            const imageResult = await generateImage(scenePrompts[0], 1, ratioDir, currentRatio, commonPrompt, characterReferences, styleReferenceUrl);
+            const imageResult = await generateImage(
+              scenePrompts[0],
+              1,
+              ratioDir,
+              currentRatio,
+              commonPrompt,
+              characterReferences,
+              styleReferenceUrl,
+            );
             if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
           }
         }
@@ -641,13 +728,31 @@ Lighting: Flat, even, clinical studio lighting so all facial features and skin t
           const videoPath = path.join(workflowTempDir, videoFilename);
 
           if (mediaItems.length === 1 && mediaType === "single_image") {
-            await createVideo(mediaItems[0], finalAudioLocalPath, videoPath, srtPath, currentRatio);
+            await createVideo(
+              mediaItems[0],
+              finalAudioLocalPath,
+              videoPath,
+              srtPath,
+              currentRatio,
+            );
           } else {
-            await createMultiMediaVideo(mediaItems, finalAudioLocalPath, videoPath, srtPath, currentRatio);
+            await createMultiMediaVideo(
+              mediaItems,
+              finalAudioLocalPath,
+              videoPath,
+              srtPath,
+              currentRatio,
+            );
           }
 
-          const currentVideoURL = await uploadVideoToCloud(videoPath, videoFilename);
-          videoResults[currentRatio] = { url: currentVideoURL, items: mediaItems };
+          const currentVideoURL = await uploadVideoToCloud(
+            videoPath,
+            videoFilename,
+          );
+          videoResults[currentRatio] = {
+            url: currentVideoURL,
+            items: mediaItems,
+          };
 
           if (!videoURL) videoURL = currentVideoURL; // Set primary for backward compatibility
           if (mediaUrls.length === 0) mediaUrls = mediaItems;
@@ -655,7 +760,8 @@ Lighting: Flat, even, clinical studio lighting so all facial features and skin t
       }
 
       if (Object.keys(videoResults).length > 0) {
-        const primaryVideo = videoResults[aspectRatio] || Object.values(videoResults)[0];
+        const primaryVideo =
+          videoResults[aspectRatio] || Object.values(videoResults)[0];
         videoURL = primaryVideo.url;
         mediaUrls = primaryVideo.items;
 
@@ -665,7 +771,7 @@ Lighting: Flat, even, clinical studio lighting so all facial features and skin t
             fileURL: videoURL, // Fallback/Main
             video_16_9: videoResults["16:9"]?.url,
             video_9_16: videoResults["9:16"]?.url,
-            userId
+            userId,
           },
         });
 
@@ -676,13 +782,16 @@ Lighting: Flat, even, clinical studio lighting so all facial features and skin t
             metadata: {
               ...(workflow.metadata || {}),
               dualPlatform,
-            }
+            },
           },
         });
 
         isPodcast = false;
       } else {
-        logger.info("⚠️ Media generation failed → creating as podcast", "\x1b[33m");
+        logger.info(
+          "⚠️ Media generation failed → creating as podcast",
+          "\x1b[33m",
+        );
         isPodcast = true;
       }
     } else {
@@ -754,7 +863,13 @@ Lighting: Flat, even, clinical studio lighting so all facial features and skin t
     if (err.isCancelled) {
       await prisma.workflow.update({
         where: { id: workflow.id },
-        data: { status: "CANCELLED", metadata: { ...(workflow.metadata || {}), cancelledAt: new Date().toISOString() } },
+        data: {
+          status: "CANCELLED",
+          metadata: {
+            ...(workflow.metadata || {}),
+            cancelledAt: new Date().toISOString(),
+          },
+        },
       });
       logger.info("🚫 Workflow cancelled by user", "\x1b[33m");
       return { success: false, cancelled: true, workflowId: workflow.id };

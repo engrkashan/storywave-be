@@ -1,8 +1,10 @@
 import { FishAudioClient } from "fish-audio";
+import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("VoiceController");
 const fishAudio = new FishAudioClient({ apiKey: process.env.FISH_API_KEY });
+const elevenlabs = new ElevenLabsClient({ apiKey: process.env.ELEVEN_LAB_API_KEY });
 
 // Predefined list of specific Fish Audio voice IDs
 const FISH_VOICE_IDS = [
@@ -131,6 +133,30 @@ export async function getFishVoices(req, res) {
 }
 
 /**
+ * Get ElevenLabs voices
+ */
+export async function getElevenLabsVoices(req, res) {
+    try {
+        const response = await elevenlabs.voices.getAll();
+        
+        const voices = (response.voices || []).map((voice) => ({
+            id: voice.voiceId || voice.voice_id,
+            label: voice.name,
+            provider: "elevenlabs",
+            tags: voice.labels ? Object.values(voice.labels) : [],
+        }));
+
+        res.json({ voices });
+    } catch (error) {
+        logger.error("Failed to fetch ElevenLabs voices:", error.message);
+        res.status(500).json({
+            error: "Failed to fetch ElevenLabs voices",
+            message: error.message,
+        });
+    }
+}
+
+/**
  * Generate voice preview
  */
 export async function getVoicePreview(req, res) {
@@ -146,7 +172,6 @@ export async function getVoicePreview(req, res) {
         if (provider === "fish") {
             // Add storytelling emotion to preview text
             const emotionalText = `(narrator)(calm) ${text}`;
-
 
             // Generate Fish Audio preview with S1 model
             const audio = await fishAudio.textToSpeech.convert(
@@ -166,10 +191,27 @@ export async function getVoicePreview(req, res) {
                 "Content-Length": buffer.length,
             });
             res.send(buffer);
+        } else if (provider === "elevenlabs") {
+            const audioStream = await elevenlabs.textToSpeech.convert(voiceId, {
+                text: text,
+                model_id: 'eleven_multilingual_v2',
+            });
+            
+            const chunks = [];
+            for await (const chunk of audioStream) {
+                chunks.push(chunk);
+            }
+            const buffer = Buffer.concat(chunks);
+            
+            res.set({
+                "Content-Type": "audio/mpeg",
+                "Content-Length": buffer.length,
+            });
+            res.send(buffer);
         } else {
             res.status(400).json({
                 error: "Unsupported provider",
-                message: "Only 'fish' provider is supported for preview",
+                message: "Only 'fish' and 'elevenlabs' providers are supported for preview",
             });
         }
     } catch (error) {
