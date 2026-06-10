@@ -388,45 +388,45 @@ async function _runWorkflow({
     let characterReferenceUrl = null;
     let styleReferenceUrl = null;
 
-    // if (userCharacterReferenceBase64) {
-    //   logger.info("User provided a character reference image. Uploading to Cloudinary...");
-    //   try {
-    //     const upload = await cloudinary.uploader.upload(userCharacterReferenceBase64, {
-    //       folder: "character-references",
-    //       resource_type: "image",
-    //       public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
-    //       overwrite: true,
-    //     });
-    //     characterReferenceUrl = upload.secure_url;
-    //     logger.info(`✅ User Character Reference URL: ${characterReferenceUrl}`);
-    //   } catch (err) {
-    //     logger.error(`⚠️ Failed to upload user character reference: ${err.message}`);
-    //     characterReferenceUrl = userCharacterReferenceBase64; // Fallback to inline base64 if Cloudinary fails
-    //   }
-    //   logger.info("Skipping Style Reference generation since character reference is provided.");
-    // } else {
-    //   // 2.2 Generate Style Reference Image (MANDATORY for consistency if no character provided)
-    //   logger.info("Step 2.1.5: Generating Style Reference Image (Visual Baseline)...");
-    //   try {
-    //     const styleRefDir = path.join(workflowTempDir, "style_ref");
-    //     fs.mkdirSync(styleRefDir, { recursive: true });
-    //     // Generate a master cinematic shot to serve as style reference
-    //     const styleRefResult = await generateImage(masterPrompts.cinematic, 0, styleRefDir, aspectRatio, commonPrompt);
-    //     if (styleRefResult.imageUrl) {
-    //       // Upload to Cloudinary to get a permanent URL for Midjourney
-    //       const upload = await cloudinary.uploader.upload(styleRefResult.imageUrl, {
-    //         folder: "style-references",
-    //         resource_type: "image",
-    //         public_id: `style-ref-${workflow.id}-${Date.now()}`,
-    //         overwrite: true,
-    //       });
-    //       styleReferenceUrl = upload.secure_url;
-    //       logger.info(`✅ Style Reference URL: ${styleReferenceUrl}`);
-    //     }
-    //   } catch (err) {
-    //     logger.error(`⚠️ Style reference generation failed: ${err.message}`);
-    //   }
-    // }
+    if (userCharacterReferenceBase64) {
+      logger.info("User provided a character reference image. Uploading to Cloudinary...");
+      try {
+        const upload = await cloudinary.uploader.upload(userCharacterReferenceBase64, {
+          folder: "character-references",
+          resource_type: "image",
+          public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
+          overwrite: true,
+        });
+        characterReferenceUrl = upload.secure_url;
+        logger.info(`✅ User Character Reference URL: ${characterReferenceUrl}`);
+      } catch (err) {
+        logger.error(`⚠️ Failed to upload user character reference: ${err.message}`);
+        characterReferenceUrl = userCharacterReferenceBase64; // Fallback to inline base64 if Cloudinary fails
+      }
+      logger.info("Skipping Style Reference generation since character reference is provided.");
+    } else {
+      // 2.2 Generate Style Reference Image (MANDATORY for consistency if no character provided)
+      logger.info("Step 2.1.5: Generating Style Reference Image (Visual Baseline)...");
+      try {
+        const styleRefDir = path.join(workflowTempDir, "style_ref");
+        fs.mkdirSync(styleRefDir, { recursive: true });
+        // Generate a master cinematic shot to serve as style reference
+        const styleRefResult = await generateImage(masterPrompts.cinematic, 0, styleRefDir, aspectRatio, commonPrompt);
+        if (styleRefResult.imageUrl) {
+          // Upload to Cloudinary to get a permanent URL for Midjourney
+          const upload = await cloudinary.uploader.upload(styleRefResult.imageUrl, {
+            folder: "style-references",
+            resource_type: "image",
+            public_id: `style-ref-${workflow.id}-${Date.now()}`,
+            overwrite: true,
+          });
+          styleReferenceUrl = upload.secure_url;
+          logger.info(`✅ Style Reference URL: ${styleReferenceUrl}`);
+        }
+      } catch (err) {
+        logger.error(`⚠️ Style reference generation failed: ${err.message}`);
+      }
+    }
 
     // 2.2 Generate Cover Art if coverArtPrompt is provided
     if (coverArtPrompt) {
@@ -503,75 +503,75 @@ async function _runWorkflow({
     });
 
     // 2.2 Generate Character References for all characters
-    //     logger.info("Step 2.2: Processing Multi-Character References...");
-    //     const characterReferences = [];
-    //     const charactersList = storyMetadata.characters || [];
+        logger.info("Step 2.2: Processing Multi-Character References...");
+        const characterReferences = [];
+        const charactersList = storyMetadata.characters || [];
 
-    //     // Assign user-uploaded image to the main character
-    //     const mainCharacter = charactersList.find(c => c.isMainCharacter) || charactersList[0];
-    //     if (characterReferenceUrl && mainCharacter) {
-    //       characterReferences.push({
-    //         id: mainCharacter.id,
-    //         url: characterReferenceUrl, // The Cloudinary URL we generated earlier
-    //       });
-    //       logger.info(`✅ Assigned user-uploaded character reference to ${mainCharacter.name || mainCharacter.id}`);
-    //     }
+        // Assign user-uploaded image to the main character
+        const mainCharacter = charactersList.find(c => c.isMainCharacter) || charactersList[0];
+        if (characterReferenceUrl && mainCharacter) {
+          characterReferences.push({
+            id: mainCharacter.id,
+            url: characterReferenceUrl, // The Cloudinary URL we generated earlier
+          });
+          logger.info(`✅ Assigned user-uploaded character reference to ${mainCharacter.name || mainCharacter.id}`);
+        }
 
-    //     if (mediaType === "video" || mediaType === "multi_image" || mediaType === "single_image") {
-    //       for (const char of charactersList) {
-    //         if (characterReferences.find(c => c.id === char.id)) continue; // Skip if already assigned
+        if (mediaType === "video" || mediaType === "multi_image" || mediaType === "single_image") {
+          for (const char of charactersList) {
+            if (characterReferences.find(c => c.id === char.id)) continue; // Skip if already assigned
 
-    //         await checkCancelled(workflow.id); // ✅ Check between each character portrait
+            await checkCancelled(workflow.id); // ✅ Check between each character portrait
 
-    //         logger.info(`🎨 Generating character portrait for: ${char.name || char.id}...`);
-    //         const demographicInfo = [char.sex, char.age, char.color].filter(Boolean).join(", ");
-    //         const charPrompt = `A clinical, neutral character design sheet. Character Identity: ${char.name || char.id}. Demographic: ${demographicInfo}. Description: ${char.appearance}.
+            logger.info(`🎨 Generating character portrait for: ${char.name || char.id}...`);
+            const demographicInfo = [char.sex, char.age, char.color].filter(Boolean).join(", ");
+            const charPrompt = `A clinical, neutral character design sheet. Character Identity: ${char.name || char.id}. Demographic: ${demographicInfo}. Description: ${char.appearance}.
 
-    // CRITICAL REQUIREMENT: This is a STRICT physical reference image ONLY. The character MUST be standing perfectly still in a neutral A-pose or T-pose, facing the camera directly. NO ACTION. NO EXPRESSION. NO PROPS. Neutral, blank facial expression. Plain studio background.
-    // Lighting: Flat, even, clinical studio lighting so all facial features and skin tones are clearly visible. Aesthetic: Hyper-realistic, 8k, cinematic details. No text.`;
+    CRITICAL REQUIREMENT: This is a STRICT physical reference image ONLY. The character MUST be standing perfectly still in a neutral A-pose or T-pose, facing the camera directly. NO ACTION. NO EXPRESSION. NO PROPS. Neutral, blank facial expression. Plain studio background.
+    Lighting: Flat, even, clinical studio lighting so all facial features and skin tones are clearly visible. Aesthetic: Hyper-realistic, 8k, cinematic details. No text.`;
 
-    //         try {
-    //           const charRefDir = path.join(workflowTempDir, "char_refs");
-    //           if (!fs.existsSync(charRefDir)) fs.mkdirSync(charRefDir, { recursive: true });
+            try {
+              const charRefDir = path.join(workflowTempDir, "char_refs");
+              if (!fs.existsSync(charRefDir)) fs.mkdirSync(charRefDir, { recursive: true });
 
-    //           // Use standard generateImage function
-    //           const charResult = await generateImage(charPrompt, 0, charRefDir, "1:1", commonPrompt);
+              // Use standard generateImage function
+              const charResult = await generateImage(charPrompt, 0, charRefDir, "1:1", commonPrompt);
 
-    //           if (charResult.imageUrl) {
-    //             const upload = await cloudinary.uploader.upload(charResult.imageUrl, {
-    //               folder: "character-references",
-    //               resource_type: "image",
-    //               public_id: `char-ref-${workflow.id}-${char.id}-${Date.now()}`,
-    //               overwrite: true,
-    //             });
-    //             characterReferences.push({
-    //               id: char.id,
-    //               url: upload.secure_url,
-    //             });
-    //             logger.info(`✅ Generated portrait for ${char.name || char.id}: ${upload.secure_url}`);
+              if (charResult.imageUrl) {
+                const upload = await cloudinary.uploader.upload(charResult.imageUrl, {
+                  folder: "character-references",
+                  resource_type: "image",
+                  public_id: `char-ref-${workflow.id}-${char.id}-${Date.now()}`,
+                  overwrite: true,
+                });
+                characterReferences.push({
+                  id: char.id,
+                  url: upload.secure_url,
+                });
+                logger.info(`✅ Generated portrait for ${char.name || char.id}: ${upload.secure_url}`);
 
-    //             // If this is the main character and we didn't have one before, set it for legacy compatibility
-    //             if (char.id === mainCharacter?.id) {
-    //                characterReferenceUrl = upload.secure_url;
-    //             }
-    //           }
-    //         } catch (err) {
-    //           if (err.isCancelled) throw err; // Re-throw cancellation errors immediately
-    //           logger.error(`⚠️ Failed to generate portrait for ${char.name || char.id}: ${err.message}`);
-    //         }
-    //       }
-    //     }
+                // If this is the main character and we didn't have one before, set it for legacy compatibility
+                if (char.id === mainCharacter?.id) {
+                   characterReferenceUrl = upload.secure_url;
+                }
+              }
+            } catch (err) {
+              if (err.isCancelled) throw err; // Re-throw cancellation errors immediately
+              logger.error(`⚠️ Failed to generate portrait for ${char.name || char.id}: ${err.message}`);
+            }
+          }
+        }
 
-    //     // Update the database with the new character references array
-    //     await prisma.workflow.update({
-    //       where: { id: workflow.id },
-    //       data: {
-    //         metadata: {
-    //           ...(workflow.metadata || {}),
-    //           characterReferences,
-    //         }
-    //       },
-    //     });
+        // Update the database with the new character references array
+        await prisma.workflow.update({
+          where: { id: workflow.id },
+          data: {
+            metadata: {
+              ...(workflow.metadata || {}),
+              characterReferences,
+            }
+          },
+        });
 
     // 3. Generate voiceover (always) - pure voice (used for accurate subtitle timestamps)
     logger.info("Step 3: Generating voiceover...");
