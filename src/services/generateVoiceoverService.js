@@ -164,13 +164,10 @@ async function ttsFishAudio(text, referenceId) {
  * Never call this with an ElevenLabs or Fish voice ID.
  */
 async function ttsOpenAI(text, voice) {
-  let validVoice = voice;
+  let validVoice = typeof voice === "string" ? voice : voice?.id || "onyx";
 
-  if (voice.length >= 20 && !/^[a-z]+$/.test(voice)) {
-    logger.warn(`[OpenAI TTS] PROVIDER MISMATCH — voice "${voice}" looks like an ElevenLabs/Fish ID. Falling back to 'onyx'.`);
-    validVoice = "onyx";
-  } else if (!OPENAI_VALID_VOICES.has(voice)) {
-    logger.warn(`[OpenAI TTS] Invalid voice "${voice}". Falling back to 'onyx'.`);
+  if (!OPENAI_VALID_VOICES.has(validVoice)) {
+    logger.warn(`[OpenAI TTS] Invalid voice "${validVoice}". Falling back to 'onyx'.`);
     validVoice = "onyx";
   }
 
