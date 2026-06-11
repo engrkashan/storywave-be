@@ -8,7 +8,11 @@ import { deleteTempFiles } from "../utils/deleteTemp.js";
 import { generateVoiceover } from "./generateVoiceoverService.js";
 import { generateImage, generateMultiImages } from "./imageService.js";
 import { extractContentFromUrl, transcribeVideo } from "./inputService.js";
-import { generateStory, generateScenePrompts } from "./storyService.js";
+import {
+  generateStory,
+  generateScenePrompts,
+  enhanceScriptWithSoundEffects,
+} from "./storyService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { getAudioDuration } from "./audioService.js";
 import {
@@ -104,7 +108,7 @@ export async function runScheduledWorkflows() {
       videoFile: meta.videoFile || null,
       textIdea: meta.textIdea || null,
       imagePrompt: meta.imagePrompt || null,
-      shouldGenerateImage: meta.shouldGenerateImage ?? true, // ← renamed
+      shouldGenerateImage: meta.shouldGenerateImage ?? true, 
       storyType: meta.storyType || null,
       voice: meta.voice || null,
       voiceTone: meta.voiceTone || null,
@@ -142,7 +146,7 @@ export async function processExistingWorkflow(workflow) {
     videoFile: meta.videoFile || null,
     textIdea: meta.textIdea || null,
     imagePrompt: meta.imagePrompt || null,
-    shouldGenerateImage: meta.shouldGenerateImage ?? true, // ← renamed
+    shouldGenerateImage: meta.shouldGenerateImage ?? true, 
     storyType: meta.storyType || null,
     voice: meta.voice || null,
     voiceTone: meta.voiceTone || null,
@@ -191,7 +195,7 @@ export async function runWorkflow(args) {
  * Internal workflow execution function
  */
 async function _runWorkflow({
-  workflowId = null, // 🔑 Pre-created DB workflow ID (from controller)
+  workflowId = null,
   userId,
   title,
   url = null,
@@ -287,7 +291,7 @@ async function _runWorkflow({
     return { success: true, workflowId: workflow.id, status: "SCHEDULED" };
   }
 
-  // ✅ Early cancellation guard: if this is a stalled-job retry and the user already cancelled, abort immediately
+  // Early cancellation guard: if this is a stalled-job retry and the user already cancelled, abort immediately
   const freshWf = await prisma.workflow.findUnique({
     where: { id: workflow.id },
     select: { status: true },
@@ -329,7 +333,7 @@ async function _runWorkflow({
       throw new Error("Input text is too short or empty");
     }
 
-    await checkCancelled(workflow.id); // ✔️ Cancellation check
+    await checkCancelled(workflow.id); // Cancellation check
 
     await prisma.input.create({
       data: {
@@ -354,14 +358,32 @@ async function _runWorkflow({
       script = textIdea;
     }
 
+    // Auto-enhance script with sound effects if the provider is ElevenLabs
+    const rawProvider = voice?.provider || "";
+    const voiceId = voice?.id || voice;
+    const isElevenLabs =
+      rawProvider === "elevenlabs" ||
+      (!rawProvider &&
+        typeof voiceId === "string" &&
+        voiceId.length >= 20 &&
+        !/^[a-z]+$/.test(voiceId) &&
+        !(/^[0-9a-f]+$/.test(voiceId) && voiceId.length === 32));
+
+    if (isElevenLabs) {
+      logger.info(
+        "Step 2.5: Auto-enhancing script with ElevenLabs sound effects...",
+      );
+      script = await enhanceScriptWithSoundEffects(script);
+    }
+
     const story = await prisma.story.create({
       data: {
         title,
         outline: outline || null,
         content: script,
         userId,
-        isPodcast: false, // Will be updated later based on image/video generation
-        audioURL: null, // Will be set after voiceover generation
+        isPodcast: false, 
+        audioURL: null, 
         series,
         coverArtPrompt,
         seoContent,
@@ -374,209 +396,257 @@ async function _runWorkflow({
       data: { storyId: story.id },
     });
 
-    logger.info("Step 2.1: Extracting story metadata and master prompts...");
-    const storyMetadata = await extractStoryMetadata(script);
-    const masterPrompts = generateMasterPrompts(
-      storyMetadata,
-      title,
-      aspectRatio,
-    );
-    const commonPrompt = generateCommonVisualPrompt(storyMetadata);
-
-    await checkCancelled(workflow.id); // ✔️ Cancellation check
-
+    let storyMetadata = null;
+    let masterPrompts = null;
+    let commonPrompt = null;
     let characterReferenceUrl = null;
     let styleReferenceUrl = null;
+    let characterReferences = [];
 
-    if (userCharacterReferenceBase64) {
-      logger.info("User provided a character reference image. Uploading to Cloudinary...");
-      try {
-        const upload = await cloudinary.uploader.upload(userCharacterReferenceBase64, {
-          folder: "character-references",
-          resource_type: "image",
-          public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
-          overwrite: true,
-        });
-        characterReferenceUrl = upload.secure_url;
-        logger.info(`✅ User Character Reference URL: ${characterReferenceUrl}`);
-      } catch (err) {
-        logger.error(`⚠️ Failed to upload user character reference: ${err.message}`);
-        characterReferenceUrl = userCharacterReferenceBase64; // Fallback to inline base64 if Cloudinary fails
-      }
-      logger.info("Skipping Style Reference generation since character reference is provided.");
-    } else {
-      // 2.2 Generate Style Reference Image (MANDATORY for consistency if no character provided)
-      logger.info("Step 2.1.5: Generating Style Reference Image (Visual Baseline)...");
-      try {
-        const styleRefDir = path.join(workflowTempDir, "style_ref");
-        fs.mkdirSync(styleRefDir, { recursive: true });
-        // Generate a master cinematic shot to serve as style reference
-        const styleRefResult = await generateImage(masterPrompts.cinematic, 0, styleRefDir, aspectRatio, commonPrompt);
-        if (styleRefResult.imageUrl) {
-          // Upload to Cloudinary to get a permanent URL for Midjourney
-          const upload = await cloudinary.uploader.upload(styleRefResult.imageUrl, {
-            folder: "style-references",
-            resource_type: "image",
-            public_id: `style-ref-${workflow.id}-${Date.now()}`,
-            overwrite: true,
-          });
-          styleReferenceUrl = upload.secure_url;
-          logger.info(`✅ Style Reference URL: ${styleReferenceUrl}`);
-        }
-      } catch (err) {
-        logger.error(`⚠️ Style reference generation failed: ${err.message}`);
-      }
-    }
+    if (shouldGenerateImage) {
+      logger.info("Step 2.1: Extracting story metadata and master prompts...");
+      storyMetadata = await extractStoryMetadata(script);
+      masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
+      commonPrompt = generateCommonVisualPrompt(storyMetadata);
 
-    // 2.2 Generate Cover Art if coverArtPrompt is provided
-    if (coverArtPrompt) {
-      logger.info(
-        `🎨 Generating dual cover arts (1:1 & 16:9): ${coverArtPrompt}`,
-      );
-      try {
-        const coverArtDir = path.join(workflowTempDir, "cover_art");
-        fs.mkdirSync(coverArtDir, { recursive: true });
+      await checkCancelled(workflow.id); // ✔️ Cancellation check
 
-        // Helper to generate and upload a single ratio
-        const processRatio = async (ratio) => {
-          const result = await generateImage(
-            coverArtPrompt,
-            1,
-            coverArtDir,
-            ratio,
-          );
-          if (result.imageUrl) {
-            const upload = await cloudinary.uploader.upload(result.imageUrl, {
-              folder: "cover-arts",
+      if (userCharacterReferenceBase64) {
+        logger.info(
+          "User provided a character reference image. Uploading to Cloudinary...",
+        );
+        try {
+          const upload = await cloudinary.uploader.upload(
+            userCharacterReferenceBase64,
+            {
+              folder: "character-references",
               resource_type: "image",
-              public_id: `cover-${ratio.replace(":", "_")}-${workflow.id}-${Date.now()}`,
+              public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
               overwrite: true,
+            },
+          );
+          characterReferenceUrl = upload.secure_url;
+          logger.info(
+            `✅ User Character Reference URL: ${characterReferenceUrl}`,
+          );
+        } catch (err) {
+          logger.error(
+            `⚠️ Failed to upload user character reference: ${err.message}`,
+          );
+          characterReferenceUrl = userCharacterReferenceBase64; // Fallback to inline base64 if Cloudinary fails
+        }
+        logger.info(
+          "Skipping Style Reference generation since character reference is provided.",
+        );
+      } else {
+        // 2.2 Generate Style Reference Image (MANDATORY for consistency if no character provided)
+        logger.info(
+          "Step 2.1.5: Generating Style Reference Image (Visual Baseline)...",
+        );
+        try {
+          const styleRefDir = path.join(workflowTempDir, "style_ref");
+          fs.mkdirSync(styleRefDir, { recursive: true });
+          // Generate a master cinematic shot to serve as style reference
+          const styleRefResult = await generateImage(
+            masterPrompts.cinematic,
+            0,
+            styleRefDir,
+            aspectRatio,
+            commonPrompt,
+          );
+          if (styleRefResult.imageUrl) {
+            // Upload to Cloudinary to get a permanent URL for Midjourney
+            const upload = await cloudinary.uploader.upload(
+              styleRefResult.imageUrl,
+              {
+                folder: "style-references",
+                resource_type: "image",
+                public_id: `style-ref-${workflow.id}-${Date.now()}`,
+                overwrite: true,
+              },
+            );
+            styleReferenceUrl = upload.secure_url;
+            logger.info(`✅ Style Reference URL: ${styleReferenceUrl}`);
+          }
+        } catch (err) {
+          logger.error(`⚠️ Style reference generation failed: ${err.message}`);
+        }
+      }
+
+      // 2.2 Generate Cover Art if coverArtPrompt is provided
+      if (coverArtPrompt) {
+        logger.info(
+          `🎨 Generating dual cover arts (1:1 & 16:9): ${coverArtPrompt}`,
+        );
+        try {
+          const coverArtDir = path.join(workflowTempDir, "cover_art");
+          fs.mkdirSync(coverArtDir, { recursive: true });
+
+          // Helper to generate and upload a single ratio
+          const processRatio = async (ratio) => {
+            const result = await generateImage(
+              coverArtPrompt,
+              1,
+              coverArtDir,
+              ratio,
+            );
+            if (result.imageUrl) {
+              const upload = await cloudinary.uploader.upload(result.imageUrl, {
+                folder: "cover-arts",
+                resource_type: "image",
+                public_id: `cover-${ratio.replace(":", "_")}-${workflow.id}-${Date.now()}`,
+                overwrite: true,
+              });
+              logger.info(
+                `🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.width}x${upload.height}px`,
+              );
+              logger.info(
+                `🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.secure_url}`,
+              );
+              return upload.secure_url;
+            }
+            return null;
+          };
+
+          // Generate both in parallel
+          const [url16_9, url1_1] = await Promise.all([
+            processRatio("16:9"),
+            processRatio("1:1"),
+          ]);
+
+          if (url16_9 || url1_1) {
+            await prisma.story.update({
+              where: { id: story.id },
+              data: {
+                coverArtURL: url16_9 || url1_1, // Legacy compatibility
+                coverArtURL_16_9: url16_9,
+                coverArtURL_1_1: url1_1,
+              },
             });
             logger.info(
-              `🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.width}x${upload.height}px`,
+              `✅ Dual cover arts generated: 16:9(${url16_9}) | 1:1(${url1_1})`,
             );
-            logger.info(
-              `🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.secure_url}`,
-            );
-            return upload.secure_url;
           }
-          return null;
-        };
-
-        // Generate both in parallel
-        const [url16_9, url1_1] = await Promise.all([
-          processRatio("16:9"),
-          processRatio("1:1"),
-        ]);
-
-        if (url16_9 || url1_1) {
-          await prisma.story.update({
-            where: { id: story.id },
-            data: {
-              coverArtURL: url16_9 || url1_1, // Legacy compatibility
-              coverArtURL_16_9: url16_9,
-              coverArtURL_1_1: url1_1,
-            },
-          });
-          logger.info(
-            `✅ Dual cover arts generated: 16:9(${url16_9}) | 1:1(${url1_1})`,
-          );
+        } catch (err) {
+          logger.error(`⚠️ Cover art generation failed: ${err.message}`);
+          await recordWorkflowWarning(workflow.id, "Cover Art", err);
         }
-      } catch (err) {
-        logger.error(`⚠️ Cover art generation failed: ${err.message}`);
-        await recordWorkflowWarning(workflow.id, "Cover Art", err);
       }
-    }
 
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: {
-        metadata: {
-          ...(workflow.metadata || {}),
-          storyMetadata,
-          masterPrompts,
-          commonPrompt,
-          characterReferenceUrl,
-          styleReferenceUrl,
+      await prisma.workflow.update({
+        where: { id: workflow.id },
+        data: {
+          metadata: {
+            ...(workflow.metadata || {}),
+            storyMetadata,
+            masterPrompts,
+            commonPrompt,
+            characterReferenceUrl,
+            styleReferenceUrl,
+          },
         },
-      },
-    });
+      });
 
-    // 2.2 Generate Character References for all characters
-        logger.info("Step 2.2: Processing Multi-Character References...");
-        const characterReferences = [];
-        const charactersList = storyMetadata.characters || [];
+      // 2.2 Generate Character References for all characters
+      logger.info("Step 2.2: Processing Multi-Character References...");
+      const charactersList = storyMetadata.characters || [];
 
-        // Assign user-uploaded image to the main character
-        const mainCharacter = charactersList.find(c => c.isMainCharacter) || charactersList[0];
-        if (characterReferenceUrl && mainCharacter) {
-          characterReferences.push({
-            id: mainCharacter.id,
-            url: characterReferenceUrl, // The Cloudinary URL we generated earlier
-          });
-          logger.info(`✅ Assigned user-uploaded character reference to ${mainCharacter.name || mainCharacter.id}`);
-        }
+      // Assign user-uploaded image to the main character
+      const mainCharacter =
+        charactersList.find((c) => c.isMainCharacter) || charactersList[0];
+      if (characterReferenceUrl && mainCharacter) {
+        characterReferences.push({
+          id: mainCharacter.id,
+          url: characterReferenceUrl, // The Cloudinary URL we generated earlier
+        });
+        logger.info(
+          `✅ Assigned user-uploaded character reference to ${mainCharacter.name || mainCharacter.id}`,
+        );
+      }
 
-        if (mediaType === "video" || mediaType === "multi_image" || mediaType === "single_image") {
-          for (const char of charactersList) {
-            if (characterReferences.find(c => c.id === char.id)) continue; // Skip if already assigned
+      if (
+        mediaType === "video" ||
+        mediaType === "multi_image" ||
+        mediaType === "single_image"
+      ) {
+        for (const char of charactersList) {
+          if (characterReferences.find((c) => c.id === char.id)) continue; // Skip if already assigned
 
-            await checkCancelled(workflow.id); // ✅ Check between each character portrait
+          await checkCancelled(workflow.id); // ✅ Check between each character portrait
 
-            logger.info(`🎨 Generating character portrait for: ${char.name || char.id}...`);
-            const demographicInfo = [char.sex, char.age, char.color].filter(Boolean).join(", ");
-            const charPrompt = `A clinical, neutral character design sheet. Character Identity: ${char.name || char.id}. Demographic: ${demographicInfo}. Description: ${char.appearance}.
+          logger.info(
+            `🎨 Generating character portrait for: ${char.name || char.id}...`,
+          );
+          const demographicInfo = [char.sex, char.age, char.color]
+            .filter(Boolean)
+            .join(", ");
+          const charPrompt = `A clinical, neutral character design sheet. Character Identity: ${char.name || char.id}. Demographic: ${demographicInfo}. Description: ${char.appearance}.
 
-    CRITICAL REQUIREMENT: This is a STRICT physical reference image ONLY. The character MUST be standing perfectly still in a neutral A-pose or T-pose, facing the camera directly. NO ACTION. NO EXPRESSION. NO PROPS. Neutral, blank facial expression. Plain studio background.
-    Lighting: Flat, even, clinical studio lighting so all facial features and skin tones are clearly visible. Aesthetic: Hyper-realistic, 8k, cinematic details. No text.`;
+  CRITICAL REQUIREMENT: This is a STRICT physical reference image ONLY. The character MUST be standing perfectly still in a neutral A-pose or T-pose, facing the camera directly. NO ACTION. NO EXPRESSION. NO PROPS. Neutral, blank facial expression. Plain studio background.
+  Lighting: Flat, even, clinical studio lighting so all facial features and skin tones are clearly visible. Aesthetic: Hyper-realistic, 8k, cinematic details. No text.`;
 
-            try {
-              const charRefDir = path.join(workflowTempDir, "char_refs");
-              if (!fs.existsSync(charRefDir)) fs.mkdirSync(charRefDir, { recursive: true });
+          try {
+            const charRefDir = path.join(workflowTempDir, "char_refs");
+            if (!fs.existsSync(charRefDir))
+              fs.mkdirSync(charRefDir, { recursive: true });
 
-              // Use standard generateImage function
-              const charResult = await generateImage(charPrompt, 0, charRefDir, "1:1", commonPrompt);
+            // Use standard generateImage function
+            const charResult = await generateImage(
+              charPrompt,
+              0,
+              charRefDir,
+              "1:1",
+              commonPrompt,
+            );
 
-              if (charResult.imageUrl) {
-                const upload = await cloudinary.uploader.upload(charResult.imageUrl, {
+            if (charResult.imageUrl) {
+              const upload = await cloudinary.uploader.upload(
+                charResult.imageUrl,
+                {
                   folder: "character-references",
                   resource_type: "image",
                   public_id: `char-ref-${workflow.id}-${char.id}-${Date.now()}`,
                   overwrite: true,
-                });
-                characterReferences.push({
-                  id: char.id,
-                  url: upload.secure_url,
-                });
-                logger.info(`✅ Generated portrait for ${char.name || char.id}: ${upload.secure_url}`);
+                },
+              );
+              characterReferences.push({
+                id: char.id,
+                url: upload.secure_url,
+              });
+              logger.info(
+                `✅ Generated portrait for ${char.name || char.id}: ${upload.secure_url}`,
+              );
 
-                // If this is the main character and we didn't have one before, set it for legacy compatibility
-                if (char.id === mainCharacter?.id) {
-                   characterReferenceUrl = upload.secure_url;
-                }
+              // If this is the main character and we didn't have one before, set it for legacy compatibility
+              if (char.id === mainCharacter?.id) {
+                characterReferenceUrl = upload.secure_url;
               }
-            } catch (err) {
-              if (err.isCancelled) throw err; // Re-throw cancellation errors immediately
-              logger.error(`⚠️ Failed to generate portrait for ${char.name || char.id}: ${err.message}`);
             }
+          } catch (err) {
+            if (err.isCancelled) throw err; // Re-throw cancellation errors immediately
+            logger.error(
+              `⚠️ Failed to generate portrait for ${char.name || char.id}: ${err.message}`,
+            );
           }
         }
+      }
 
-        // Update the database with the new character references array
-        await prisma.workflow.update({
-          where: { id: workflow.id },
-          data: {
-            metadata: {
-              ...(workflow.metadata || {}),
-              characterReferences,
-            }
+      // Update the database with the new character references array
+      await prisma.workflow.update({
+        where: { id: workflow.id },
+        data: {
+          metadata: {
+            ...(workflow.metadata || {}),
+            characterReferences,
           },
-        });
+        },
+      });
+    }
 
     // 3. Generate voiceover (always) - pure voice (used for accurate subtitle timestamps)
     logger.info("Step 3: Generating voiceover...");
     logger.info(
-      `[WorkflowService] voice payload dispatched to generateVoiceover: ${JSON.stringify(voice)}`
+      `[WorkflowService] voice payload dispatched to generateVoiceover: ${JSON.stringify(voice)}`,
     );
     await checkCancelled(workflow.id); // ✔️ Cancellation check
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
