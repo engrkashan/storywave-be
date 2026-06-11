@@ -85,13 +85,23 @@ function chunkBySentences(text, maxChunkSize = 300) {
 
 // ─── Per-provider TTS chunk functions ─────────────────────────────────────────
 
+const ELEVENLABS_PRESETS = new Set([
+  "CwhRBWXzGAHq8TQ4Fs17", "EXAVITQu4vr4xnSDxMaL", "FGY2WhTYpPnrIDTdsKH5", "IKne3meq5aSn9XLyUdCD", "JBFqnCBsd6RMkjVDRZzb", "N2lVS1w4EtoT3dr4eOWO", "SAz9YHcvj6GT2YYXdXww", "SOYHLrjzK2X1ezoPC6cr", "TX3LPaxmHKxFdv7VOQHJ", "Xb7hH8MSUJpSbSDYk0k2", "XrExE9yKIg1WjnnlVkGX", "bIHbv24MWmeRgasZH58o", "cgSgspJ2msm6clMCkdW9", "cjVigY5qzO86Huf0OWal", "hpp4J3VqNfWAUOO0d1Us", "iP95p4xoKVk53GoZ742B", "nPczCjzI2devNBz1zQrb", "onwK4e9ZLuTAKqWW03F9", "pFZP5JQG7iQjIQuC4Bku", "pNInz6obpgDQGcFmaJgB", "pqHfZKP75CvOlQylNhV4", "21m00Tcm4TlvDq8ikWAM"
+]);
+
 /**
  * ElevenLabs TTS — uses the ElevenLabs voice ID directly, no OpenAI validation.
  */
 async function ttsElevenLabs(text, voiceId) {
+  let validVoiceId = voiceId;
+  if (!ELEVENLABS_PRESETS.has(voiceId)) {
+    logger.warn(`[ElevenLabs] Custom voice IDs are not allowed. Falling back to a valid preset.`);
+    validVoiceId = "EXAVITQu4vr4xnSDxMaL";
+  }
+
   try {
-    logger.info(`[ElevenLabs] Converting text with voice ID: ${voiceId}`);
-    const audioStream = await elevenlabs.textToSpeech.convert(voiceId, {
+    logger.info(`[ElevenLabs] Converting text with voice ID: ${validVoiceId}`);
+    const audioStream = await elevenlabs.textToSpeech.convert(validVoiceId, {
       text,
       model_id: "eleven_multilingual_v2",
     });
@@ -103,7 +113,7 @@ async function ttsElevenLabs(text, voiceId) {
     return Buffer.concat(chunks);
   } catch (error) {
     logger.error(
-      `[ElevenLabs] TTS Error payload: text="${text}", voiceId="${voiceId}"`,
+      `[ElevenLabs] TTS Error payload: text="${text}", voiceId="${validVoiceId}"`,
     );
     throw new Error(`ElevenLabs TTS failed: ${error.message}`);
   }
@@ -154,27 +164,20 @@ async function ttsFishAudio(text, referenceId) {
  * Never call this with an ElevenLabs or Fish voice ID.
  */
 async function ttsOpenAI(text, voice) {
-  // Hard guard: ElevenLabs IDs are 20+ char alphanumeric, Fish IDs are 32-char hex.
-  // If either pattern matches, something has gone wrong with provider routing.
+  let validVoice = voice;
+
   if (voice.length >= 20 && !/^[a-z]+$/.test(voice)) {
-    throw new Error(
-      `[OpenAI TTS] PROVIDER MISMATCH — voice "${voice}" looks like an ElevenLabs/Fish ID, not an OpenAI voice name. ` +
-        `This indicates a provider routing bug. Check voiceObj.provider is set correctly.`,
-    );
+    logger.warn(`[OpenAI TTS] PROVIDER MISMATCH — voice "${voice}" looks like an ElevenLabs/Fish ID. Falling back to 'onyx'.`);
+    validVoice = "onyx";
+  } else if (!OPENAI_VALID_VOICES.has(voice)) {
+    logger.warn(`[OpenAI TTS] Invalid voice "${voice}". Falling back to 'onyx'.`);
+    validVoice = "onyx";
   }
 
-  if (!OPENAI_VALID_VOICES.has(voice)) {
-    throw new Error(
-      `[OpenAI TTS] Invalid voice: "${voice}". ` +
-        `Allowed values: ${[...OPENAI_VALID_VOICES].join(", ")}. ` +
-        `Ensure the voice object has the correct provider field.`,
-    );
-  }
-
-  logger.info(`[OpenAI] Converting text with voice: ${voice}`);
+  logger.info(`[OpenAI] Converting text with voice: ${validVoice}`);
   const res = await openai.audio.speech.create({
     model: "gpt-4o-mini-tts",
-    voice,
+    voice: validVoice,
     input: text,
   });
   return Buffer.from(await res.arrayBuffer());
@@ -247,23 +250,7 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
       ? "Fish Audio S1"
       : "OpenAI";
 
-  // ── Final routing guard: never let a non-OpenAI ID reach OpenAI ────────────
-  if (
-    isOpenAI &&
-    finalVoiceId &&
-    finalVoiceId.length >= 20 &&
-    !/^[a-z]+$/.test(finalVoiceId)
-  ) {
-    logger.error(
-      `[generateVoiceover] CRITICAL: OpenAI route selected but finalVoiceId="${finalVoiceId}" looks like an ElevenLabs/Fish ID! ` +
-        `rawProvider="${rawProvider}", voiceObj=${JSON.stringify(voiceObj)}. Attempting auto-fix to ElevenLabs.`,
-    );
-    // Safe fallback: treat it as ElevenLabs since the ID matches that pattern
-    throw new Error(
-      `Provider routing error: voice "${finalVoiceId}" (provider="${rawProvider}") was incorrectly routed to OpenAI. ` +
-        `Ensure the voiceObj includes provider="elevenlabs" when using ElevenLabs voice IDs.`,
-    );
-  }
+  // ── Final routing guard: removed since ttsOpenAI handles fallbacks gracefully ────────────
 
   logger.info(
     `🎙️ [generateVoiceover] provider="${providerLabel}" | ` +

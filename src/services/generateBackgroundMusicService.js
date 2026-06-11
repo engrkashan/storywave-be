@@ -42,7 +42,8 @@ export async function generateBackgroundMusic({ title, storyType, tempDir }) {
     style: musicStyle,
     title: (title || "Background Story Music").substring(0, 60),
     model: "V5",
-    callBackUrl: "https://www.youtube.com/watch?v=OPugs48z2GU&list=RDOPugs48z2GU&start_radio=1",
+    callBackUrl:
+      "https://www.youtube.com/watch?v=OPugs48z2GU&list=RDOPugs48z2GU&start_radio=1",
   };
 
   try {

@@ -641,3 +641,36 @@ async function summarizeText(text) {
   });
   return result.choices?.[0]?.message?.content?.trim() || text.slice(0, 5000);
 }
+
+/**
+ * Automatically analyze the script context and generate an enhanced version
+ * that intelligently includes appropriate sound-effect cues (e.g. [door opening])
+ * where they add value to the storytelling.
+ */
+export async function enhanceScriptWithSoundEffects(script) {
+  logger.info("🔊 Enhancing script with ElevenLabs sound effects...");
+  const prompt = `You are a cinematic audio director. Your task is to enhance the provided script by adding background sound-effect cues.
+
+RULES:
+1. The original content, meaning, tone, and narrative flow of the script MUST remain perfectly unchanged. Do NOT rewrite, add, or remove any narration text.
+2. Insert sound-effect cues in square brackets, e.g., [door creaking], [heavy rain], [distant police siren].
+3. Make them context-aware and relevant to the scene.
+4. Only add sound effects where they significantly improve the listening experience (e.g., transitions, dramatic moments, establishing a new environment). Do not add them to every single sentence.
+5. Output ONLY the enhanced script. No explanations or extra text.
+
+SCRIPT:
+${script}
+`;
+
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.3,
+    });
+    return res.choices[0].message.content.trim() || script;
+  } catch (err) {
+    logger.warn(`Failed to enhance script with sound effects: ${err.message}`);
+    return script;
+  }
+}
