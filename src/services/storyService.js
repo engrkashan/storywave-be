@@ -612,10 +612,10 @@ OUTPUT FORMAT — Return STRICT valid JSON:
       const charIds = (parsed.charactersInScene || []).filter(id => typeof id === "string" && id.startsWith("char_"));
       
       logger.info(`✅ Scene ${i + 1}/${chunks.length}: "${parsed.prompt.slice(0, 80)}..." | chars: [${charIds.join(", ") || "none"}]`);
-      return { prompt: parsed.prompt, charactersInScene: charIds };
+      return { prompt: parsed.prompt, charactersInScene: charIds, narration: chunk };
     } catch (err) {
       logger.warn(`⚠️ Scene ${i + 1} prompt failed: ${err.message} — using opening sentence fallback`);
-      return { prompt: openingSentence, charactersInScene: [] };
+      return { prompt: openingSentence, charactersInScene: [], narration: chunk };
     }
   });
 
@@ -653,9 +653,9 @@ export async function enhanceScriptWithSoundEffects(script) {
 
 RULES:
 1. The original content, meaning, tone, and narrative flow of the script MUST remain perfectly unchanged. Do NOT rewrite, add, or remove any narration text.
-2. Insert sound-effect cues in square brackets, e.g., [door creaking], [heavy rain], [distant police siren].
-3. Make them context-aware and relevant to the scene.
-4. Only add sound effects where they significantly improve the listening experience (e.g., transitions, dramatic moments, establishing a new environment). Do not add them to every single sentence.
+2. Insert sound-effect cues in square brackets immediately after the specific word or phrase they correspond to (e.g., He swung the hammer [heavy thud] down.).
+3. Focus on QUALITY over QUANTITY. Create only special, impactful sounds like a roaring fire, a tribal drum beat, or a gunshot, depending on the context. Do NOT add constant ambient noises.
+4. Only add sound effects where they significantly improve the listening experience.
 5. Output ONLY the enhanced script. No explanations or extra text.
 
 SCRIPT:
@@ -672,5 +672,38 @@ ${script}
   } catch (err) {
     logger.warn(`Failed to enhance script with sound effects: ${err.message}`);
     return script;
+  }
+}
+
+/**
+ * Enhance a specific scene's narration with sound effects based on its visual context.
+ */
+export async function enhanceSceneWithSoundEffects(scenePrompt, narrationChunk) {
+  logger.info("🔊 Enhancing scene narration with visual context sound effects...");
+  const prompt = `You are a cinematic audio director. Your task is to enhance the provided narration chunk by adding background sound-effect cues that perfectly match the visual scene.
+
+RULES:
+1. The original content, meaning, tone, and narrative flow of the narration MUST remain perfectly unchanged. Do NOT rewrite, add, or remove any narration text.
+2. Insert sound-effect cues in square brackets immediately after the specific word or phrase they correspond to (e.g., The cannon fired [loud explosion] with immense force.).
+3. The sound effects MUST MATCH the visual scene described below. Focus on QUALITY over QUANTITY. Create only special, impactful sounds (e.g., fire crackling, drum beat, gunshot) that directly align with the visual action. Do NOT add generic ambient noise.
+4. Output ONLY the enhanced narration. No explanations or extra text.
+
+VISUAL SCENE DESCRIPTION:
+${scenePrompt}
+
+NARRATION:
+${narrationChunk}
+`;
+
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.3,
+    });
+    return res.choices[0].message.content.trim() || narrationChunk;
+  } catch (err) {
+    logger.warn(`Failed to enhance scene with sound effects: ${err.message}`);
+    return narrationChunk;
   }
 }

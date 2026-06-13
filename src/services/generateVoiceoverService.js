@@ -93,15 +93,9 @@ const ELEVENLABS_PRESETS = new Set([
  * ElevenLabs TTS — uses the ElevenLabs voice ID directly, no OpenAI validation.
  */
 async function ttsElevenLabs(text, voiceId) {
-  let validVoiceId = voiceId;
-  if (!ELEVENLABS_PRESETS.has(voiceId)) {
-    logger.warn(`[ElevenLabs] Custom voice IDs are not allowed. Falling back to a valid preset.`);
-    validVoiceId = "EXAVITQu4vr4xnSDxMaL";
-  }
-
   try {
-    logger.info(`[ElevenLabs] Converting text with voice ID: ${validVoiceId}`);
-    const audioStream = await elevenlabs.textToSpeech.convert(validVoiceId, {
+    logger.info(`[ElevenLabs] Converting text with voice ID: ${voiceId}`);
+    const audioStream = await elevenlabs.textToSpeech.convert(voiceId, {
       text,
       model_id: "eleven_multilingual_v2",
     });
@@ -113,7 +107,7 @@ async function ttsElevenLabs(text, voiceId) {
     return Buffer.concat(chunks);
   } catch (error) {
     logger.error(
-      `[ElevenLabs] TTS Error payload: text="${text}", voiceId="${validVoiceId}"`,
+      `[ElevenLabs] TTS Error payload: text="${text}", voiceId="${voiceId}"`,
     );
     throw new Error(`ElevenLabs TTS failed: ${error.message}`);
   }
@@ -255,50 +249,43 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
   );
 
   // ── Build segment list ───────────────────────────────────────────────────────
-  // ElevenLabs: split script into text + SFX segments (handles [tag] and (tag))
-  // Fish / OpenAI: plain text chunks only (tags are stripped by cleanScript)
+  // Split script into text + SFX segments (handles [tag] and (tag)) for ALL providers
   const segments = [];
 
-  if (isElevenLabs) {
-    const regex = /\[(.*?)\]|\((.*?)\)/g;
-    let lastIndex = 0;
-    let match;
+  const regex = /\[(.*?)\]|\((.*?)\)/g;
+  let lastIndex = 0;
+  let match;
 
-    while ((match = regex.exec(script)) !== null) {
-      if (match.index > lastIndex) {
-        const textPart = script.substring(lastIndex, match.index).trim();
-        if (textPart) {
-          chunkBySentences(textPart, 300).forEach((c) => {
-            if (c.trim()) segments.push({ type: "text", content: c });
-          });
-        }
-      }
-      const sfxText = (match[1] || match[2])?.trim();
-      if (sfxText) {
-        const sfxLower = sfxText.toLowerCase();
-        if (sfxLower === "pause" || sfxLower === "break") {
-          segments.push({ type: "text", content: "..." });
-        } else {
-          segments.push({ type: "sfx", content: sfxText });
-        }
-      }
-      lastIndex = regex.lastIndex;
-    }
-
-    if (lastIndex < script.length) {
-      const textPart = script.substring(lastIndex).trim();
+  while ((match = regex.exec(script)) !== null) {
+    if (match.index > lastIndex) {
+      let textPart = script.substring(lastIndex, match.index).trim();
       if (textPart) {
+        textPart = textPart.replace(/\*\*/g, "").replace(/\*/g, ""); // Clean markdown
         chunkBySentences(textPart, 300).forEach((c) => {
           if (c.trim()) segments.push({ type: "text", content: c });
         });
       }
     }
-  } else {
-    // Fish Audio or OpenAI — strip tags, split into plain text chunks
-    const text = cleanScript(script, isFish);
-    chunkBySentences(text, 300).forEach((c) => {
-      if (c.trim()) segments.push({ type: "text", content: c });
-    });
+    const sfxText = (match[1] || match[2])?.trim();
+    if (sfxText) {
+      const sfxLower = sfxText.toLowerCase();
+      if (sfxLower === "pause" || sfxLower === "break") {
+        segments.push({ type: "text", content: "..." });
+      } else {
+        segments.push({ type: "sfx", content: sfxText });
+      }
+    }
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < script.length) {
+    let textPart = script.substring(lastIndex).trim();
+    if (textPart) {
+      textPart = textPart.replace(/\*\*/g, "").replace(/\*/g, ""); // Clean markdown
+      chunkBySentences(textPart, 300).forEach((c) => {
+        if (c.trim()) segments.push({ type: "text", content: c });
+      });
+    }
   }
 
   logger.info(`📋 Segments to process: ${segments.length}`);

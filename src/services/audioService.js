@@ -109,11 +109,11 @@ export async function mixAudioFiles(mainFile, sfxLayers, outputFile) {
       // Calculate fade-out start to avoid abrupt cut-offs.
       const fadeOutStart = Math.max(0, sfxDuration - 2.0);
 
-      // volume: start with 0.5 (will be ducked further)
+      // volume: start with 0.8 (increased from 0.5 for 50%+ more volume)
       // equalizer: scoop out 1kHz by 6dB to avoid voice frequency clashing
       // afade: 1.5s fade-in, 2.0s fade-out
       const sfxFilters = [
-         `volume=0.5`,
+         `volume=0.8`,
          `equalizer=f=1000:width_type=o:width=2:g=-6`,
          `afade=t=in:st=0:d=1.5`,
          `afade=t=out:st=${fadeOutStart}:d=2.0`,
@@ -131,8 +131,8 @@ export async function mixAudioFiles(mainFile, sfxLayers, outputFile) {
     }
 
     // 4. Duck the mixed SFX against the main narration using sidechaincompress
-    // threshold 0.04 is approx -28dB. Smooth 400ms release for gentle return during pauses.
-    filterComplex += `[mixed_sfx][main_sc]sidechaincompress=threshold=0.04:ratio=8:attack=20:release=400[ducked_sfx];`;
+    // threshold 0.08 is approx -22dB. Smooth 400ms release for gentle return during pauses.
+    filterComplex += `[mixed_sfx][main_sc]sidechaincompress=threshold=0.08:ratio=6:attack=20:release=400[ducked_sfx];`;
 
     // 5. Final cinematic mix with alimiter to prevent clipping
     filterComplex += `[main_mix][ducked_sfx]amix=inputs=2:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-1dB`;

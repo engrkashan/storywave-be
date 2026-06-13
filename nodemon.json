@@ -1,0 +1,13 @@
+{
+  "ignore": [
+    "temp/*",
+    "logs/*",
+    "node_modules/*",
+    "*.mp3",
+    "*.mp4",
+    "*.wav",
+    "*.jpg",
+    "*.png"
+  ],
+  "ext": "js,mjs,cjs,json"
+}

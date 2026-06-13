@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import fetch from "node-fetch";
 import { GoogleGenAI } from "@google/genai";
+import { config } from "../config/workflow.config.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("ImageService");
@@ -452,77 +453,93 @@ export async function generateMultiImages(
 ) {
   let activeModelTier = null;
   const results = [];
+  const concurrencyLimit = config.workflow.maxApiConcurrency || 5;
 
-  for (let i = 0; i < prompts.length; i++) {
-    // ✅ Cancellation check between every single image
+  logger.info(`🚀 Starting parallel multi-image generation. Total: ${prompts.length}, Batch Size: ${concurrencyLimit}`);
+
+  for (let i = 0; i < prompts.length; i += concurrencyLimit) {
+    // ✅ Cancellation check before processing each chunk
     if (onCheckCancelled) await onCheckCancelled();
 
-    const promptObj = prompts[i];
-    let safePrompt = typeof promptObj === "object" ? promptObj.prompt : promptObj;
-    const sceneCharacters = typeof promptObj === "object" ? promptObj.charactersInScene || [] : [];
+    const chunk = prompts.slice(i, i + concurrencyLimit);
+    logger.info(`⚡ Processing image batch ${Math.floor(i / concurrencyLimit) + 1} / ${Math.ceil(prompts.length / concurrencyLimit)}...`);
+    
+    // Process the chunk concurrently
+    const chunkPromises = chunk.map(async (promptObj, chunkIndex) => {
+      const globalIndex = i + chunkIndex;
+      let safePrompt = typeof promptObj === "object" ? promptObj.prompt : promptObj;
+      const sceneCharacters = typeof promptObj === "object" ? promptObj.charactersInScene || [] : [];
+      let success = false;
+      let imgResult = { imageUrl: null, error: null };
 
-    let success = false;
+      // Retry Gemini up to 3 times for each image
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          logger.info(`🎨 [Multi-Image ${globalIndex + 1}/${prompts.length}] Gemini Attempt ${attempt}/3...`);
+          const result = await generateWithImagen({
+            prompt: safePrompt,
+            commonPrompt,
+            index: globalIndex + 1,
+            tempDir,
+            aspectRatio,
+            activeModelTier,
+            characterReferences,
+            sceneCharacters,
+            styleUrl,
+            onCheckCancelled,
+          });
 
-    // Retry Gemini up to 3 times for each image
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        logger.info(`🎨 [Multi-Image ${i + 1}/${prompts.length}] Gemini Attempt ${attempt}/3...`);
-        const result = await generateWithImagen({
-          prompt: safePrompt,
-          commonPrompt,
-          index: i + 1,
-          tempDir,
-          aspectRatio,
-          activeModelTier,
-          characterReferences,
-          sceneCharacters,
-          styleUrl,
-          onCheckCancelled,
-        });
-
-        activeModelTier = result.activeModelTier;
-        logger.info(`✅ [Multi-Image ${i + 1}/${prompts.length}] Successfully generated: ${result.filePath} (Tier: ${activeModelTier})`);
-        results.push({
-          imageUrl: result.filePath,
-          error: null,
-        });
-        success = true;
-        break;
-      } catch (err) {
-        logger.warn(`⚠️ [Multi-Image ${i + 1}/${prompts.length}] Gemini Attempt ${attempt} failed: ${err.message || err}`);
-        if (attempt < 3) {
-          logger.info(`🧼 Sanitizing prompt before retry...`);
-          safePrompt = await sanitizePrompt(safePrompt);
+          // Note: activeModelTier might be updated concurrently, but it's a benign race condition
+          activeModelTier = result.activeModelTier; 
+          logger.info(`✅ [Multi-Image ${globalIndex + 1}/${prompts.length}] Successfully generated: ${result.filePath} (Tier: ${activeModelTier})`);
+          imgResult = { imageUrl: result.filePath, error: null };
+          success = true;
+          break;
+        } catch (err) {
+          logger.warn(`⚠️ [Multi-Image ${globalIndex + 1}/${prompts.length}] Gemini Attempt ${attempt} failed: ${err.message || err}`);
+          if (attempt < 3) {
+            logger.info(`🧼 Sanitizing prompt before retry...`);
+            safePrompt = await sanitizePrompt(safePrompt);
+          }
         }
       }
-    }
 
-    if (!success) {
-      logger.warn(`🔄 [Multi-Image ${i + 1}/${prompts.length}] Gemini failed all retries. Falling back to MidJourney...`);
+      if (!success) {
+        logger.warn(`🔄 [Multi-Image ${globalIndex + 1}/${prompts.length}] Gemini failed all retries. Falling back to MidJourney...`);
 
-      const mjPrompt = commonPrompt ? `${commonPrompt} ${safePrompt}` : safePrompt;
+        const mjPrompt = commonPrompt ? `${commonPrompt} ${safePrompt}` : safePrompt;
 
-      try {
-        const filePath = await generateWithMidjourney({
-          prompt: mjPrompt,
-          index: i + 1,
-          tempDir,
-          aspectRatio,
-          characterUrl: characterReferences.length > 0 ? characterReferences[0].url : null, // MidJourney fallback only uses first char
-          styleUrl,
-        });
-        logger.info(`✅ [Multi-Image ${i + 1}/${prompts.length}] MidJourney succeeded: ${filePath}`);
-        results.push({ imageUrl: filePath, error: null });
-      } catch (mjErr) {
-        logger.info(`❌ [Multi-Image ${i + 1}/${prompts.length}] MidJourney also failed: ${mjErr.message}`);
-        results.push({
-          imageUrl: null,
-          error: mjErr.message,
-        });
+        try {
+          const filePath = await generateWithMidjourney({
+            prompt: mjPrompt,
+            index: globalIndex + 1,
+            tempDir,
+            aspectRatio,
+            characterUrl: characterReferences.length > 0 ? characterReferences[0].url : null, // MidJourney fallback only uses first char
+            styleUrl,
+          });
+          logger.info(`✅ [Multi-Image ${globalIndex + 1}/${prompts.length}] MidJourney succeeded: ${filePath}`);
+          imgResult = { imageUrl: filePath, error: null };
+        } catch (mjErr) {
+          logger.info(`❌ [Multi-Image ${globalIndex + 1}/${prompts.length}] MidJourney also failed: ${mjErr.message}`);
+          imgResult = { imageUrl: null, error: mjErr.message };
+        }
       }
+
+      return { index: globalIndex, result: imgResult };
+    });
+
+    // Wait for the whole chunk to finish
+    const chunkResults = await Promise.all(chunkPromises);
+    
+    // Ensure results remain strictly ordered
+    chunkResults.sort((a, b) => a.index - b.index);
+    for (const item of chunkResults) {
+      results.push(item.result);
     }
   }
 
+  logger.info(`🏁 Completed multi-image generation for all ${prompts.length} images.`);
   return results;
 }
 

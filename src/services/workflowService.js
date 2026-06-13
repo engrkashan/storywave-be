@@ -12,6 +12,7 @@ import {
   generateStory,
   generateScenePrompts,
   enhanceScriptWithSoundEffects,
+  enhanceSceneWithSoundEffects,
 } from "./storyService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { getAudioDuration } from "./audioService.js";
@@ -361,15 +362,53 @@ async function _runWorkflow({
       script = textIdea;
     }
 
+    let storyMetadata = null;
+    let masterPrompts = null;
+    let commonPrompt = null;
+    let characterReferenceUrl = null;
+    let styleReferenceUrl = null;
+    let characterReferences = [];
+    let earlyScenePrompts = null; // Cache for later
+
+    if (shouldGenerateImage) {
+      logger.info("Step 2.1: Extracting story metadata and master prompts...");
+      storyMetadata = await extractStoryMetadata(script);
+      masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
+      commonPrompt = generateCommonVisualPrompt(storyMetadata);
+    }
+
     // Auto-enhance script with sound effects cues if the user enabled the toggle
-    // This is provider-agnostic: works with OpenAI, Fish Audio, and ElevenLabs.
-    // Note: only ElevenLabs actually synthesises the SFX audio — other providers
-    // will have the cues stripped by cleanScript() in generateVoiceoverService.
     if (soundEffects === true) {
-      logger.info(
-        "Step 2.5: Enhancing script with sound-effect cues (soundEffects toggle is ON)...",
-      );
-      script = await enhanceScriptWithSoundEffects(script);
+      if (mediaType === "video") {
+        logger.info("Step 2.5: Skipping sound effects because mediaType is video (SFX not needed).");
+      } else if (shouldGenerateImage && mediaType === "multi_image" && !uploadedMediaUrl) {
+        logger.info("Step 2.5: Estimating audio duration to pre-generate scenes for contextual SFX...");
+        const estimatedDuration = (script.split(/\s+/).length / 2.5); // ~150 wpm
+        const dynamicCount = Math.max(5, Math.ceil(estimatedDuration / 5));
+        const count = imageCount || dynamicCount;
+
+        logger.info(`Pre-generating ${count} scenes for context-aware SFX...`);
+        earlyScenePrompts = await generateScenePrompts(
+          script,
+          count,
+          storyMetadata,
+          visualSuggestions
+        );
+
+        logger.info("Enhancing individual scenes with sound effects...");
+        for (let i = 0; i < earlyScenePrompts.length; i++) {
+          const scene = earlyScenePrompts[i];
+          scene.narration = await enhanceSceneWithSoundEffects(scene.prompt, scene.narration);
+        }
+        
+        // Re-stitch script from the enhanced narrations
+        script = earlyScenePrompts.map(s => s.narration).join(" ");
+      } else {
+        logger.info(
+          "Step 2.5: Enhancing script with sound-effect cues (soundEffects toggle is ON)...",
+        );
+        script = await enhanceScriptWithSoundEffects(script);
+      }
     }
 
     const story = await prisma.story.create({
@@ -392,19 +431,7 @@ async function _runWorkflow({
       data: { storyId: story.id },
     });
 
-    let storyMetadata = null;
-    let masterPrompts = null;
-    let commonPrompt = null;
-    let characterReferenceUrl = null;
-    let styleReferenceUrl = null;
-    let characterReferences = [];
-
     if (shouldGenerateImage) {
-      logger.info("Step 2.1: Extracting story metadata and master prompts...");
-      storyMetadata = await extractStoryMetadata(script);
-      masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
-      commonPrompt = generateCommonVisualPrompt(storyMetadata);
-
       await checkCancelled(workflow.id); // ✔️ Cancellation check
 
       if (userCharacterReferenceBase64) {
@@ -748,7 +775,10 @@ async function _runWorkflow({
         } else {
           // AI generation path
           let scenePrompts = [];
-          if (mediaType === "single_image") {
+          if (earlyScenePrompts) {
+            logger.info("Using pre-generated scene prompts from Step 2.5...");
+            scenePrompts = earlyScenePrompts;
+          } else if (mediaType === "single_image") {
             scenePrompts = [
               {
                 prompt: imagePrompt || script || "Cinematic storytelling scene",
