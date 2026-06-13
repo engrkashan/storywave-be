@@ -117,6 +117,7 @@ export async function runScheduledWorkflows() {
       mediaType: meta.mediaType || "single_image",
       imageCount: meta.imageCount || 5,
       backgroundMusic: meta.backgroundMusic ?? true,
+      soundEffects: meta.soundEffects ?? false,
       aspectRatio: meta.aspectRatio || "16:9",
       dualPlatform: meta.dualPlatform || false,
       uploadedMediaUrl: meta.uploadedMediaUrl || null,
@@ -152,6 +153,7 @@ export async function processExistingWorkflow(workflow) {
     voiceTone: meta.voiceTone || null,
     storyLength: meta.storyLength || null,
     scheduledAt: null,
+    soundEffects: meta.soundEffects ?? false,
     existingWorkflow: workflow,
   });
 }
@@ -212,6 +214,7 @@ async function _runWorkflow({
   mediaType = "single_image",
   imageCount = 5,
   backgroundMusic = true,
+  soundEffects = false,
   aspectRatio = "16:9",
   dualPlatform = false,
   series = null,
@@ -358,20 +361,13 @@ async function _runWorkflow({
       script = textIdea;
     }
 
-    // Auto-enhance script with sound effects if the provider is ElevenLabs
-    const rawProvider = voice?.provider || "";
-    const voiceId = voice?.id || voice;
-    const isElevenLabs =
-      rawProvider === "elevenlabs" ||
-      (!rawProvider &&
-        typeof voiceId === "string" &&
-        voiceId.length >= 20 &&
-        !/^[a-z]+$/.test(voiceId) &&
-        !(/^[0-9a-f]+$/.test(voiceId) && voiceId.length === 32));
-
-    if (isElevenLabs) {
+    // Auto-enhance script with sound effects cues if the user enabled the toggle
+    // This is provider-agnostic: works with OpenAI, Fish Audio, and ElevenLabs.
+    // Note: only ElevenLabs actually synthesises the SFX audio — other providers
+    // will have the cues stripped by cleanScript() in generateVoiceoverService.
+    if (soundEffects === true) {
       logger.info(
-        "Step 2.5: Auto-enhancing script with ElevenLabs sound effects...",
+        "Step 2.5: Enhancing script with sound-effect cues (soundEffects toggle is ON)...",
       );
       script = await enhanceScriptWithSoundEffects(script);
     }
@@ -564,11 +560,19 @@ async function _runWorkflow({
         );
       }
 
-      if (
+      // 2.2 Generate Character Portraits for all story characters
+      // SKIP portrait generation when:
+      //   a) User uploaded a direct media file (uploadedMediaUrl) — AI generation is bypassed entirely
+      //   b) User provided a character reference image — we already have the likeness anchor
+      const shouldGeneratePortraits =
+        !uploadedMediaUrl && !userCharacterReferenceBase64;
+
+      if (shouldGeneratePortraits && (
         mediaType === "video" ||
         mediaType === "multi_image" ||
         mediaType === "single_image"
-      ) {
+      )) {
+        logger.info("Step 2.2: Generating AI character portraits for consistency...");
         for (const char of charactersList) {
           if (characterReferences.find((c) => c.id === char.id)) continue; // Skip if already assigned
 
@@ -629,6 +633,16 @@ async function _runWorkflow({
             );
           }
         }
+      } else {
+        logger.info(
+          shouldGeneratePortraits
+            ? "Step 2.2: Skipping portrait generation (no characters in story metadata)."
+            : `Step 2.2: Skipping portrait generation — ${
+                uploadedMediaUrl
+                  ? "direct media upload provided (AI generation bypassed)"
+                  : "user character reference image provided (likeness already anchored)"
+              }.`,
+        );
       }
 
       // Update the database with the new character references array
