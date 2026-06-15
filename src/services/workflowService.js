@@ -375,6 +375,10 @@ async function _runWorkflow({
       storyMetadata = await extractStoryMetadata(script);
       masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
       commonPrompt = generateCommonVisualPrompt(storyMetadata);
+
+      if (imagePrompt && (mediaType === "multi_image" || mediaType === "video")) {
+        commonPrompt = `${commonPrompt}. Visual Reference: ${imagePrompt}`;
+      }
     }
 
     // Auto-enhance script with sound effects cues if the user enabled the toggle
