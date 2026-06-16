@@ -44,6 +44,8 @@ export const createWorkflow = async (req, res) => {
       visualSuggestions,
       uploadedMediaUrl,
       characterReferenceBase64,
+      autoPublish,
+      autoPublishDelayMinutes,
     } = req.body;
 
     if (!userId) {
@@ -91,6 +93,8 @@ export const createWorkflow = async (req, res) => {
           visualSuggestions,
           uploadedMediaUrl,
           characterReferenceBase64: characterReferenceBase64 || null,
+          autoPublish,
+          autoPublishDelayMinutes,
         },
       },
     });
@@ -131,6 +135,8 @@ export const createWorkflow = async (req, res) => {
       visualSuggestions,
       uploadedMediaUrl,
       characterReferenceBase64: characterReferenceBase64 || null,
+      autoPublish,
+      autoPublishDelayMinutes,
     };
 
     const job = await addWorkflowJob(workflowPayload);

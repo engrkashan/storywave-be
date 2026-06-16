@@ -503,7 +503,7 @@ async function _runWorkflow({
       // 2.2 Generate Cover Art if coverArtPrompt is provided
       if (coverArtPrompt) {
         logger.info(
-          `🎨 Generating dual cover arts (1:1 & 16:9): ${coverArtPrompt}`,
+          `🎨 Generating dual cover arts (9:16 & 16:9): ${coverArtPrompt}`,
         );
         try {
           const coverArtDir = path.join(workflowTempDir, "cover_art");
@@ -536,22 +536,22 @@ async function _runWorkflow({
           };
 
           // Generate both in parallel
-          const [url16_9, url1_1] = await Promise.all([
+          const [url16_9, url9_16] = await Promise.all([
             processRatio("16:9"),
-            processRatio("1:1"),
+            processRatio("9:16"),
           ]);
 
-          if (url16_9 || url1_1) {
+          if (url16_9 || url9_16) {
             await prisma.story.update({
               where: { id: story.id },
               data: {
-                coverArtURL: url16_9 || url1_1, // Legacy compatibility
+                coverArtURL: url16_9 || url9_16, // Legacy compatibility
                 coverArtURL_16_9: url16_9,
-                coverArtURL_1_1: url1_1,
+                coverArtURL_9_16: url9_16,
               },
             });
             logger.info(
-              `✅ Dual cover arts generated: 16:9(${url16_9}) | 1:1(${url1_1})`,
+              `✅ Dual cover arts generated: 16:9(${url16_9}) | 9:16(${url9_16})`,
             );
           }
         } catch (err) {
@@ -947,6 +947,25 @@ async function _runWorkflow({
     });
 
     logger.info("🎉 Workflow completed successfully", "\x1b[32m");
+
+    // 🚀 Auto-publish to social media via Mallary.ai
+    try {
+      const autoPublishEnabled = process.env.MALLARY_AUTO_PUBLISH === "true" || workflow.metadata?.autoPublish === true;
+      if (autoPublishEnabled && videoURL && workflow.metadata?.autoPublish !== false) {
+        const freshStory = await prisma.story.findUnique({ where: { id: story.id } });
+        const { autoPublishStory } = await import("./socialPublishService.js");
+        await autoPublishStory(workflow.id, {
+          videoUrl: videoURL,
+          audioUrl: mixedVoiceURL,
+          story: freshStory,
+          aspectRatio: workflow.metadata?.aspectRatio,
+          delayMinutes: workflow.metadata?.autoPublishDelayMinutes,
+        });
+        logger.info("📡 Auto-publish to Mallary triggered successfully");
+      }
+    } catch (publishErr) {
+      logger.error(`⚠️ Auto-publish to Mallary failed (non-fatal): ${publishErr.message}`);
+    }
 
     deleteTempFiles(workflowTempDir);
 

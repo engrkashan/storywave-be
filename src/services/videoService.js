@@ -393,11 +393,15 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   const mixingFilter = `[${lastOutput}]subtitles='${escapedAssPath}'[finalv]`;
   const audioIndex = mediaItems.length;
 
+  const filterContent = filter + mixingFilter;
+  const filterScriptPath = path.join(TEMP_DIR, `filter-${Date.now()}.txt`);
+  fs.writeFileSync(filterScriptPath, filterContent, "utf8");
+
   const cmd = [
     `ffmpeg -y -loglevel error`,
     inputs,
     `-i "${audioPath}"`,
-    `-filter_complex "${filter}${mixingFilter}"`,
+    `-filter_complex_script "${filterScriptPath}"`,
     `-map "[finalv]" -map ${audioIndex}:a`, // Point to narration audio
     `-c:v libx264 -crf 18 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -threads ${config.workflow.ffmpegThreads}`,
     `-t ${audioDuration}`,
@@ -420,6 +424,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
     throw new Error("🎥 Multi-media video creation failed.");
   } finally {
     if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
+    if (fs.existsSync(filterScriptPath)) fs.unlinkSync(filterScriptPath);
   }
 }
 

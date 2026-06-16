@@ -28,6 +28,18 @@ enum Platform {
   LINKEDIN
   X
   FACEBOOK
+  THREADS
+  PINTEREST
+  REDDIT
+  SNAPCHAT
+}
+
+enum SocialPostStatus {
+  PENDING
+  SCHEDULED
+  PUBLISHED
+  FAILED
+  CANCELLED
 }
 
 enum MediaType {
@@ -111,6 +123,7 @@ model Story {
   coverArtURL       String?
   coverArtURL_1_1   String?
   coverArtURL_16_9  String?
+  coverArtURL_9_16  String?
   seoContent        Json?
   visualSuggestions String?
 
@@ -173,12 +186,13 @@ model Workflow {
   user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String? @db.ObjectId
 
-  inputs    Input[]
-  story     Story?     @relation(fields: [storyId], references: [id], onDelete: Cascade)
-  voiceover Voiceover?
-  video     Video?     @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  media     Media[]
-  tasks     Task[]
+  inputs       Input[]
+  story        Story?       @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  voiceover    Voiceover?
+  video        Video?       @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  media        Media[]
+  tasks        Task[]
+  socialPosts  SocialPost[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -226,4 +240,26 @@ model Media {
   workflowId String?   @db.ObjectId
 
   uploadedAt DateTime @default(now())
+}
+
+model SocialPost {
+  id           String           @id @default(auto()) @map("_id") @db.ObjectId
+  mallaryJobId String?          // Job ID returned by Mallary API
+  platform     String           // instagram, tiktok, youtube, facebook
+  channelId    String           // Mallary channel/account ID
+  channelName  String?          // Display name of the channel
+  caption      String
+  mediaUrl     String           // Video/image URL that was posted
+  thumbnailUrl String?          // Cover art URL (used for YouTube, etc.)
+  scheduledAt  DateTime?
+  publishedAt  DateTime?
+  status       SocialPostStatus @default(PENDING)
+  errorMessage String?
+  metadata     Json?            // Full Mallary API response
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowId String   @db.ObjectId
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

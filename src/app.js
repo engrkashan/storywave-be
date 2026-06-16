@@ -38,6 +38,8 @@ import overviewRoutes from "./routes/overview.routes.js";
 import storyRoutes from "./routes/story.routes.js";
 import voiceRoutes from "./routes/voice.routes.js";
 import { runScheduledWorkflows } from "./services/workflowService.js";
+import { syncPostStatuses } from "./services/socialPublishService.js";
+import publishRoutes from "./routes/publish.routes.js";
 // Start BullMQ worker in-process (REMOVED: runs in separate process now)
 
 app.use("/api/auth", authRoutes);
@@ -46,12 +48,18 @@ app.use("/api/overview", overviewRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/creations", creationsRoutes);
 app.use("/api/voice", voiceRoutes);
+app.use("/api/publish", publishRoutes);
 
 // dns configuration
 dns.setDefaultResultOrder("ipv4first");
 
 cron.schedule("* * * * *", async () => {
   await runScheduledWorkflows();
+});
+
+// Sync social post statuses from Mallary every 5 minutes
+cron.schedule("*/5 * * * *", async () => {
+  await syncPostStatuses();
 });
 
 
