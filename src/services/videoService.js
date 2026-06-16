@@ -1,10 +1,11 @@
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { getAudioDuration } from "./audioService.js";
 import { GoogleGenAI } from "@google/genai";
 import { createLogger } from "../utils/logger.js";
 import { config } from "../config/workflow.config.js";
+import { enqueueRender } from "../utils/renderQueue.js";
 
 const logger = createLogger("VideoService");
 
@@ -56,33 +57,57 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
     `subtitles='${escapedAssPath}'[vfinal]`
   ].join(",");
 
-  const cmd = [
-    `ffmpeg -y -loglevel error -loop 1`,
-    `-i "${imagePath}"`,
-    `-i "${audioPath}"`,
-    `-filter_complex "${filterComplex}"`,
-    `-map "[vfinal]" -map 1:a`,
-    `-c:v libx264 -crf 17 -preset veryfast -pix_fmt yuv420p -c:a copy -shortest -threads ${config.workflow.ffmpegThreads}`,
-    audioDuration ? `-t ${audioDuration}` : "",
-    `"${outputPath}"`,
-  ].join(" ");
+  const filterScriptPath = path.join(TEMP_DIR, `filter-${Date.now()}.txt`);
+  fs.writeFileSync(filterScriptPath, filterComplex, "utf8");
+
+  const args = [
+    "-y",
+    "-loglevel", "error",
+    "-loop", "1",
+    "-i", imagePath,
+    "-i", audioPath,
+    "-filter_complex_script", filterScriptPath,
+    "-map", "[vfinal]",
+    "-map", "1:a",
+    "-c:v", "libx264",
+    "-crf", "17",
+    "-preset", "veryfast",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "copy",
+    "-shortest",
+    "-threads", String(config.workflow.ffmpegThreads)
+  ];
+
+  if (audioDuration) {
+    args.push("-t", String(audioDuration));
+  }
+  args.push(outputPath);
 
   try {
-    await new Promise((resolve, reject) => {
-      exec(cmd, (error, stdout, stderr) => {
-        if (error) {
-          logger.error(`FFmpeg Error: ${stderr || error.message}`);
-          return reject(error);
-        }
-        resolve();
+    await enqueueRender(async () => {
+      await new Promise((resolve, reject) => {
+        const ff = spawn("ffmpeg", args);
+        
+        let errorLog = "";
+        ff.stderr.on("data", (data) => {
+          errorLog += data.toString();
+        });
+
+        ff.on("close", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(errorLog || `FFmpeg exited with code ${code}`));
+        });
+
+        ff.on("error", (err) => reject(err));
       });
     });
   } catch (err) {
+    logger.error(`FFmpeg Error: ${err.message}`);
     throw new Error("🎥 Video creation failed. Check FFmpeg output above.");
   } finally {
-    if (imagePath !== imageUrl && fs.existsSync(imagePath))
-      fs.unlinkSync(imagePath);
+    if (imagePath !== imageUrl && fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
     if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
+    if (fs.existsSync(filterScriptPath)) fs.unlinkSync(filterScriptPath);
   }
 }
 
@@ -170,20 +195,33 @@ function secToAssTime(sec) {
  * Extracts the last frame of a video using FFmpeg
  */
 export async function extractLastFrame(videoPath, outputPath) {
-  // Use FFmpeg to get the last frame: -sseof -0.1 gets near the end
-  const cmd = `ffmpeg -y -loglevel error -sseof -0.1 -i "${videoPath}" -vframes 1 "${outputPath}"`;
-  try {
-    await new Promise((resolve, reject) => {
-      exec(cmd, (error) => {
-        if (error) return reject(error);
-        resolve();
+  return await enqueueRender(async () => {
+    try {
+      await new Promise((resolve, reject) => {
+        const ff = spawn("ffmpeg", [
+          "-y",
+          "-loglevel", "error",
+          "-sseof", "-0.1",
+          "-i", videoPath,
+          "-vframes", "1",
+          outputPath
+        ]);
+
+        ff.stderr.on("data", () => {}); // Consume stream to prevent maxBuffer leaks
+
+        ff.on("close", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`FFmpeg exited with code ${code}`));
+        });
+
+        ff.on("error", (err) => reject(err));
       });
-    });
-    return outputPath;
-  } catch (err) {
-    logger.error("❌ Failed to extract last frame:", err.message);
-    return null;
-  }
+      return outputPath;
+    } catch (err) {
+      logger.error("❌ Failed to extract last frame:", err.message);
+      return null;
+    }
+  });
 }
 
 export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = [], commonPrompt = null, onCheckCancelled = null) {
@@ -327,7 +365,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
 
 
 
-  let inputs = "";
+  let inputArgs = [];
   let filter = "";
 
   mediaItems.forEach((item, i) => {
@@ -335,7 +373,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
     const commonScale = `scale=${width}:${height}:force_original_aspect_ratio=increase:out_color_matrix=bt709:out_range=tv:flags=bicubic,crop=${width}:${height},setsar=1`;
 
     if (isVideo) {
-      inputs += `-i "${item}" `;
+      inputArgs.push("-i", item);
       filter += `[${i}:v]setpts=PTS-STARTPTS,${commonScale},fps=30,trim=duration=${clipDuration}[v${i}]; `;
     } else {
       // 🎬 CINEMATIC ZOOM PULSE
@@ -344,7 +382,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
       const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
       const totalFrames = Math.ceil(clipDuration * FPS);
 
-      inputs += `-loop 1 -t ${clipDuration} -i "${item}" `;
+      inputArgs.push("-loop", "1", "-t", String(clipDuration), "-i", item);
       filter += `[${i}:v]${commonScale},` +
         `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}` +
         `:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}[v${i}]; `;
@@ -397,26 +435,43 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   const filterScriptPath = path.join(TEMP_DIR, `filter-${Date.now()}.txt`);
   fs.writeFileSync(filterScriptPath, filterContent, "utf8");
 
-  const cmd = [
-    `ffmpeg -y -loglevel error`,
-    inputs,
-    `-i "${audioPath}"`,
-    `-filter_complex_script "${filterScriptPath}"`,
-    `-map "[finalv]" -map ${audioIndex}:a`, // Point to narration audio
-    `-c:v libx264 -crf 18 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -threads ${config.workflow.ffmpegThreads}`,
-    `-t ${audioDuration}`,
-    `"${outputPath}"`,
-  ].join(" ");
+  const args = [
+    "-y",
+    "-loglevel", "error",
+    ...inputArgs,
+    "-i", audioPath,
+    "-filter_complex_script", filterScriptPath,
+    "-map", "[finalv]",
+    "-map", `${audioIndex}:a`,
+    "-c:v", "libx264",
+    "-crf", "18",
+    "-preset", "veryfast",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-b:a", "192k",
+    "-shortest",
+    "-threads", String(config.workflow.ffmpegThreads),
+    "-t", String(audioDuration),
+    outputPath
+  ];
 
   try {
     logger.info(`🎬 Stitching video with ${transitionDuration > 0 ? transitionType : "hard cut"} transitions...`);
-    await new Promise((resolve, reject) => {
-      exec(cmd, (error, stdout, stderr) => {
-        if (error) {
-          logger.error(`FFmpeg Error: ${stderr || error.message}`);
-          return reject(error);
-        }
-        resolve();
+    await enqueueRender(async () => {
+      await new Promise((resolve, reject) => {
+        const ff = spawn("ffmpeg", args);
+        
+        let errorLog = "";
+        ff.stderr.on("data", (data) => {
+          errorLog += data.toString();
+        });
+
+        ff.on("close", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(errorLog || `FFmpeg exited with code ${code}`));
+        });
+
+        ff.on("error", (err) => reject(err));
       });
     });
   } catch (err) {
