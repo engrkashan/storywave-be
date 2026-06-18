@@ -328,3 +328,80 @@ export const deleteWorkflow = async (req, res) => {
     return res.status(500).json({ error: "Failed to delete workflow" });
   }
 };
+
+// Bulk Delete Workflows
+export const bulkDeleteWorkflows = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: "ids must be a non-empty array" });
+    }
+
+    // Fetch all requested workflows with ownership check
+    const workflows = await prisma.workflow.findMany({
+      where: {
+        id: { in: ids },
+        ...(role === "CREATOR" ? { userId } : {}),
+      },
+      include: {
+        story: { select: { id: true } },
+      },
+    });
+
+    if (workflows.length === 0) {
+      return res.status(404).json({ error: "No matching workflows found" });
+    }
+
+    // Collect story IDs that are linked to the workflows
+    const storyIds = workflows
+      .filter((w) => w.story?.id)
+      .map((w) => w.story.id);
+
+    // Get ALL workflow IDs belonging to those stories (to clean up siblings)
+    let allWorkflowIdsToDelete = workflows.map((w) => w.id);
+
+    if (storyIds.length > 0) {
+      const siblingWorkflows = await prisma.workflow.findMany({
+        where: { storyId: { in: storyIds } },
+        select: { id: true },
+      });
+      const siblingIds = siblingWorkflows.map((w) => w.id);
+      // Merge and de-duplicate
+      allWorkflowIdsToDelete = [
+        ...new Set([...allWorkflowIdsToDelete, ...siblingIds]),
+      ];
+    }
+
+    // Delete all collected workflows first
+    await prisma.workflow.deleteMany({
+      where: { id: { in: allWorkflowIdsToDelete } },
+    });
+
+    // Delete stories (only those that had associated stories)
+    if (storyIds.length > 0) {
+      await prisma.story.deleteMany({
+        where: { id: { in: storyIds } },
+      });
+    }
+
+    logger.info(
+      `Bulk deleted ${allWorkflowIdsToDelete.length} workflows and ${storyIds.length} stories by user ${userId}`
+    );
+
+    return res.status(200).json({
+      message: `Successfully deleted ${workflows.length} workflow(s)`,
+      deletedCount: workflows.length,
+      deletedIds: workflows.map((w) => w.id),
+    });
+  } catch (error) {
+    logger.error("Bulk Delete Workflows Error:", error);
+    return res.status(500).json({ error: "Failed to bulk delete workflows" });
+  }
+};
