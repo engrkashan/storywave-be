@@ -8,6 +8,16 @@ const elevenlabs = new ElevenLabsClient({ apiKey: process.env.ELEVEN_LAB_API_KEY
 
 // Predefined list of specific Fish Audio voice IDs
 const FISH_VOICE_IDS = [
+    "f8dfe9c83081432386f143e2fe9767ef",
+    "1936333080804be19655c6749b2ae7b2",
+    "92a2600282e547f098b4a8de1bc9a44a",
+    "d8f13232599c4f60b5df3232ddededca",
+    "59b8d12e87724010a34190047391be4f",
+    "c8c398f58ea74012969c3d9e51dd086c",
+    "9032b5f2e2554b5a957ad655c052af16",
+    "afc1dfd0bb474004b3a530c646be79cf",
+    "b7ccac8140784a34a5b835678e567425",
+    "af08ffb5a0ce467a84ad3685d9e4cbf7",
     "abee33f40b5142669c2c4104a6f74a2b",
     "2e1e181ae1e54f188117783f6a24d4f9",
     "359a3874136047a3b35265f48f525e65",
@@ -138,7 +148,7 @@ export async function getFishVoices(req, res) {
 export async function getElevenLabsVoices(req, res) {
     try {
         const response = await elevenlabs.voices.getAll();
-        
+
         const voices = (response.voices || []).map((voice) => ({
             id: voice.voiceId || voice.voice_id,
             label: voice.name,
@@ -196,13 +206,13 @@ export async function getVoicePreview(req, res) {
                 text: text,
                 model_id: 'eleven_multilingual_v2',
             });
-            
+
             const chunks = [];
             for await (const chunk of audioStream) {
                 chunks.push(chunk);
             }
             const buffer = Buffer.concat(chunks);
-            
+
             res.set({
                 "Content-Type": "audio/mpeg",
                 "Content-Length": buffer.length,
