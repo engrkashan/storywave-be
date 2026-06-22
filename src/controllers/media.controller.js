@@ -11,21 +11,18 @@ export const createMediaHandler = async (req, res) => {
 
     const { mimetype, path, filename } = req.file;
 
-    let type = "other";
+    let type = "IMAGE"; // default
     if (mimetype.startsWith("image")) {
-      type = "image";
-    } else if (mimetype === "application/pdf") {
-      type = "pdf";
-    } else if (
-      mimetype === "application/msword" ||
-      mimetype ===
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    ) {
-      type = "document";
+      type = "IMAGE";
+    } else if (mimetype.startsWith("video")) {
+      type = "VIDEO";
+    } else if (mimetype.startsWith("audio")) {
+      type = "AUDIO";
     }
 
     const newMedia = await prisma.media.create({
       data: {
+        type,
         fileType: mimetype,
         fileUrl: path,
         publicId: filename,

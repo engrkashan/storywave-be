@@ -494,3 +494,42 @@ export const cancelWorkflow = async (req, res) => {
     return res.status(500).json({ error: "Failed to cancel workflow" });
   }
 };
+
+// PATCH Update Story Cover Art
+export const updateStoryCoverArt = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { coverArtURL_1_1, coverArtURL_16_9, coverArtURL_9_16 } = req.body;
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const whereClause = role === "CREATOR" ? { id, userId } : { id };
+
+    const story = await prisma.story.findFirst({
+      where: whereClause,
+    });
+
+    if (!story) {
+      return res.status(404).json({ error: "Story not found" });
+    }
+
+    const updatedStory = await prisma.story.update({
+      where: { id },
+      data: {
+        ...(coverArtURL_1_1 !== undefined && { coverArtURL_1_1 }),
+        ...(coverArtURL_16_9 !== undefined && { coverArtURL_16_9 }),
+        ...(coverArtURL_9_16 !== undefined && { coverArtURL_9_16 }),
+      },
+    });
+
+    return res.status(200).json({ message: "Cover art updated successfully", story: updatedStory });
+  } catch (error) {
+    logger.error("Update Story Cover Art Error:", error);
+    return res.status(500).json({ error: "Failed to update cover art" });
+  }
+};
+
