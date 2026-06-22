@@ -9,6 +9,7 @@ import {
   getScheduledStories,
   deleteScheduledStory,
   cancelWorkflow,
+  updateStoryCoverArt,
 } from "../controllers/story.controller.js";
 
 const router = express.Router();
@@ -24,6 +25,7 @@ router.get("/", verifyToken, getStories);
 router.get("/scheduled", verifyToken, getScheduledStories);
 router.delete("/scheduled/:id", verifyToken, deleteScheduledStory)
 router.get("/:id", verifyToken, getStoryById);
+router.patch("/:id/cover-art", verifyToken, updateStoryCoverArt);
 router.delete("/:id", verifyToken, deleteStory);
 
 export default router;
