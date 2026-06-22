@@ -7,7 +7,7 @@ import {
   getDefaultScheduleTime,
 } from "../services/mallaryService.js";
 import {
-  scheduleStoryPost,
+  scheduleBatchStoryPost,
   cancelSocialPost,
   rescheduleSocialPost,
   syncPostStatuses,
@@ -64,27 +64,25 @@ export async function getBrands(req, res) {
 /**
  * POST /api/publish/post
  * Manually schedule a post from the dashboard
- * Body: { workflowId, platform, channelId, channelName, caption, scheduledAt, thumbnailUrl, tags, title }
+ * Body: { workflowId, scheduledAt, idempotencyKey, platforms: [{ platform, channelId, profileId, channelName, caption, thumbnailUrl, tags, title, mediaUrl }] }
  */
 export async function createPost(req, res) {
-  const {
-    workflowId,
-    platform,
-    channelId,
-    channelName,
-    caption,
-    scheduledAt,
-    thumbnailUrl,
-    tags = [],
-    title,
-    mediaUrl,
-  } = req.body;
+  const { workflowId, scheduledAt, scheduledTimezone, idempotencyKey, platforms } = req.body;
 
-  if (!workflowId || !platform || !channelId || !mediaUrl) {
+  if (!workflowId || !platforms || !Array.isArray(platforms) || platforms.length === 0) {
     return res.status(400).json({
       success: false,
-      message: "workflowId, platform, channelId, and mediaUrl are required",
+      message: "workflowId and a non-empty platforms array are required",
     });
+  }
+
+  for (const p of platforms) {
+    if (!p.platform || !p.channelId || !p.mediaUrl || !p.profileId) {
+      return res.status(400).json({
+        success: false,
+        message: `Each platform must contain platform, channelId, profileId, and mediaUrl (Missing in ${p.platform})`,
+      });
+    }
   }
 
   try {
@@ -97,20 +95,15 @@ export async function createPost(req, res) {
     // Default to 1 hour from now if no scheduledAt
     const resolvedScheduledAt = scheduledAt || getDefaultScheduleTime(60);
 
-    const socialPost = await scheduleStoryPost({
+    const socialPosts = await scheduleBatchStoryPost({
       workflowId,
-      platform,
-      channelId,
-      channelName,
-      mediaUrl,
-      caption,
+      platforms,
       scheduledAt: resolvedScheduledAt,
-      thumbnailUrl,
-      tags,
-      title,
+      scheduledTimezone,
+      idempotencyKey,
     });
 
-    return res.status(201).json({ success: true, socialPost });
+    return res.status(201).json({ success: true, socialPosts });
   } catch (err) {
     logger.error(`createPost error: ${err.message}`);
     return res.status(500).json({ success: false, message: err.message });

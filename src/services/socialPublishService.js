@@ -1,7 +1,11 @@
+import { Queue } from "bullmq";
+import Redis from "ioredis";
 import prisma from "../config/prisma.client.js";
+import { config } from "../config/workflow.config.js";
 import { createLogger } from "../utils/logger.js";
 import {
   createMallaryPost,
+  createMallaryBatchPost,
   deleteMallaryPost,
   getMallaryPostStatus,
   getDefaultScheduleTime,
@@ -9,6 +13,17 @@ import {
 } from "./mallaryService.js";
 
 const logger = createLogger("SocialPublishService");
+
+const redisConnection = new Redis({
+  host: config.redis.host,
+  port: config.redis.port,
+  password: config.redis.password,
+  maxRetriesPerRequest: null,
+});
+
+export const publishQueue = new Queue("publish-queue", {
+  connection: redisConnection,
+});
 
 const SUPPORTED_PLATFORMS = ["youtube", "facebook", "instagram", "tiktok"];
 
@@ -214,7 +229,97 @@ export async function autoPublishStory(workflowId, options = {}) {
 }
 
 /**
- * Manually schedule a story post from the dashboard.
+ * Manually schedule a batch of story posts from the dashboard.
+ * Groups by profileId and mediaUrl to batch requests to Mallary API.
+ */
+export async function scheduleBatchStoryPost(params) {
+  const { workflowId, platforms, scheduledAt, scheduledTimezone, idempotencyKey } = params;
+
+  logger.info(`Scheduling queue posts for workflow ${workflowId} at ${scheduledAt} ${scheduledTimezone || ""} (idempotency: ${idempotencyKey})`);
+
+  const results = [];
+
+  // Enqueue a separate job for EACH platform (no batching)
+  let index = 0;
+  for (const p of platforms) {
+    const pProfileId = p.profileId || "default";
+
+    // Build platform_options overrides
+    const platformOptions = {};
+    const opts = {};
+
+    if (p.platform === "youtube") {
+      opts.title = p.title;
+      opts.tags = p.tags;
+      opts.visibility = "public";
+    } else if (p.platform === "tiktok") {
+      opts.description = p.caption;
+      opts.disable_comment = false;
+      opts.disable_duet = false;
+      opts.disable_stitch = false;
+      opts.video_cover_timestamp_ms = 1;
+    } else if (p.platform === "instagram" || p.platform === "facebook") {
+      opts.post_type = "feed";
+    }
+
+    platformOptions[p.platform] = opts;
+
+    // Create SocialPost record (PENDING)
+    const socialPost = await prisma.socialPost.create({
+      data: {
+        platform: p.platform.toLowerCase(),
+        channelId: String(p.channelId),
+        channelName: p.channelName || p.platform,
+        caption: p.caption,
+        mediaUrl: p.mediaUrl,
+        scheduledAt: new Date(scheduledAt),
+        status: "PENDING",
+        thumbnailUrl: p.thumbnailUrl,
+        workflowId,
+      },
+    });
+
+    results.push(socialPost);
+    logger.info(`✅ Created SocialPost ${socialPost.id} (${p.platform}) -> Queueing...`);
+
+    // Prepare batchData for the single platform
+    const batchData = {
+      profileId: pProfileId,
+      platforms: [p.platform],
+      message: p.caption,
+      mediaUrl: p.mediaUrl,
+      scheduledAt,
+      scheduledTimezone,
+      platformOptions,
+      idempotencyKey: `${idempotencyKey}_${index}`,
+    };
+
+    // Add to publish-queue
+    // The worker has a global limiter of 1 job per 30 seconds.
+    // Adding attempts: 3, exponential backoff 5s
+    await publishQueue.add(
+      "publish-job",
+      {
+        socialPostId: socialPost.id,
+        batchData,
+      },
+      {
+        attempts: 3,
+        backoff: {
+          type: "exponential",
+          delay: 5000,
+        },
+      }
+    );
+
+    index++;
+  }
+
+  return results;
+}
+
+/**
+ * Manually schedule a story post from the dashboard (LEGACY/AUTO).
  *
  * @param {Object} params
  * @param {string} params.workflowId - Workflow ID

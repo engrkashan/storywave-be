@@ -39,6 +39,7 @@ enum SocialPostStatus {
   SCHEDULED
   PUBLISHED
   FAILED
+  RETRYING
   CANCELLED
 }
 

@@ -32,7 +32,10 @@ async function mallaryFetch(endpoint, options = {}) {
   }
 
   if (!response.ok) {
-    const errMsg = data?.message || data?.error || `HTTP ${response.status}`;
+    let errMsg = data?.message || data?.error || `HTTP ${response.status}`;
+    if (typeof errMsg === "object") {
+      errMsg = JSON.stringify(errMsg);
+    }
     logger.error(`Mallary API error [${response.status}] ${endpoint}: ${errMsg}`);
     throw new Error(`Mallary API error: ${errMsg}`);
   }
@@ -137,6 +140,74 @@ export async function createMallaryPost(postData) {
     return data;
   } catch (err) {
     logger.error(`Failed to create Mallary post [${platform}]: ${err.message}`);
+    throw err;
+  }
+}
+
+/**
+ * Create/schedule a batch post on Mallary for multiple platforms at once
+ * @param {Object} batchData
+ * @param {string} batchData.profileId - Mallary profile ID
+ * @param {string[]} batchData.platforms - Array of platforms, e.g. ["instagram", "youtube", "tiktok", "facebook"]
+ * @param {string} batchData.message - Global post caption
+ * @param {string} batchData.mediaUrl - URL of the video/image to post
+ * @param {string|null} batchData.scheduledAt - ISO datetime string for scheduling
+ * @param {Object} batchData.platformOptions - Platform specific overrides
+ * @param {string} batchData.idempotencyKey - Key to prevent duplicate requests
+ */
+export async function createMallaryBatchPost(batchData) {
+  const {
+    profileId,
+    platforms,
+    message,
+    mediaUrl,
+    scheduledAt = null,
+    scheduledTimezone = undefined,
+    platformOptions = {},
+    idempotencyKey,
+  } = batchData;
+
+  logger.info(
+    `Creating Mallary batch post: platforms=[${platforms.join(",")}], profile=${profileId}, scheduled=${scheduledAt} tz=${scheduledTimezone || "UTC"}`
+  );
+
+  const body = {
+    message: message || "New post",
+    platforms: platforms,
+    profile_id: profileId !== "default" ? profileId : undefined,
+    media: mediaUrl ? [{ url: mediaUrl }] : [],
+    scheduled_at: scheduledAt,
+    scheduled_timezone: scheduledTimezone,
+    platform_options: platformOptions,
+  };
+
+  const headers = {};
+  if (idempotencyKey) {
+    headers["Idempotency-Key"] = idempotencyKey;
+  }
+
+  try {
+    const data = await mallaryFetch("/api/v1/post", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    logger.info(
+      `Mallary batch post created: job_id=${data?.id || data?.job_id} for platforms [${platforms.join(",")}]`
+    );
+    return data;
+  } catch (err) {
+    // If rate limited, explicitly log it
+    if (err.message.includes("429")) {
+      logger.error(
+        `Mallary API Rate Limited (429) for batch post [${platforms.join(",")}]`
+      );
+    } else {
+      logger.error(
+        `Failed to create Mallary batch post [${platforms.join(",")}]: ${err.message}`
+      );
+    }
     throw err;
   }
 }
