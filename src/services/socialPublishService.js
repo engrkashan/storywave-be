@@ -10,7 +10,13 @@ import {
   getMallaryPostStatus,
   getDefaultScheduleTime,
   updateMallaryPost,
+  buildPlatformOptions,
 } from "./mallaryService.js";
+import {
+  uploadThumbnailToMallary,
+  validateThumbnailForPlatform,
+  attachThumbnailToPayload,
+} from "./thumbnailService.js";
 
 const logger = createLogger("SocialPublishService");
 
@@ -70,6 +76,67 @@ function buildTags(story, platform) {
   const genericTags = seo.hashtags || seo.tags || [];
   const all = [...platformTags, ...genericTags];
   return [...new Set(all)]; // deduplicate
+}
+
+/**
+ * Determine the correct post type string for a platform based on aspect ratio and media type.
+ *
+ * @param {string} platform
+ * @param {string} aspectRatio - "16:9" | "9:16" | "1:1" | "4:5"
+ * @param {string} mediaType - "video" | "image" | "photo"
+ * @returns {string}
+ */
+function resolvePostType(platform, aspectRatio, mediaType = "video") {
+  const p = platform?.toLowerCase();
+
+  if (p === "instagram") {
+    if (mediaType === "image" || mediaType === "photo") return "image";
+    if (aspectRatio === "9:16") return "reel"; // Reels and Stories are 9:16
+    if (aspectRatio === "1:1" || aspectRatio === "4:5") return "feed_video";
+    return "video";
+  }
+
+  if (p === "tiktok") {
+    if (mediaType === "image" || mediaType === "photo") return "photo";
+    return "video";
+  }
+
+  if (p === "youtube") {
+    return "video"; // Shorts are handled by aspectRatio check in thumbnail service
+  }
+
+  if (p === "facebook") {
+    return mediaType === "image" ? "image" : "video";
+  }
+
+  return "video";
+}
+
+/**
+ * Upload a thumbnail to Mallary CDN with validation.
+ * Returns CDN URL or null on failure (non-fatal).
+ *
+ * @param {string|null} thumbnailUrl - Source thumbnail URL
+ * @param {string} platform - Target platform
+ * @returns {Promise<string|null>}
+ */
+async function prepareThumbnailCdnUrl(thumbnailUrl, platform) {
+  if (!thumbnailUrl || platform?.toLowerCase() === "tiktok") return null;
+
+  const validation = validateThumbnailForPlatform({ url: thumbnailUrl, platform });
+  if (!validation.valid) {
+    logger.warn(`[${platform}] Thumbnail validation errors: ${validation.errors.join("; ")}`);
+    // Still attempt upload — server-side validation may differ
+  }
+
+  try {
+    const cdnUrl = await uploadThumbnailToMallary(thumbnailUrl, { platform });
+    logger.info(`[${platform}] Thumbnail uploaded to Mallary CDN: ${cdnUrl}`);
+    return cdnUrl;
+  } catch (err) {
+    logger.warn(`[${platform}] Thumbnail CDN upload failed: ${err.message} — continuing without thumbnail`);
+    return null;
+  }
 }
 
 /**
@@ -156,23 +223,30 @@ export async function autoPublishStory(workflowId, options = {}) {
         const caption = buildCaption(story, platform);
         const tags = buildTags(story, platform);
         const title = story?.seoContent?.[platform]?.title || story?.seoContent?.title || story.title;
+        const postType = resolvePostType(platform, aspectRatio, "video");
 
-        // Cover arts thumbnail: 16:9 for YouTube "The History Of The Caribbeans", 9:16 for all others
+        // Select cover art thumbnail matching aspect ratio
         let thumbnailUrl = story?.coverArtURL_9_16 || story?.coverArtURL || null;
         if (aspectRatio === "16:9" && platform.toLowerCase() === "youtube") {
           thumbnailUrl = story?.coverArtURL_16_9 || story?.coverArtURL || null;
         }
 
-        // Build post params
+        // Upload thumbnail to Mallary CDN
+        logger.info(`[${platform}] Preparing thumbnail for auto-publish: ${thumbnailUrl}`);
+        const thumbnailCdnUrl = await prepareThumbnailCdnUrl(thumbnailUrl, platform);
+
+        // Build post params (createMallaryPost will handle per-platform attachment)
         const postParams = {
           platform: platform.toLowerCase(),
           channelId: channel.id || channel.channel_id,
           caption,
           mediaUrl,
           scheduledAt,
-          thumbnailUrl,
+          thumbnailUrl: thumbnailCdnUrl, // already a CDN URL
           tags,
           title,
+          aspectRatio,
+          postType,
         };
 
         const result = await createMallaryPost(postParams);
@@ -191,6 +265,7 @@ export async function autoPublishStory(workflowId, options = {}) {
             scheduledAt: new Date(scheduledAt),
             status: "SCHEDULED",
             metadata: result,
+            thumbnailUrl: thumbnailCdnUrl,
             workflowId,
           },
         });
@@ -230,7 +305,14 @@ export async function autoPublishStory(workflowId, options = {}) {
 
 /**
  * Manually schedule a batch of story posts from the dashboard.
- * Groups by profileId and mediaUrl to batch requests to Mallary API.
+ * Groups by profileId and builds per-platform options including thumbnail logic.
+ *
+ * @param {Object} params
+ * @param {string} params.workflowId
+ * @param {Array} params.platforms - Array of platform config objects from the frontend
+ * @param {string} params.scheduledAt
+ * @param {string} [params.scheduledTimezone]
+ * @param {string} [params.idempotencyKey]
  */
 export async function scheduleBatchStoryPost(params) {
   const { workflowId, platforms, scheduledAt, scheduledTimezone, idempotencyKey } = params;
@@ -238,65 +320,102 @@ export async function scheduleBatchStoryPost(params) {
   logger.info(`Scheduling queue posts for workflow ${workflowId} at ${scheduledAt} ${scheduledTimezone || ""} (idempotency: ${idempotencyKey})`);
 
   const results = [];
-
-  // Enqueue a separate job for EACH platform (no batching)
   let index = 0;
+
   for (const p of platforms) {
+    const pPlatform = p.platform?.toLowerCase();
     const pProfileId = p.profileId || "default";
+    const aspectRatio = p.aspectRatio || (pPlatform === "youtube" ? "16:9" : "9:16");
+    const mediaType = p.mediaUrl?.match(/\.(mp4|mov|webm|avi|mkv)/i) ? "video" : "image";
+    const postType = resolvePostType(pPlatform, aspectRatio, mediaType);
 
-    // Build platform_options overrides
-    const platformOptions = {};
-    const opts = {};
+    // ── Upload thumbnail to Mallary CDN ──────────────────────────────────
+    logger.info(`[${pPlatform}] Preparing thumbnail: ${p.thumbnailUrl || "(none)"}`);
+    const thumbnailCdnUrl = await prepareThumbnailCdnUrl(p.thumbnailUrl, pPlatform);
 
-    if (p.platform === "youtube") {
-      opts.title = p.title;
-      opts.tags = p.tags;
-      opts.visibility = "public";
-    } else if (p.platform === "tiktok") {
-      opts.description = p.caption;
-      opts.disable_comment = false;
-      opts.disable_duet = false;
-      opts.disable_stitch = false;
-      opts.video_cover_timestamp_ms = 1;
-    } else if (p.platform === "instagram" || p.platform === "facebook") {
-      opts.post_type = "feed";
+    if (p.thumbnailUrl && thumbnailCdnUrl) {
+      logger.info(`[${pPlatform}] Thumbnail CDN URL: ${thumbnailCdnUrl}`);
+    } else if (p.thumbnailUrl && !thumbnailCdnUrl) {
+      logger.warn(`[${pPlatform}] Thumbnail CDN upload failed — post will be scheduled without thumbnail`);
     }
 
-    platformOptions[p.platform] = opts;
+    // ── Build platform_options with correct per-platform structure ────────
+    const platformOpts = buildPlatformOptions(pPlatform, {
+      title: p.title,
+      tags: p.tags,
+      aspectRatio,
+      postType,
+      videoDurationSeconds: p.videoDurationSeconds,
+    });
 
-    // Create SocialPost record (PENDING)
+    // ── Build media object — attach thumbnail/cover in the right place ────
+    const getMediaType = (url) => {
+      const ext = url?.split("?")[0].split(".").pop()?.toLowerCase();
+      const map = {
+        mp4: "video/mp4",
+        mov: "video/quicktime",
+        webm: "video/webm",
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        png: "image/png",
+        webp: "image/webp",
+      };
+      return map[ext] || "video/mp4"; // Default to video/mp4
+    };
+    const mediaObject = p.mediaUrl ? { url: p.mediaUrl, type: getMediaType(p.mediaUrl) } : {};
+    attachThumbnailToPayload({
+      platform: pPlatform,
+      mediaObject,
+      platformOptions: platformOpts,
+      thumbnailCdnUrl,
+      aspectRatio,
+      postType,
+      videoDurationSeconds: p.videoDurationSeconds,
+    });
+
+    const platformOptions = { [pPlatform]: platformOpts };
+
+    // ── Create SocialPost record (PENDING) ────────────────────────────────
     const socialPost = await prisma.socialPost.create({
       data: {
-        platform: p.platform.toLowerCase(),
+        platform: pPlatform,
         channelId: String(p.channelId),
         channelName: p.channelName || p.platform,
         caption: p.caption,
         mediaUrl: p.mediaUrl,
         scheduledAt: new Date(scheduledAt),
         status: "PENDING",
-        thumbnailUrl: p.thumbnailUrl,
+        thumbnailUrl: thumbnailCdnUrl,
         workflowId,
       },
     });
 
     results.push(socialPost);
-    logger.info(`✅ Created SocialPost ${socialPost.id} (${p.platform}) -> Queueing...`);
+    logger.info(`✅ Created SocialPost ${socialPost.id} (${pPlatform}) -> Queueing...`);
 
-    // Prepare batchData for the single platform
+    // ── Build batchData for the queue worker ─────────────────────────────
     const batchData = {
       profileId: pProfileId,
-      platforms: [p.platform],
+      platforms: [pPlatform],
       message: p.caption,
       mediaUrl: p.mediaUrl,
       scheduledAt,
       scheduledTimezone,
       platformOptions,
       idempotencyKey: `${idempotencyKey}_${index}`,
+      // Pass platform-specific media object (may contain cover_url/thumbnail_url)
+      mediaObjects: { [pPlatform]: mediaObject },
+      // For debugging/verification in the worker
+      _debug: {
+        thumbnailSourceUrl: p.thumbnailUrl,
+        thumbnailCdnUrl,
+        platform: pPlatform,
+        aspectRatio,
+        postType,
+      },
     };
 
-    // Add to publish-queue
-    // The worker has a global limiter of 1 job per 30 seconds.
-    // Adding attempts: 3, exponential backoff 5s
+    // Add to publish-queue (global limiter: 1 job per 30 seconds)
     await publishQueue.add(
       "publish-job",
       {
@@ -332,6 +451,7 @@ export async function scheduleBatchStoryPost(params) {
  * @param {string|null} params.thumbnailUrl - Thumbnail URL
  * @param {string[]} params.tags - Tags/hashtags
  * @param {string|null} params.title - Post title
+ * @param {string} [params.aspectRatio] - Content aspect ratio
  */
 export async function scheduleStoryPost(params) {
   const {
@@ -345,9 +465,12 @@ export async function scheduleStoryPost(params) {
     thumbnailUrl = null,
     tags = [],
     title = null,
+    aspectRatio = "16:9",
   } = params;
 
   logger.info(`Scheduling post: ${platform} [${channelName}] at ${scheduledAt}`);
+
+  const thumbnailCdnUrl = await prepareThumbnailCdnUrl(thumbnailUrl, platform);
 
   try {
     const result = await createMallaryPost({
@@ -356,9 +479,10 @@ export async function scheduleStoryPost(params) {
       caption,
       mediaUrl,
       scheduledAt,
-      thumbnailUrl,
+      thumbnailUrl: thumbnailCdnUrl,
       tags,
       title,
+      aspectRatio,
     });
 
     const mallaryJobId = result?.jobs?.[0]?.jobId || result?.batch_id || result?.id || result?.job_id || null;
@@ -374,7 +498,7 @@ export async function scheduleStoryPost(params) {
         scheduledAt: new Date(scheduledAt),
         status: "SCHEDULED",
         metadata: result,
-        thumbnailUrl,
+        thumbnailUrl: thumbnailCdnUrl,
         workflowId,
       },
     });
