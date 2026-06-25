@@ -3,7 +3,8 @@ import { verifyToken } from "../middlewares/auth.js";
 import {
   checkHealth,
   getChannels,
-  getBrands,
+  getProfiles,
+  handleMallaryWebhook,
   createPost,
   getPosts,
   getPostById,
@@ -12,10 +13,17 @@ import {
   syncStatuses,
   getStats,
 } from "../controllers/publish.controller.js";
+import { sseMiddleware } from "../utils/sse.js";
 
 const router = express.Router();
 
-// All publish routes require authentication
+// Mallary webhooks (must be public)
+router.post("/webhook/mallary", handleMallaryWebhook);
+
+// SSE for live dashboard updates
+router.get("/live-status", sseMiddleware);
+
+// All other publish routes require authentication
 router.use(verifyToken);
 
 // Health / config
@@ -23,7 +31,7 @@ router.get("/health", checkHealth);
 
 // Mallary channel management
 router.get("/channels", getChannels);
-router.get("/brands", getBrands);
+router.get("/profiles", getProfiles);
 
 // Post management
 router.get("/posts", getPosts);

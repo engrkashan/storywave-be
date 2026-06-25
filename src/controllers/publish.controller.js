@@ -2,15 +2,17 @@ import prisma from "../config/prisma.client.js";
 import { createLogger } from "../utils/logger.js";
 import {
   getMallaryChannels,
-  getMallaryBrands,
+  getMallaryProfiles,
   pingMallary,
   getDefaultScheduleTime,
 } from "../services/mallaryService.js";
+import { broadcastSSE } from "../utils/sse.js";
 import {
   scheduleBatchStoryPost,
   cancelSocialPost,
   rescheduleSocialPost,
   syncPostStatuses,
+  mapMallaryStatus,
 } from "../services/socialPublishService.js";
 
 const logger = createLogger("PublishController");
@@ -48,15 +50,79 @@ export async function getChannels(req, res) {
 }
 
 /**
- * GET /api/publish/brands
- * List brands from Mallary
+ * GET /api/publish/profiles
+ * List profiles from Mallary
  */
-export async function getBrands(req, res) {
+export async function getProfiles(req, res) {
   try {
-    const data = await getMallaryBrands();
-    return res.json({ success: true, brands: data?.brands || data?.data || [] });
+    const data = await getMallaryProfiles();
+    return res.json({ success: true, profiles: data?.profiles || data?.data || [] });
   } catch (err) {
-    logger.error(`getBrands error: ${err.message}`);
+    logger.error(`getProfiles error: ${err.message}`);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+/**
+ * POST /api/publish/webhook/mallary
+ * Handle incoming Mallary webhooks for job status updates
+ */
+export async function handleMallaryWebhook(req, res) {
+  try {
+    const payload = req.body;
+    logger.info(`Received Mallary webhook: ${JSON.stringify(payload)}`);
+
+    // Extract job details. Assuming standard webhook payload from Mallary API
+    const eventType = payload.type || payload.event;
+    const data = payload.data || payload;
+    const jobId = data.job_id || data.id;
+    const status = data.status?.toUpperCase();
+
+    if (jobId && status) {
+      // Find the social post associated with this job
+      const post = await prisma.socialPost.findFirst({
+        where: { mallaryJobId: String(jobId) },
+        include: { workflow: true }
+      });
+
+      if (post) {
+        let errorMessage = post.errorMessage;
+        let publishedAt = post.publishedAt;
+
+        const mappedStatus = mapMallaryStatus(status);
+        const internalStatus = mappedStatus || post.status;
+
+        if (internalStatus === "PUBLISHED" && post.status !== "PUBLISHED") {
+          publishedAt = new Date();
+        } else if (internalStatus === "FAILED" && post.status !== "FAILED") {
+          errorMessage = data.error || data.error_message || "Failed during Mallary processing";
+        }
+
+        // Update database
+        await prisma.socialPost.update({
+          where: { id: post.id },
+          data: {
+            status: internalStatus,
+            errorMessage,
+            publishedAt,
+          },
+        });
+        logger.info(`Updated SocialPost ${post.id} to status ${internalStatus}`);
+
+        // Broadcast live update to clients
+        broadcastSSE("SOCIAL_POST_UPDATE", {
+          id: post.id,
+          workflowId: post.workflowId,
+          status: internalStatus,
+          errorMessage,
+          publishedAt,
+        });
+      }
+    }
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    logger.error(`Webhook handler error: ${err.message}`);
     return res.status(500).json({ success: false, message: err.message });
   }
 }

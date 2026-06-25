@@ -84,14 +84,14 @@ export async function getMallaryChannels() {
 }
 
 /**
- * Get brand/account info from Mallary
+ * Get connection profiles from Mallary
  */
-export async function getMallaryBrands() {
+export async function getMallaryProfiles() {
   try {
-    const data = await mallaryFetch("/api/brands");
+    const data = await mallaryFetch("/api/v1/profiles");
     return data;
   } catch (err) {
-    logger.error(`Failed to fetch Mallary brands: ${err.message}`);
+    logger.error(`Failed to fetch Mallary profiles: ${err.message}`);
     throw err;
   }
 }

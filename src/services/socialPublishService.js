@@ -602,12 +602,16 @@ export async function syncPostStatuses() {
 /**
  * Map Mallary API status strings to our SocialPostStatus enum
  */
-function mapMallaryStatus(mallaryStatus) {
+export function mapMallaryStatus(mallaryStatus) {
   if (!mallaryStatus) return null;
   const s = mallaryStatus.toLowerCase();
-  if (s === "published" || s === "posted" || s === "completed") return "PUBLISHED";
-  if (s === "scheduled" || s === "pending") return "SCHEDULED";
-  if (s === "failed" || s === "error") return "FAILED";
-  if (s === "cancelled" || s === "canceled") return "CANCELLED";
-  return null;
+  if (["published", "posted", "completed", "success", "succeeded"].includes(s)) return "PUBLISHED";
+  if (["scheduled"].includes(s)) return "SCHEDULED";
+  if (["pending", "processing", "in_progress", "uploading", "queued", "running"].includes(s)) return "PENDING";
+  if (["failed", "error", "failure"].includes(s)) return "FAILED";
+  if (["cancelled", "canceled"].includes(s)) return "CANCELLED";
+  if (["retrying", "retry"].includes(s)) return "RETRYING";
+  
+  // fallback for unknown but truthy status
+  return "PENDING";
 }
