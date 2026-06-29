@@ -1,5 +1,7 @@
 import {
-  getOverview,
+  getOverviewStats,
+  getWorkflows,
+  getPublishOptions,
   cancelWorkflow,
   deleteWorkflow,
   getWorkflowById,
@@ -10,8 +12,14 @@ import express from "express";
 
 const router = express.Router();
 
-// GET /api/overview
-router.get("/", verifyToken, getOverview);
+// GET /api/overview/stats
+router.get("/stats", verifyToken, getOverviewStats);
+
+// GET /api/overview/workflows
+router.get("/workflows", verifyToken, getWorkflows);
+
+// GET /api/overview/publish-options
+router.get("/publish-options", verifyToken, getPublishOptions);
 
 // GET /api/overview/:id
 router.get("/:id", verifyToken, getWorkflowById);

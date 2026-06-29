@@ -3,7 +3,7 @@ import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("OverviewController");
 
-export const getOverview = async (req, res) => {
+export const getOverviewStats = async (req, res) => {
   try {
     const userId = req?.user?.userId;
     const role = req?.user?.role;
@@ -41,10 +41,45 @@ export const getOverview = async (req, res) => {
       }),
     ]);
 
-    //  Recent workflows
+    return res.status(200).json({
+      role,
+      totalStories,
+      videosCreated,
+      voiceovers,
+      podcasts,
+      stats: {
+        pending: pendingStories,
+        completed: completedStories,
+        cancelled: failedStories,
+      },
+    });
+  } catch (error) {
+    logger.error("Overview Stats Error:", error);
+    return res.status(500).json({ error: "Failed to fetch overview stats" });
+  }
+};
+
+export const getWorkflows = async (req, res) => {
+  try {
+    const userId = req?.user?.userId;
+    const role = req?.user?.role;
+    let { page = 1, limit = 20 } = req.query;
+
+    page = parseInt(page, 10);
+    limit = parseInt(limit, 10);
+    const skip = (page - 1) * limit;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const whereByRole = role === "CREATOR" ? { userId } : {};
+
     const workflows = await prisma.workflow.findMany({
       where: whereByRole,
       orderBy: { createdAt: "desc" },
+      skip,
+      take: limit,
       select: {
         id: true,
         title: true,
@@ -79,6 +114,8 @@ export const getOverview = async (req, res) => {
       },
     });
 
+    const total = await prisma.workflow.count({ where: whereByRole });
+
     const stories = workflows.map((w) => ({
       id: w.id,
       workflow: w.id,
@@ -103,21 +140,47 @@ export const getOverview = async (req, res) => {
     }));
 
     return res.status(200).json({
-      role,
-      totalStories,
-      videosCreated,
-      voiceovers,
-      podcasts,
-      stats: {
-        pending: pendingStories,
-        completed: completedStories,
-        cancelled: failedStories,
-      },
       stories,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      }
     });
   } catch (error) {
-    logger.error("Overview Error:", error);
-    return res.status(500).json({ error: "Failed to fetch overview" });
+    logger.error("Get Workflows Error:", error);
+    return res.status(500).json({ error: "Failed to fetch workflows" });
+  }
+};
+
+export const getPublishOptions = async (req, res) => {
+  try {
+    const userId = req?.user?.userId;
+    const role = req?.user?.role;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const whereByRole = role === "CREATOR" ? { userId } : {};
+
+    const workflows = await prisma.workflow.findMany({
+      where: {
+        ...whereByRole,
+        status: "COMPLETED",
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        title: true,
+      },
+    });
+
+    return res.status(200).json(workflows);
+  } catch (error) {
+    logger.error("Get Publish Options Error:", error);
+    return res.status(500).json({ error: "Failed to fetch publish options" });
   }
 };
 

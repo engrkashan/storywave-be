@@ -131,6 +131,8 @@ model Story {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
   Workflow  Workflow[]
+
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 model Video {
@@ -199,6 +201,9 @@ model Workflow {
   updatedAt DateTime @updatedAt
   storyId   String?  @db.ObjectId
   videoId   String?  @db.ObjectId
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, status])
 }
 
 model Creation {
