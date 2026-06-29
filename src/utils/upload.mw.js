@@ -2,7 +2,6 @@ import multer from "multer";
 import { CloudinaryStorage } from "multer-storage-cloudinary";
 import { cloudinary } from "../config/cloudinary.config.js";
 
-// Allowed MIME types
 const allowedMimeTypes = [
   "image/jpeg",
   "image/png",
@@ -10,13 +9,18 @@ const allowedMimeTypes = [
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/x-msvideo",
+  "video/mpeg",
 ];
 
 const fileFilter = (req, file, cb) => {
   if (allowedMimeTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error("Only images, PDF, and DOC files are allowed"), false);
+    cb(new Error("Only images, videos, PDF, and DOC files are allowed"), false);
   }
 };
 
@@ -30,6 +34,9 @@ export const mediaUpload = multer({
       if (file.mimetype.startsWith("image")) {
         folder = "Storywave/Images";
         resource_type = "image";
+      } else if (file.mimetype.startsWith("video")) {
+        folder = "Storywave/Videos";
+        resource_type = "video";
       } else if (file.mimetype === "application/pdf") {
         folder = "Storywave/PDFs";
       } else if (
@@ -43,6 +50,7 @@ export const mediaUpload = multer({
       return {
         folder,
         resource_type,
+        chunk_size: 20000000, // 20MB chunks for large files like 800MB video
       };
     },
   }),
