@@ -55,6 +55,8 @@ import {
   mixAudioWithBackground,
 } from "./generateBackgroundMusicService.js";
 import { generateCharacterBible } from "./characterService.js";
+import { perfStorage, createPerfSession, getPerfSession } from "../utils/perfLogger.js";
+import { startCpuMonitor, stopCpuMonitor } from "../utils/cpuMonitor.js";
 
 const TEMP_ROOT = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
@@ -190,7 +192,18 @@ async function uploadVideoToCloud(videoPath, filename) {
  */
 export async function runWorkflow(args) {
   return await loggingStorage.run({ title: args.title }, async () => {
-    return await _runWorkflow(args);
+    // Generate an ID for transient tracking if one is missing, to ensure we can create a PerfSession
+    const trackingId = args.workflowId || `transient-${Date.now()}`;
+    const session = createPerfSession(trackingId);
+    return await perfStorage.run(session, async () => {
+      const monitor = startCpuMonitor(trackingId, 2000);
+      try {
+        const result = await _runWorkflow(args);
+        return result;
+      } finally {
+        stopCpuMonitor(monitor);
+      }
+    });
   });
 }
 
@@ -317,6 +330,10 @@ async function _runWorkflow({
   const workflowTempDir = path.join(TEMP_ROOT, workflow.id.toString());
   fs.mkdirSync(workflowTempDir, { recursive: true });
 
+  const perf = getPerfSession();
+  // Keep the session ID synced with the DB workflow ID
+  perf.workflowId = workflow.id;
+
   let srtPath = null;
 
   try {
@@ -324,6 +341,7 @@ async function _runWorkflow({
     logger.info("Step 1: Preparing input...");
     let inputText = textIdea || "";
 
+    const stopInputTimer = perf?.start("input", "Prepare input text");
     if (url) {
       logger.info("Extracting from URL...");
       inputText = await extractContentFromUrl(url);
@@ -332,6 +350,7 @@ async function _runWorkflow({
       logger.info("Transcribing video...");
       inputText = await transcribeVideo(videoFile);
     }
+    stopInputTimer?.();
 
     if (!inputText?.trim() || inputText.trim().length < 30) {
       throw new Error("Input text is too short or empty");
@@ -352,12 +371,14 @@ async function _runWorkflow({
     let outline, script;
     if (url || videoFile) {
       logger.info("Step 2: Generating story...");
+      const stopStoryTimer = perf?.start("story", "Generate story script & outline");
       ({ outline, script } = await generateStory({
         textIdea: inputText,
         storyType,
         voiceTone,
         storyLength,
       }));
+      stopStoryTimer?.();
     } else {
       script = textIdea;
     }
@@ -372,6 +393,7 @@ async function _runWorkflow({
 
     if (shouldGenerateImage) {
       logger.info("Step 2.1: Extracting story metadata and master prompts...");
+      const stopMetaTimer = perf?.start("metadata", "Extract metadata & master prompts");
       storyMetadata = await extractStoryMetadata(script);
       masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
       commonPrompt = generateCommonVisualPrompt(storyMetadata);
@@ -379,6 +401,7 @@ async function _runWorkflow({
       if (imagePrompt && (mediaType === "multi_image" || mediaType === "video")) {
         commonPrompt = `${commonPrompt}. Visual Reference: ${imagePrompt}`;
       }
+      stopMetaTimer?.();
     }
 
     // Auto-enhance script with sound effects cues if the user enabled the toggle
@@ -392,18 +415,22 @@ async function _runWorkflow({
         const count = imageCount || dynamicCount;
 
         logger.info(`Pre-generating ${count} scenes for context-aware SFX...`);
+        const stopSfxPreTimer = perf?.start("sfx", "Pre-generate scenes for SFX");
         earlyScenePrompts = await generateScenePrompts(
           script,
           count,
           storyMetadata,
           visualSuggestions
         );
+        stopSfxPreTimer?.();
 
         logger.info("Enhancing individual scenes with sound effects...");
+        const stopSfxEnhanceTimer = perf?.start("sfx", "Enhance individual scenes with SFX");
         for (let i = 0; i < earlyScenePrompts.length; i++) {
           const scene = earlyScenePrompts[i];
           scene.narration = await enhanceSceneWithSoundEffects(scene.prompt, scene.narration);
         }
+        stopSfxEnhanceTimer?.();
         
         // Re-stitch script from the enhanced narrations
         script = earlyScenePrompts.map(s => s.narration).join(" ");
@@ -411,7 +438,9 @@ async function _runWorkflow({
         logger.info(
           "Step 2.5: Enhancing script with sound-effect cues (soundEffects toggle is ON)...",
         );
+        const stopSfxScriptTimer = perf?.start("sfx", "Enhance script with sound effects");
         script = await enhanceScriptWithSoundEffects(script);
+        stopSfxScriptTimer?.();
       }
     }
 
@@ -474,6 +503,7 @@ async function _runWorkflow({
           const styleRefDir = path.join(workflowTempDir, "style_ref");
           fs.mkdirSync(styleRefDir, { recursive: true });
           // Generate a master cinematic shot to serve as style reference
+          const stopStyleRefTimer = perf?.start("image", "Generate Style Reference Image");
           const styleRefResult = await generateImage(
             masterPrompts.cinematic,
             0,
@@ -481,8 +511,10 @@ async function _runWorkflow({
             aspectRatio,
             commonPrompt,
           );
+          stopStyleRefTimer?.();
           if (styleRefResult.imageUrl) {
             // Upload to Cloudinary to get a permanent URL for Midjourney
+            const stopStyleUploadTimer = perf?.start("upload", "Upload Style Ref Image to Cloudinary");
             const upload = await cloudinary.uploader.upload(
               styleRefResult.imageUrl,
               {
@@ -492,6 +524,7 @@ async function _runWorkflow({
                 overwrite: true,
               },
             );
+            stopStyleUploadTimer?.();
             styleReferenceUrl = upload.secure_url;
             logger.info(`✅ Style Reference URL: ${styleReferenceUrl}`);
           }
@@ -511,19 +544,23 @@ async function _runWorkflow({
 
           // Helper to generate and upload a single ratio
           const processRatio = async (ratio) => {
+            const stopCoverTimer = perf?.start("image", `Generate Cover Art: ${ratio}`);
             const result = await generateImage(
               coverArtPrompt,
               1,
               coverArtDir,
               ratio,
             );
+            stopCoverTimer?.();
             if (result.imageUrl) {
+              const stopCoverUploadTimer = perf?.start("upload", `Upload Cover Art to Cloudinary: ${ratio}`);
               const upload = await cloudinary.uploader.upload(result.imageUrl, {
                 folder: "cover-arts",
                 resource_type: "image",
                 public_id: `cover-${ratio.replace(":", "_")}-${workflow.id}-${Date.now()}`,
                 overwrite: true,
               });
+              stopCoverUploadTimer?.();
               logger.info(
                 `🚀 [${ratio}] Uploaded to Cloudinary at: ${upload.width}x${upload.height}px`,
               );
@@ -626,6 +663,7 @@ async function _runWorkflow({
               fs.mkdirSync(charRefDir, { recursive: true });
 
             // Use standard generateImage function
+            const stopCharTimer = perf?.start("image", `Generate Character Portrait: ${char.name || char.id}`);
             const charResult = await generateImage(
               charPrompt,
               0,
@@ -633,8 +671,10 @@ async function _runWorkflow({
               "1:1",
               commonPrompt,
             );
+            stopCharTimer?.();
 
             if (charResult.imageUrl) {
+              const stopCharUploadTimer = perf?.start("upload", `Upload Character Portrait to Cloudinary: ${char.name || char.id}`);
               const upload = await cloudinary.uploader.upload(
                 charResult.imageUrl,
                 {
@@ -644,6 +684,7 @@ async function _runWorkflow({
                   overwrite: true,
                 },
               );
+              stopCharUploadTimer?.();
               characterReferences.push({
                 id: char.id,
                 url: upload.secure_url,
@@ -688,40 +729,47 @@ async function _runWorkflow({
       });
     }
 
-    // 3. Generate voiceover (always) - pure voice (used for accurate subtitle timestamps)
     logger.info("Step 3: Generating voiceover...");
     logger.info(
       `[WorkflowService] voice payload dispatched to generateVoiceover: ${JSON.stringify(voice)}`,
     );
     await checkCancelled(workflow.id); // ✔️ Cancellation check
     const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
+    const stopVoiceTimer = perf?.start("audio", "Generate Voiceover TTS");
     const { url: pureVoiceURL, localPath: voiceLocalPath } =
       await generateVoiceover(script, voiceFilename, voice, workflowTempDir);
+    stopVoiceTimer?.();
 
     let finalAudioLocalPath = voiceLocalPath;
 
     if (backgroundMusic === true) {
       logger.info("Step 3.5: Generating background music...");
+      const stopMusicTimer = perf?.start("audio", "Generate Background Music (Suno)");
       const musicPath = await generateBackgroundMusic({
         title,
         storyType,
         tempDir: workflowTempDir,
       });
+      stopMusicTimer?.();
 
       const mixedFilename = `mixed-${voiceFilename}`;
       const mixedLocalPath = path.join(workflowTempDir, mixedFilename);
 
+      const stopMixTimer = perf?.start("audio", "Mix Voice and Background Music");
       await mixAudioWithBackground(voiceLocalPath, musicPath, mixedLocalPath);
+      stopMixTimer?.();
       finalAudioLocalPath = mixedLocalPath;
     }
 
     logger.info("Uploading final audio to Cloudinary...");
+    const stopAudioUploadTimer = perf?.start("upload", "Upload Final Audio to Cloudinary");
     const uploadRes = await cloudinary.uploader.upload(finalAudioLocalPath, {
       folder: "voiceovers",
       resource_type: "video",
       public_id: path.parse(finalAudioLocalPath).name,
       overwrite: true,
     });
+    stopAudioUploadTimer?.();
 
     const mixedVoiceURL = uploadRes.secure_url;
 
@@ -755,9 +803,11 @@ async function _runWorkflow({
       );
 
       logger.info("Step 5: Generating subtitles...");
+      const stopSubTimer = perf?.start("subtitle", "Transcribe Audio to Subtitles (Whisper)");
       const srtContent = await transcribeWithTimestamps(voiceLocalPath);
       srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);
       fs.writeFileSync(srtPath, srtContent);
+      stopSubTimer?.();
 
       const videoResults = {};
 
@@ -796,16 +846,19 @@ async function _runWorkflow({
             );
             const count =
               mediaType === "multi_image" ? imageCount : dynamicCount;
+            const stopPromptTimer = perf?.start("story", `Generate ${count} Scene Prompts`);
             scenePrompts = await generateScenePrompts(
               script,
               count,
               storyMetadata,
               visualSuggestions,
             );
+            stopPromptTimer?.();
           }
           logger.info("Scene Prompts:", scenePrompts);
 
           if (mediaType === "video") {
+            const stopVideoClipsTimer = perf?.start("video", `Generate AI Video Clips (${scenePrompts.length} clips)`);
             const clips = await generateVideoClips(
               scenePrompts,
               ratioDir,
@@ -814,8 +867,10 @@ async function _runWorkflow({
               commonPrompt,
               () => checkCancelled(workflow.id),
             );
+            stopVideoClipsTimer?.();
             mediaItems = clips.filter((c) => c.filePath).map((c) => c.filePath);
           } else if (mediaType === "multi_image") {
+            const stopMultiImagesTimer = perf?.start("image", `Generate Multi Images (${scenePrompts.length} images)`);
             const images = await generateMultiImages(
               scenePrompts,
               ratioDir,
@@ -825,10 +880,12 @@ async function _runWorkflow({
               styleReferenceUrl,
               () => checkCancelled(workflow.id),
             );
+            stopMultiImagesTimer?.();
             mediaItems = images
               .filter((img) => img.imageUrl)
               .map((img) => img.imageUrl);
           } else {
+            const stopImageTimer = perf?.start("image", "Generate Single Image");
             const imageResult = await generateImage(
               scenePrompts[0],
               1,
@@ -838,6 +895,7 @@ async function _runWorkflow({
               characterReferences,
               styleReferenceUrl,
             );
+            stopImageTimer?.();
             if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
           }
         }
@@ -849,6 +907,7 @@ async function _runWorkflow({
           const videoPath = path.join(workflowTempDir, videoFilename);
 
           if (mediaItems.length === 1 && mediaType === "single_image") {
+            const stopStitchTimer = perf?.start("video", "Stitch Single Image Video");
             await createVideo(
               mediaItems[0],
               finalAudioLocalPath,
@@ -856,7 +915,9 @@ async function _runWorkflow({
               srtPath,
               currentRatio,
             );
+            stopStitchTimer?.();
           } else {
+            const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
             await createMultiMediaVideo(
               mediaItems,
               finalAudioLocalPath,
@@ -864,12 +925,15 @@ async function _runWorkflow({
               srtPath,
               currentRatio,
             );
+            stopStitchTimer?.();
           }
 
+          const stopVideoUploadTimer = perf?.start("upload", `Upload Final Video to Cloudinary: ${currentRatio}`);
           const currentVideoURL = await uploadVideoToCloud(
             videoPath,
             videoFilename,
           );
+          stopVideoUploadTimer?.();
           videoResults[currentRatio] = {
             url: currentVideoURL,
             items: mediaItems,
@@ -969,6 +1033,8 @@ async function _runWorkflow({
 
     // deleteTempFiles(workflowTempDir);
 
+    perf?.generateReport(workflowTempDir);
+
     return {
       success: true,
       workflowId: workflow.id,
@@ -998,6 +1064,8 @@ async function _runWorkflow({
 
     if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
     deleteTempFiles(workflowTempDir);
+
+    perf?.generateReport(workflowTempDir);
 
     // If cancelled by user → mark CANCELLED, do NOT let BullMQ retry
     if (err.isCancelled) {

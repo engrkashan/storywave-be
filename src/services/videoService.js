@@ -6,6 +6,7 @@ import { GoogleGenAI } from "@google/genai";
 import { createLogger } from "../utils/logger.js";
 import { config } from "../config/workflow.config.js";
 import { enqueueRender, enqueueSegmentRender } from "../utils/renderQueue.js";
+import { getPerfSession } from "../utils/perfLogger.js";
 
 const logger = createLogger("VideoService");
 
@@ -112,6 +113,8 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
 }
 
 function convertSrtToAss(srtPath, assPath, aspectRatio = "16:9") {
+  const perf = getPerfSession();
+  const stopTimer = perf?.start("subtitle", "SRT to ASS Conversion", { srtPath });
   const srtContent = fs.readFileSync(srtPath, "utf8");
   const blocks = srtContent.trim().split(/\n\s*\n/);
 
@@ -172,6 +175,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   }
 
   fs.writeFileSync(assPath, ass);
+  stopTimer?.();
 }
 
 function parseSrtTime(timeStr) {
@@ -393,14 +397,27 @@ async function renderMediaSegment(itemPath, outputPath, duration, width, height,
   // ⚠️ All segment ffmpeg calls MUST go through enqueueSegmentRender
   // to respect MAX_SEGMENT_CONCURRENCY and prevent CPU overload.
   return enqueueSegmentRender(() => new Promise((resolve, reject) => {
+    const perf = getPerfSession();
+    const stopFfmpeg = perf?.startFfmpeg(`Segment Render: ${path.basename(itemPath)}`, args, {
+      itemPath,
+      outputPath,
+      duration,
+      width,
+      height,
+    });
+
     const ff = spawn("ffmpeg", args);
     let errorLog = "";
     ff.stderr.on("data", (data) => errorLog += data.toString());
     ff.on("close", (code) => {
+      stopFfmpeg?.(code, errorLog, outputPath);
       if (code === 0) resolve();
       else reject(new Error(`Segment render failed for ${itemPath}: ${errorLog || code}`));
     });
-    ff.on("error", reject);
+    ff.on("error", (err) => {
+      stopFfmpeg?.(1, err.message, null);
+      reject(err);
+    });
   }));
 }
 
@@ -500,14 +517,25 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   try {
     await enqueueRender(async () => {
       await new Promise((resolve, reject) => {
+        const perf = getPerfSession();
+        const stopFfmpeg = perf?.startFfmpeg("Final Merge", mergeArgs, {
+          segmentsListPath,
+          audioPath,
+          outputPath,
+        });
+
         const ff = spawn("ffmpeg", mergeArgs);
         let errorLog = "";
         ff.stderr.on("data", (data) => errorLog += data.toString());
         ff.on("close", (code) => {
+          stopFfmpeg?.(code, errorLog, outputPath);
           if (code === 0) resolve();
           else reject(new Error(errorLog || `FFmpeg merge exited with code ${code}`));
         });
-        ff.on("error", (err) => reject(err));
+        ff.on("error", (err) => {
+          stopFfmpeg?.(1, err.message, null);
+          reject(err);
+        });
       });
     });
     logger.info(`✅ Final video assembled: ${outputPath}`);
