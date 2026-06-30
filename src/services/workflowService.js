@@ -1082,9 +1082,10 @@ async function _runWorkflow({
       logger.error(`⚠️ Auto-publish to Mallary failed (non-fatal): ${publishErr.message}`);
     }
 
-    deleteTempFiles(workflowTempDir);
 
     perf?.generateReport(workflowTempDir);
+
+    deleteTempFiles(workflowTempDir);
 
     return {
       success: true,
