@@ -5,7 +5,7 @@ import { getAudioDuration } from "./audioService.js";
 import { GoogleGenAI } from "@google/genai";
 import { createLogger } from "../utils/logger.js";
 import { config } from "../config/workflow.config.js";
-import { enqueueRender } from "../utils/renderQueue.js";
+import { enqueueRender, enqueueSegmentRender } from "../utils/renderQueue.js";
 
 const logger = createLogger("VideoService");
 
@@ -343,18 +343,30 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
   return results;
 }
 
-async function renderMediaSegment(itemPath, outputPath, duration, width, height) {
+/**
+ * Renders a single media item (image or video clip) to a standardised H.264
+ * segment file. All calls go through enqueueSegmentRender so concurrency is
+ * capped by MAX_SEGMENT_CONCURRENCY rather than running unbounded.
+ *
+ * Encoding params are identical to the final stitch pass so the merge can
+ * use "-c:v copy" and avoid a second full re-encode.
+ */
+async function renderMediaSegment(itemPath, outputPath, duration, width, height, escapedAssPath) {
   const isVideo = itemPath.endsWith(".mp4");
   const commonScale = `scale=${width}:${height}:force_original_aspect_ratio=increase:out_color_matrix=bt709:out_range=tv:flags=bicubic,crop=${width}:${height},setsar=1`;
+
+  // Subtitle filter — applied in the segment pass so the merge only needs copy
+  const subFilter = escapedAssPath ? `,subtitles='${escapedAssPath}'` : "";
 
   let args;
   if (isVideo) {
     args = [
       "-y", "-loglevel", "error",
+      "-threads", String(config.workflow.ffmpegThreads),
       "-i", itemPath,
-      "-vf", `${commonScale},fps=30`,
+      "-vf", `${commonScale},fps=30${subFilter}`,
       "-t", String(duration),
-      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
       outputPath
     ];
   } else {
@@ -363,20 +375,24 @@ async function renderMediaSegment(itemPath, outputPath, duration, width, height)
     const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
     const totalFrames = Math.ceil(duration * FPS);
 
-    const filter = `${commonScale},zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height},fps=30`;
+    const zoomFilter = `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}`;
+    const filter = `${commonScale},${zoomFilter},fps=30${subFilter}`;
 
     args = [
       "-y", "-loglevel", "error",
+      "-threads", String(config.workflow.ffmpegThreads),
       "-loop", "1",
       "-t", String(duration),
       "-i", itemPath,
       "-vf", filter,
-      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
       outputPath
     ];
   }
 
-  return new Promise((resolve, reject) => {
+  // ⚠️ All segment ffmpeg calls MUST go through enqueueSegmentRender
+  // to respect MAX_SEGMENT_CONCURRENCY and prevent CPU overload.
+  return enqueueSegmentRender(() => new Promise((resolve, reject) => {
     const ff = spawn("ffmpeg", args);
     let errorLog = "";
     ff.stderr.on("data", (data) => errorLog += data.toString());
@@ -385,233 +401,124 @@ async function renderMediaSegment(itemPath, outputPath, duration, width, height)
       else reject(new Error(`Segment render failed for ${itemPath}: ${errorLog || code}`));
     });
     ff.on("error", reject);
-  });
+  }));
 }
 
 /**
  * Creates a video from multiple images or video clips, synchronized with audio.
  */
 export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, srtPath, aspectRatio = "16:9") {
+  // Per-workflow temp dir is derived from the output path's parent directory.
+  // This keeps segment files isolated from concurrent workflows instead of
+  // writing everything into the shared global temp/ root.
+  const SEGMENT_TEMP_DIR = path.dirname(outputPath);
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
+  fs.mkdirSync(SEGMENT_TEMP_DIR, { recursive: true });
 
   const audioDuration = await getAudioDuration(audioPath);
-  const transitionDuration = 0.5;
-  const transitionType = "fade";
-  const clipDuration = (audioDuration + (transitionDuration * (mediaItems.length - 1))) / mediaItems.length;
+  // No overlap transitions — hard cuts between segments. Xfade in filter_complex
+  // requires all streams in RAM simultaneously which causes OOM on large stories.
+  const clipDuration = audioDuration / mediaItems.length;
 
   const isVertical = aspectRatio === "9:16";
   const width = isVertical ? 1080 : 1920;
   const height = isVertical ? 1920 : 1080;
 
+  // Convert SRT to ASS once — burn into each segment in the segment pass.
+  // This eliminates the subtitle step from the final merge (which can then use -c:v copy).
   const assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
   convertSrtToAss(srtPath, assPath, aspectRatio);
   const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
-  const isLargeStory = mediaItems.length > 25;
+  // ─────────────────────────────────────────────────────────────────────────
+  // SEGMENT + CONCAT MODE (always used — robust, memory-safe, CPU-controlled)
+  // ─────────────────────────────────────────────────────────────────────────
+  // Strategy:
+  //   1. Render each media item → individual H.264 segment (subtitle burned in)
+  //   2. Concat all segments via concat demuxer with -c:v copy (no re-encode)
+  //   3. Mix audio and trim to exact duration in the final pass
+  //
+  // This eliminates double re-encoding: segments are encoded once at final
+  // quality (veryfast/crf18), and the merge is a bitstream copy — no decoding.
+  // ─────────────────────────────────────────────────────────────────────────
+  logger.info(`🎬 Rendering ${mediaItems.length} media items as segments (MAX_SEGMENT_CONCURRENCY=${config.workflow.maxSegmentConcurrency})...`);
 
-  if (isLargeStory) {
-    // ---------------------------------------------------------
-    // HIGH SCALABILITY MODE: Segment Rendering + Concat Demuxer
-    // ---------------------------------------------------------
-    logger.info(`🎬 High scalability mode activated: Stitching ${mediaItems.length} media items via segments...`);
-    const segmentsListPath = path.join(TEMP_DIR, `segments-${Date.now()}.txt`);
-    let segmentsContent = "";
+  const segmentFiles = [];
+  const segmentsListPath = path.join(SEGMENT_TEMP_DIR, `segments-${Date.now()}.txt`);
+  let segmentsContent = "";
 
-    const segmentFiles = [];
-    const concurrency = 4; // Render 4 segments at a time to save RAM
-    let activePromises = [];
-
-    for (let i = 0; i < mediaItems.length; i++) {
-      const item = mediaItems[i];
-      // Note: All chunks MUST share the exact same format for concat demuxer to work
-      const segmentPath = path.join(TEMP_DIR, `seg_${Date.now()}_${i}.mp4`);
-      segmentFiles.push(segmentPath);
-
-      // Concat demuxer format requires absolute paths to be properly escaped or relative paths
-      // For absolute paths on Windows, they need to be formatted carefully or use forward slashes
-      const safeSegPath = segmentPath.replace(/\\/g, "/");
-      segmentsContent += `file '${safeSegPath}'\n`;
-
-      const p = renderMediaSegment(item, segmentPath, clipDuration, width, height)
-        .catch(err => { throw err; });
-      activePromises.push(p);
-
-      if (activePromises.length >= concurrency) {
-        await Promise.all(activePromises);
-        activePromises = [];
-      }
-    }
-    if (activePromises.length > 0) {
-      await Promise.all(activePromises);
-    }
-
-    fs.writeFileSync(segmentsListPath, segmentsContent, "utf8");
-
-    // Final Stitching pass: concat demuxer -> add audio -> subtitles
-    const args = [
-      "-y",
-      "-loglevel", "error",
-      "-f", "concat",
-      "-safe", "0",
-      "-i", segmentsListPath,
-      "-i", audioPath,
-      "-vf", `subtitles='${escapedAssPath}'`,
-      "-map", "0:v",
-      "-map", "1:a",
-      "-c:v", "libx264",
-      "-crf", "18",
-      "-preset", "veryfast",
-      "-pix_fmt", "yuv420p",
-      "-c:a", "aac",
-      "-b:a", "192k",
-      "-shortest",
-      "-threads", String(config.workflow.ffmpegThreads),
-      "-t", String(audioDuration),
-      outputPath
-    ];
-
-    try {
-      await enqueueRender(async () => {
-        await new Promise((resolve, reject) => {
-          const ff = spawn("ffmpeg", args);
-          let errorLog = "";
-          ff.stderr.on("data", (data) => errorLog += data.toString());
-          ff.on("close", (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(errorLog || `FFmpeg exited with code ${code}`));
-          });
-          ff.on("error", (err) => reject(err));
-        });
-      });
-    } catch (err) {
-      logger.error("FFmpeg Segment Stitch Error:", err.message);
-      throw new Error("🎥 Multi-media video creation failed (Segment Mode).");
-    } finally {
-      if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
-      if (fs.existsSync(segmentsListPath)) fs.unlinkSync(segmentsListPath);
-      segmentFiles.forEach(f => fs.existsSync(f) && fs.unlinkSync(f));
-    }
-    return;
-  }
-
-  // ---------------------------------------------------------
-  // STANDARD MODE: Filter Complex (Xfade / Memory Intensive)
-  // ---------------------------------------------------------
-  let filter = "";
-
-  mediaItems.forEach((item, i) => {
-    const isVideo = item.endsWith(".mp4");
-    const commonScale = `scale=${width}:${height}:force_original_aspect_ratio=increase:out_color_matrix=bt709:out_range=tv:flags=bicubic,crop=${width}:${height},setsar=1`;
-
-    if (isVideo) {
-      inputArgs.push("-i", item);
-      filter += `[${i}:v]setpts=PTS-STARTPTS,${commonScale},fps=30,trim=duration=${clipDuration}[v${i}]; `;
-    } else {
-      // 🎬 CINEMATIC ZOOM PULSE
-      const cycleFrames = ZOOM_CYCLE_SECONDS * FPS;
-      const center = (1 + MAX_ZOOM_LEVEL) / 2;
-      const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
-      const totalFrames = Math.ceil(clipDuration * FPS);
-
-      inputArgs.push("-loop", "1", "-t", String(clipDuration), "-i", item);
-      filter += `[${i}:v]${commonScale},` +
-        `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}` +
-        `:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}[v${i}]; `;
-    }
+  // Build all segment jobs and run them in controlled parallel batches.
+  // Each renderMediaSegment() call goes through enqueueSegmentRender(),
+  // so the semaphore enforces MAX_SEGMENT_CONCURRENCY at all times.
+  const segmentJobs = mediaItems.map((item, i) => {
+    const segmentPath = path.join(SEGMENT_TEMP_DIR, `seg_${Date.now()}_${i}.mp4`);
+    segmentFiles.push(segmentPath);
+    const safeSegPath = segmentPath.replace(/\\/g, "/");
+    segmentsContent += `file '${safeSegPath}'\n`;
+    // Pass escapedAssPath so subtitles are burned into each segment.
+    return renderMediaSegment(item, segmentPath, clipDuration, width, height, escapedAssPath);
   });
 
-  // 2. Chain xfade filters OR simple concat if duration is 0
-  let lastOutput = "v0";
-  if (mediaItems.length > 1) {
-    if (transitionDuration > 0) {
-      for (let i = 1; i < mediaItems.length; i++) {
-        const nextOutput = `vt${i}`;
-        const offset = i * (clipDuration - transitionDuration);
-        filter += `[${lastOutput}][v${i}]xfade=transition=${transitionType}:duration=${transitionDuration}:offset=${offset}[${nextOutput}]; `;
-        lastOutput = nextOutput;
-      }
-    } else {
-      // Hard cuts (simple concat)
-      let concatParams = "";
-      for (let i = 0; i < mediaItems.length; i++) {
-        concatParams += `[v${i}]`;
-      }
-      filter += `${concatParams}concat=n=${mediaItems.length}:v=1:a=0[vconcat]; `;
-      lastOutput = "vconcat";
-    }
+  // Launch all jobs concurrently — the semaphore inside renderMediaSegment
+  // ensures only MAX_SEGMENT_CONCURRENCY run at once. Promise.all is safe here
+  // because the semaphore is the actual rate limiter, not this call site.
+  try {
+    await Promise.all(segmentJobs);
+  } catch (err) {
+    logger.error("Segment render failed:", err.message);
+    // Best-effort cleanup of any segments that did complete
+    segmentFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) {} });
+    if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
+    throw new Error(`🎥 Segment rendering failed: ${err.message}`);
   }
 
-  // 3. Final overlay (Subtitles) and Audio mixing
-  const finalVideoLabel = lastOutput;
-  // Note: We amix the generated video audio (if any) with the main narration audioPath
-  // But usually, images have no audio, so we mainly care about the subtitles and audioPath
-  // const mixingFilter = `[${finalVideoLabel}]subtitles='${escapedAssPath}'[finalv]`;
+  fs.writeFileSync(segmentsListPath, segmentsContent, "utf8");
+  logger.info(`✅ All segments rendered. Starting final merge pass (copy-stream)...`);
 
-  // const cmd = [
-  //   `ffmpeg -y`,
-  //   inputs,
-  //   `-i "${audioPath}"`,
-  //   `-filter_complex "${filter}${mixingFilter}"`,
-  //   `-map "[finalv]" -map ${mediaItems.length}:a`,
-  //   `-c:v libx264 -crf 17 -preset slower -pix_fmt yuv420p -c:a aac -b:a 192k -shortest`,
-  //   `-t ${audioDuration}`,
-  //   `"${outputPath}"`,
-  // ].join(" ");
-
-  // Final overlay (Subtitles) - No logo needed
-  const mixingFilter = `[${lastOutput}]subtitles='${escapedAssPath}'[finalv]`;
-  const audioIndex = mediaItems.length;
-
-  const filterContent = filter + mixingFilter;
-  const filterScriptPath = path.join(TEMP_DIR, `filter-${Date.now()}.txt`);
-  fs.writeFileSync(filterScriptPath, filterContent, "utf8");
-
-  const args = [
+  // Final merge: concat demuxer + audio mix.
+  // -c:v copy — NO re-encode. Segments already carry burned subtitles.
+  // -c:a aac  — encode the audio track (always a stream transcode needed).
+  const mergeArgs = [
     "-y",
     "-loglevel", "error",
-    ...inputArgs,
+    "-f", "concat",
+    "-safe", "0",
+    "-i", segmentsListPath,
     "-i", audioPath,
-    "-filter_complex_script", filterScriptPath,
-    "-map", "[finalv]",
-    "-map", `${audioIndex}:a`,
-    "-c:v", "libx264",
-    "-crf", "18",
-    "-preset", "veryfast",
-    "-pix_fmt", "yuv420p",
+    "-map", "0:v",
+    "-map", "1:a",
+    "-c:v", "copy",         // ✅ Bitstream copy — no re-encode, instant
     "-c:a", "aac",
     "-b:a", "192k",
     "-shortest",
-    "-threads", String(config.workflow.ffmpegThreads),
     "-t", String(audioDuration),
+    "-threads", String(config.workflow.ffmpegThreads),
     outputPath
   ];
 
   try {
-    logger.info(`🎬 Stitching video with ${transitionDuration > 0 ? transitionType : "hard cut"} transitions...`);
     await enqueueRender(async () => {
       await new Promise((resolve, reject) => {
-        const ff = spawn("ffmpeg", args);
-
+        const ff = spawn("ffmpeg", mergeArgs);
         let errorLog = "";
-        ff.stderr.on("data", (data) => {
-          errorLog += data.toString();
-        });
-
+        ff.stderr.on("data", (data) => errorLog += data.toString());
         ff.on("close", (code) => {
           if (code === 0) resolve();
-          else reject(new Error(errorLog || `FFmpeg exited with code ${code}`));
+          else reject(new Error(errorLog || `FFmpeg merge exited with code ${code}`));
         });
-
         ff.on("error", (err) => reject(err));
       });
     });
+    logger.info(`✅ Final video assembled: ${outputPath}`);
   } catch (err) {
-    logger.error("FFmpeg Error:", err.message);
-    throw new Error("🎥 Multi-media video creation failed.");
+    logger.error("FFmpeg Merge Error:", err.message);
+    throw new Error("🎥 Multi-media video creation failed (merge pass).");
   } finally {
+    // Always clean up: segments, list file, subtitle ASS
     if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
-    if (fs.existsSync(filterScriptPath)) fs.unlinkSync(filterScriptPath);
+    if (fs.existsSync(segmentsListPath)) fs.unlinkSync(segmentsListPath);
+    segmentFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) {} });
   }
 }
 
