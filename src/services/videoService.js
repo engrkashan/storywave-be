@@ -112,7 +112,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   }
 }
 
-function convertSrtToAss(srtPath, assPath, aspectRatio = "16:9") {
+export function convertSrtToAss(srtPath, assPath, aspectRatio = "16:9") {
   const perf = getPerfSession();
   const stopTimer = perf?.start("subtitle", "SRT to ASS Conversion", { srtPath });
   const srtContent = fs.readFileSync(srtPath, "utf8");

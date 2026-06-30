@@ -29,12 +29,12 @@ async function runBenchmark(imageCount) {
   // Create workflow record
   const workflow = await prisma.workflow.create({
     data: {
-      userId: user.id,
-      prompt: `[BENCHMARK] Generate a ${imageCount} image story about space exploration.`,
-      status: "PENDING",
+      user: { connect: { id: user.id } },
       title: `Benchmark - ${imageCount} Images`,
       type: "STORY",
-      inputData: {
+      status: "PENDING",
+      metadata: {
+        prompt: `[BENCHMARK] Generate a ${imageCount} image story about space exploration.`,
         mediaType: "multi_image",
         imageCount: imageCount,
         imagePrompt: "cinematic space exploration, 4k",
