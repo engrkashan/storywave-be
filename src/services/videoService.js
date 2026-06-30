@@ -379,14 +379,13 @@ async function renderMediaSegment(itemPath, outputPath, duration, width, height,
     const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
     const totalFrames = Math.ceil(duration * FPS);
 
+    // zoompan now receives 1 frame, and outputs totalFrames frames (d=totalFrames)
     const zoomFilter = `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}`;
     const filter = `${commonScale},${zoomFilter},fps=30${subFilter}`;
 
     args = [
       "-y", "-loglevel", "error",
       "-threads", String(config.workflow.ffmpegThreads),
-      "-loop", "1",
-      "-t", String(duration),
       "-i", itemPath,
       "-vf", filter,
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
@@ -485,7 +484,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   } catch (err) {
     logger.error("Segment render failed:", err.message);
     // Best-effort cleanup of any segments that did complete
-    segmentFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) {} });
+    segmentFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) { } });
     if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
     throw new Error(`🎥 Segment rendering failed: ${err.message}`);
   }
@@ -546,7 +545,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
     // Always clean up: segments, list file, subtitle ASS
     if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
     if (fs.existsSync(segmentsListPath)) fs.unlinkSync(segmentsListPath);
-    segmentFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) {} });
+    segmentFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) { } });
   }
 }
 
