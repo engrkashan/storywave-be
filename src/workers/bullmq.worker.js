@@ -4,6 +4,8 @@ import Redis from "ioredis";
 import { config } from "../config/workflow.config.js";
 import { runWorkflow } from "../services/workflowService.js";
 import { createLogger } from "../utils/logger.js";
+import { startAdaptiveController, stopAdaptiveController } from "../utils/adaptiveController.js";
+import { segmentSemaphore } from "../utils/renderQueue.js";
 
 const logger = createLogger("BullMQWorker");
 
@@ -47,6 +49,7 @@ const worker = new Worker(
 
 worker.on("ready", () => {
   logger.info("👷 Worker is ready and listening to workflow-queue");
+  startAdaptiveController();
 });
 
 worker.on("error", (err) => {
@@ -62,6 +65,18 @@ worker.on("failed", (job, err) => {
 // Handle graceful shutdown
 const gracefulShutdown = async (signal) => {
   logger.info(`Received ${signal}, closing worker...`);
+  
+  stopAdaptiveController();
+  
+  const metrics = segmentSemaphore.getMetrics();
+  logger.info("📊 Final Queue Metrics:");
+  logger.info(`   - Total Tasks Processed: ${metrics.totalTasks}`);
+  logger.info(`   - Average Wait Time: ${metrics.avgWaitMs}ms`);
+  logger.info(`   - Max Wait Time: ${metrics.maxWaitMs}ms`);
+  logger.info(`   - Busy Time: ${metrics.busyTimeMs}ms`);
+  logger.info(`   - Idle Time: ${metrics.idleTimeMs}ms`);
+  logger.info(`   - Worker Utilization: ${metrics.utilizationPct}%`);
+
   await worker.close();
   redisConnection.disconnect();
   process.exit(0);

@@ -8,6 +8,7 @@ export const config = {
     // Controls parallel segment renders per workflow (independent from final-merge semaphore)
     maxSegmentConcurrency: parseInt(process.env.MAX_SEGMENT_CONCURRENCY || "2", 10),
     maxApiConcurrency: parseInt(process.env.MAX_API_CONCURRENCY || "5", 10),
+    imageConcurrency: parseInt(process.env.IMAGE_CONCURRENCY || "3", 10),
     ffmpegThreads: parseInt(process.env.FFMPEG_THREADS || "2", 10),
     enableQueue: process.env.ENABLE_QUEUE !== "false", // Default to true
   },

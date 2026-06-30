@@ -19,7 +19,9 @@ import { getAudioDuration } from "./audioService.js";
 import {
   createVideo,
   generateVideoClips,
-  createMultiMediaVideo,
+  concatSegments,
+  renderMediaSegment,
+  convertSrtToAss
 } from "./videoService.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
 import {
@@ -57,6 +59,8 @@ import {
 import { generateCharacterBible } from "./characterService.js";
 import { perfStorage, createPerfSession, getPerfSession } from "../utils/perfLogger.js";
 import { startCpuMonitor, stopCpuMonitor } from "../utils/cpuMonitor.js";
+import { CheckpointManager } from "../utils/checkpointManager.js";
+import { enqueueSegmentRender } from "../utils/renderQueue.js";
 
 const TEMP_ROOT = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
@@ -869,8 +873,58 @@ async function _runWorkflow({
             );
             stopVideoClipsTimer?.();
             mediaItems = clips.filter((c) => c.filePath).map((c) => c.filePath);
+            
+            if (mediaItems.length > 0) {
+              const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
+              const videoPath = path.join(workflowTempDir, videoFilename);
+              const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
+              // Legacy non-streaming fallback for video/clips
+              const dummySegmentFiles = []; // Not fully refactored for video clips yet
+              // We would need a createMultiMediaVideo for video clips or use the same streaming logic
+              stopStitchTimer?.();
+            }
           } else if (mediaType === "multi_image") {
             const stopMultiImagesTimer = perf?.start("image", `Generate Multi Images (${scenePrompts.length} images)`);
+            const checkpointManager = new CheckpointManager(workflowTempDir);
+            
+            const isVertical = currentRatio === "9:16";
+            const width = isVertical ? 1080 : 1920;
+            const height = isVertical ? 1920 : 1080;
+            const clipDuration = actualAudioDuration / scenePrompts.length;
+            
+            const assPath = path.join(workflowTempDir, `subs-${Date.now()}.ass`);
+            convertSrtToAss(srtPath, assPath, currentRatio);
+            const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+
+            const segmentFiles = new Array(scenePrompts.length).fill(null);
+            const segmentPromises = [];
+
+            const onImageReady = async (imagePath, i) => {
+              const segmentPromise = (async () => {
+                const sceneId = `scene_${String(i + 1).padStart(3, "0")}`;
+                const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
+                segmentFiles[i] = segmentPath;
+                
+                if (checkpointManager.isRenderCompleted(sceneId) && fs.existsSync(segmentPath)) {
+                  logger.info(`⏩ [Segment ${i + 1}/${scenePrompts.length}] Skipping render (Checkpoint)`);
+                  return;
+                }
+
+                checkpointManager.markRenderRunning(sceneId);
+                try {
+                  await enqueueSegmentRender(async () => {
+                    await renderMediaSegment(imagePath, segmentPath, clipDuration, width, height, escapedAssPath);
+                  });
+                  checkpointManager.markRenderCompleted(sceneId);
+                } catch (err) {
+                  checkpointManager.markRenderFailed(sceneId);
+                  throw err;
+                }
+              })();
+              
+              segmentPromises.push(segmentPromise);
+            };
+
             const images = await generateMultiImages(
               scenePrompts,
               ratioDir,
@@ -879,11 +933,26 @@ async function _runWorkflow({
               characterReferences,
               styleReferenceUrl,
               () => checkCancelled(workflow.id),
+              onImageReady,
+              checkpointManager
             );
+            
+            // Wait for all async segment renders to complete
+            await Promise.all(segmentPromises);
             stopMultiImagesTimer?.();
-            mediaItems = images
-              .filter((img) => img.imageUrl)
-              .map((img) => img.imageUrl);
+            mediaItems = images.filter((img) => img.imageUrl).map((img) => img.imageUrl);
+            
+            // Step 5: Final Concat
+            if (mediaItems.length > 0) {
+              logger.info(`Step 5: Stitching video for ${currentRatio}...`);
+              const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
+              const videoPath = path.join(workflowTempDir, videoFilename);
+              
+              const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
+              await concatSegments(segmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, assPath);
+              stopStitchTimer?.();
+            }
+
           } else {
             const stopImageTimer = perf?.start("image", "Generate Single Image");
             const imageResult = await generateImage(
@@ -896,38 +965,21 @@ async function _runWorkflow({
               styleReferenceUrl,
             );
             stopImageTimer?.();
-            if (imageResult.imageUrl) mediaItems = [imageResult.imageUrl];
+            if (imageResult.imageUrl) {
+              mediaItems = [imageResult.imageUrl];
+              const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
+              const videoPath = path.join(workflowTempDir, videoFilename);
+              const stopStitchTimer = perf?.start("video", "Stitch Single Image Video");
+              await createVideo(mediaItems[0], finalAudioLocalPath, videoPath, srtPath, currentRatio);
+              stopStitchTimer?.();
+            }
           }
         }
 
-        // 3. Create Video for this ratio
+        const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
+        const videoPath = path.join(workflowTempDir, videoFilename);
+        
         if (mediaItems.length > 0) {
-          logger.info(`Step 5: Stitching video for ${currentRatio}...`);
-          const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
-          const videoPath = path.join(workflowTempDir, videoFilename);
-
-          if (mediaItems.length === 1 && mediaType === "single_image") {
-            const stopStitchTimer = perf?.start("video", "Stitch Single Image Video");
-            await createVideo(
-              mediaItems[0],
-              finalAudioLocalPath,
-              videoPath,
-              srtPath,
-              currentRatio,
-            );
-            stopStitchTimer?.();
-          } else {
-            const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
-            await createMultiMediaVideo(
-              mediaItems,
-              finalAudioLocalPath,
-              videoPath,
-              srtPath,
-              currentRatio,
-            );
-            stopStitchTimer?.();
-          }
-
           const stopVideoUploadTimer = perf?.start("upload", `Upload Final Video to Cloudinary: ${currentRatio}`);
           const currentVideoURL = await uploadVideoToCloud(
             videoPath,

@@ -10,25 +10,92 @@ class Semaphore {
     this.name = name;
     this.count = 0;
     this.queue = [];
+
+    // Telemetry metrics
+    this.metrics = {
+      totalTasks: 0,
+      totalWaitMs: 0,
+      maxWaitMs: 0,
+      busyTimeMs: 0,
+      idleTimeMs: 0,
+    };
+    
+    this.lastStateChange = Date.now();
+  }
+
+  _updateTimeMetrics() {
+    const now = Date.now();
+    const duration = now - this.lastStateChange;
+    if (this.count > 0) {
+      this.metrics.busyTimeMs += duration;
+    } else {
+      this.metrics.idleTimeMs += duration;
+    }
+    this.lastStateChange = now;
   }
 
   async acquire() {
+    this._updateTimeMetrics();
+    
     if (this.count < this.max) {
       this.count++;
       return;
     }
     return new Promise((resolve) => {
-      this.queue.push(resolve);
+      this.queue.push({ resolve, enqueuedAt: Date.now() });
     });
   }
 
   release() {
+    this._updateTimeMetrics();
+    this.metrics.totalTasks++;
+    
     this.count--;
     if (this.queue.length > 0) {
       this.count++;
-      const nextResolve = this.queue.shift();
-      nextResolve();
+      const nextTask = this.queue.shift();
+      
+      const waitMs = Date.now() - nextTask.enqueuedAt;
+      this.metrics.totalWaitMs += waitMs;
+      this.metrics.maxWaitMs = Math.max(this.metrics.maxWaitMs, waitMs);
+      
+      nextTask.resolve();
     }
+  }
+
+  setMax(newMax) {
+    if (newMax === this.max) return;
+    this.max = newMax;
+    
+    // If the pool increased, dequeue immediately
+    while (this.count < this.max && this.queue.length > 0) {
+      this._updateTimeMetrics();
+      this.count++;
+      const nextTask = this.queue.shift();
+      
+      const waitMs = Date.now() - nextTask.enqueuedAt;
+      this.metrics.totalWaitMs += waitMs;
+      this.metrics.maxWaitMs = Math.max(this.metrics.maxWaitMs, waitMs);
+      
+      nextTask.resolve();
+    }
+  }
+
+  getMetrics() {
+    this._updateTimeMetrics(); // Flush latest chunk
+    const avgWaitMs = this.metrics.totalTasks > 0 ? (this.metrics.totalWaitMs / this.metrics.totalTasks) : 0;
+    return {
+      name: this.name,
+      max: this.max,
+      active: this.count,
+      queued: this.queue.length,
+      totalTasks: this.metrics.totalTasks,
+      avgWaitMs: Math.round(avgWaitMs),
+      maxWaitMs: this.metrics.maxWaitMs,
+      busyTimeMs: this.metrics.busyTimeMs,
+      idleTimeMs: this.metrics.idleTimeMs,
+      utilizationPct: this.metrics.busyTimeMs > 0 ? (this.metrics.busyTimeMs / (this.metrics.busyTimeMs + this.metrics.idleTimeMs) * 100).toFixed(1) : "0.0"
+    };
   }
 }
 
@@ -43,7 +110,7 @@ const renderSemaphore = new Semaphore(
 // ─── Segment-render semaphore ─────────────────────────────────────────────────
 // Allows up to MAX_SEGMENT_CONCURRENCY parallel segment renders.
 // Kept separate from the final-merge semaphore so they do not starve each other.
-const segmentSemaphore = new Semaphore(
+export const segmentSemaphore = new Semaphore(
   config.workflow.maxSegmentConcurrency || 2,
   "SegmentRender"
 );

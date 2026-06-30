@@ -355,7 +355,7 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
  * Encoding params are identical to the final stitch pass so the merge can
  * use "-c:v copy" and avoid a second full re-encode.
  */
-async function renderMediaSegment(itemPath, outputPath, duration, width, height, escapedAssPath) {
+export async function renderMediaSegment(itemPath, outputPath, duration, width, height, escapedAssPath) {
   const isVideo = itemPath.endsWith(".mp4");
   const commonScale = `scale=${width}:${height}:force_original_aspect_ratio=increase:out_color_matrix=bt709:out_range=tv:flags=bicubic,crop=${width}:${height},setsar=1`;
 
@@ -421,76 +421,20 @@ async function renderMediaSegment(itemPath, outputPath, duration, width, height,
 }
 
 /**
- * Creates a video from multiple images or video clips, synchronized with audio.
+ * Merges pre-rendered segments into a single video, synchronized with audio.
+ * Phase 5 Safe Disk Cleanup is implemented here.
  */
-export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, srtPath, aspectRatio = "16:9") {
-  // Per-workflow temp dir is derived from the output path's parent directory.
-  // This keeps segment files isolated from concurrent workflows instead of
-  // writing everything into the shared global temp/ root.
+export async function concatSegments(segmentFiles, audioPath, outputPath, audioDuration, assPathToRemove) {
   const SEGMENT_TEMP_DIR = path.dirname(outputPath);
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
   fs.mkdirSync(SEGMENT_TEMP_DIR, { recursive: true });
 
-  const audioDuration = await getAudioDuration(audioPath);
-  // No overlap transitions — hard cuts between segments. Xfade in filter_complex
-  // requires all streams in RAM simultaneously which causes OOM on large stories.
-  const clipDuration = audioDuration / mediaItems.length;
-
-  const isVertical = aspectRatio === "9:16";
-  const width = isVertical ? 1080 : 1920;
-  const height = isVertical ? 1920 : 1080;
-
-  // Convert SRT to ASS once — burn into each segment in the segment pass.
-  // This eliminates the subtitle step from the final merge (which can then use -c:v copy).
-  const assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
-  convertSrtToAss(srtPath, assPath, aspectRatio);
-  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // SEGMENT + CONCAT MODE (always used — robust, memory-safe, CPU-controlled)
-  // ─────────────────────────────────────────────────────────────────────────
-  // Strategy:
-  //   1. Render each media item → individual H.264 segment (subtitle burned in)
-  //   2. Concat all segments via concat demuxer with -c:v copy (no re-encode)
-  //   3. Mix audio and trim to exact duration in the final pass
-  //
-  // This eliminates double re-encoding: segments are encoded once at final
-  // quality (veryfast/crf18), and the merge is a bitstream copy — no decoding.
-  // ─────────────────────────────────────────────────────────────────────────
-  logger.info(`🎬 Rendering ${mediaItems.length} media items as segments (MAX_SEGMENT_CONCURRENCY=${config.workflow.maxSegmentConcurrency})...`);
-
-  const segmentFiles = [];
   const segmentsListPath = path.join(SEGMENT_TEMP_DIR, `segments-${Date.now()}.txt`);
-  let segmentsContent = "";
-
-  // Build all segment jobs and run them in controlled parallel batches.
-  // Each renderMediaSegment() call goes through enqueueSegmentRender(),
-  // so the semaphore enforces MAX_SEGMENT_CONCURRENCY at all times.
-  const segmentJobs = mediaItems.map((item, i) => {
-    const segmentPath = path.join(SEGMENT_TEMP_DIR, `seg_${Date.now()}_${i}.mp4`);
-    segmentFiles.push(segmentPath);
-    const safeSegPath = segmentPath.replace(/\\/g, "/");
-    segmentsContent += `file '${safeSegPath}'\n`;
-    // Pass escapedAssPath so subtitles are burned into each segment.
-    return renderMediaSegment(item, segmentPath, clipDuration, width, height, escapedAssPath);
-  });
-
-  // Launch all jobs concurrently — the semaphore inside renderMediaSegment
-  // ensures only MAX_SEGMENT_CONCURRENCY run at once. Promise.all is safe here
-  // because the semaphore is the actual rate limiter, not this call site.
-  try {
-    await Promise.all(segmentJobs);
-  } catch (err) {
-    logger.error("Segment render failed:", err.message);
-    // Best-effort cleanup of any segments that did complete
-    segmentFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) { } });
-    if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
-    throw new Error(`🎥 Segment rendering failed: ${err.message}`);
-  }
-
+  let segmentsContent = segmentFiles.map(f => `file '${f.replace(/\\/g, "/")}'`).join("\n") + "\n";
   fs.writeFileSync(segmentsListPath, segmentsContent, "utf8");
-  logger.info(`✅ All segments rendered. Starting final merge pass (copy-stream)...`);
+
+  logger.info(`✅ Segments ready. Starting final merge pass (copy-stream)...`);
 
   // Final merge: concat demuxer + audio mix.
   // -c:v copy — NO re-encode. Segments already carry burned subtitles.
@@ -543,7 +487,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
     throw new Error("🎥 Multi-media video creation failed (merge pass).");
   } finally {
     // Always clean up: segments, list file, subtitle ASS
-    if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
+    if (assPathToRemove && fs.existsSync(assPathToRemove)) fs.unlinkSync(assPathToRemove);
     if (fs.existsSync(segmentsListPath)) fs.unlinkSync(segmentsListPath);
     segmentFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) { } });
   }
