@@ -87,7 +87,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
     await enqueueRender(async () => {
       await new Promise((resolve, reject) => {
         const ff = spawn("ffmpeg", args);
-        
+
         let errorLog = "";
         ff.stderr.on("data", (data) => {
           errorLog += data.toString();
@@ -207,7 +207,7 @@ export async function extractLastFrame(videoPath, outputPath) {
           outputPath
         ]);
 
-        ff.stderr.on("data", () => {}); // Consume stream to prevent maxBuffer leaks
+        ff.stderr.on("data", () => { }); // Consume stream to prevent maxBuffer leaks
 
         ff.on("close", (code) => {
           if (code === 0) resolve();
@@ -343,6 +343,51 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
   return results;
 }
 
+async function renderMediaSegment(itemPath, outputPath, duration, width, height) {
+  const isVideo = itemPath.endsWith(".mp4");
+  const commonScale = `scale=${width}:${height}:force_original_aspect_ratio=increase:out_color_matrix=bt709:out_range=tv:flags=bicubic,crop=${width}:${height},setsar=1`;
+
+  let args;
+  if (isVideo) {
+    args = [
+      "-y", "-loglevel", "error",
+      "-i", itemPath,
+      "-vf", `${commonScale},fps=30`,
+      "-t", String(duration),
+      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
+      outputPath
+    ];
+  } else {
+    const cycleFrames = ZOOM_CYCLE_SECONDS * FPS;
+    const center = (1 + MAX_ZOOM_LEVEL) / 2;
+    const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
+    const totalFrames = Math.ceil(duration * FPS);
+
+    const filter = `${commonScale},zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height},fps=30`;
+
+    args = [
+      "-y", "-loglevel", "error",
+      "-loop", "1",
+      "-t", String(duration),
+      "-i", itemPath,
+      "-vf", filter,
+      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
+      outputPath
+    ];
+  }
+
+  return new Promise((resolve, reject) => {
+    const ff = spawn("ffmpeg", args);
+    let errorLog = "";
+    ff.stderr.on("data", (data) => errorLog += data.toString());
+    ff.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Segment render failed for ${itemPath}: ${errorLog || code}`));
+    });
+    ff.on("error", reject);
+  });
+}
+
 /**
  * Creates a video from multiple images or video clips, synchronized with audio.
  */
@@ -363,9 +408,96 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
   convertSrtToAss(srtPath, assPath, aspectRatio);
   const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
+  const isLargeStory = mediaItems.length > 25;
 
+  if (isLargeStory) {
+    // ---------------------------------------------------------
+    // HIGH SCALABILITY MODE: Segment Rendering + Concat Demuxer
+    // ---------------------------------------------------------
+    logger.info(`🎬 High scalability mode activated: Stitching ${mediaItems.length} media items via segments...`);
+    const segmentsListPath = path.join(TEMP_DIR, `segments-${Date.now()}.txt`);
+    let segmentsContent = "";
 
-  let inputArgs = [];
+    const segmentFiles = [];
+    const concurrency = 4; // Render 4 segments at a time to save RAM
+    let activePromises = [];
+
+    for (let i = 0; i < mediaItems.length; i++) {
+      const item = mediaItems[i];
+      // Note: All chunks MUST share the exact same format for concat demuxer to work
+      const segmentPath = path.join(TEMP_DIR, `seg_${Date.now()}_${i}.mp4`);
+      segmentFiles.push(segmentPath);
+
+      // Concat demuxer format requires absolute paths to be properly escaped or relative paths
+      // For absolute paths on Windows, they need to be formatted carefully or use forward slashes
+      const safeSegPath = segmentPath.replace(/\\/g, "/");
+      segmentsContent += `file '${safeSegPath}'\n`;
+
+      const p = renderMediaSegment(item, segmentPath, clipDuration, width, height)
+        .catch(err => { throw err; });
+      activePromises.push(p);
+
+      if (activePromises.length >= concurrency) {
+        await Promise.all(activePromises);
+        activePromises = [];
+      }
+    }
+    if (activePromises.length > 0) {
+      await Promise.all(activePromises);
+    }
+
+    fs.writeFileSync(segmentsListPath, segmentsContent, "utf8");
+
+    // Final Stitching pass: concat demuxer -> add audio -> subtitles
+    const args = [
+      "-y",
+      "-loglevel", "error",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", segmentsListPath,
+      "-i", audioPath,
+      "-vf", `subtitles='${escapedAssPath}'`,
+      "-map", "0:v",
+      "-map", "1:a",
+      "-c:v", "libx264",
+      "-crf", "18",
+      "-preset", "veryfast",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-shortest",
+      "-threads", String(config.workflow.ffmpegThreads),
+      "-t", String(audioDuration),
+      outputPath
+    ];
+
+    try {
+      await enqueueRender(async () => {
+        await new Promise((resolve, reject) => {
+          const ff = spawn("ffmpeg", args);
+          let errorLog = "";
+          ff.stderr.on("data", (data) => errorLog += data.toString());
+          ff.on("close", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(errorLog || `FFmpeg exited with code ${code}`));
+          });
+          ff.on("error", (err) => reject(err));
+        });
+      });
+    } catch (err) {
+      logger.error("FFmpeg Segment Stitch Error:", err.message);
+      throw new Error("🎥 Multi-media video creation failed (Segment Mode).");
+    } finally {
+      if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
+      if (fs.existsSync(segmentsListPath)) fs.unlinkSync(segmentsListPath);
+      segmentFiles.forEach(f => fs.existsSync(f) && fs.unlinkSync(f));
+    }
+    return;
+  }
+
+  // ---------------------------------------------------------
+  // STANDARD MODE: Filter Complex (Xfade / Memory Intensive)
+  // ---------------------------------------------------------
   let filter = "";
 
   mediaItems.forEach((item, i) => {
@@ -460,7 +592,7 @@ export async function createMultiMediaVideo(mediaItems, audioPath, outputPath, s
     await enqueueRender(async () => {
       await new Promise((resolve, reject) => {
         const ff = spawn("ffmpeg", args);
-        
+
         let errorLog = "";
         ff.stderr.on("data", (data) => {
           errorLog += data.toString();
