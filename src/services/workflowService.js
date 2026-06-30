@@ -115,7 +115,7 @@ export async function runScheduledWorkflows() {
       videoFile: meta.videoFile || null,
       textIdea: meta.textIdea || null,
       imagePrompt: meta.imagePrompt || null,
-      shouldGenerateImage: meta.shouldGenerateImage ?? true, 
+      shouldGenerateImage: meta.shouldGenerateImage ?? true,
       storyType: meta.storyType || null,
       voice: meta.voice || null,
       voiceTone: meta.voiceTone || null,
@@ -154,7 +154,7 @@ export async function processExistingWorkflow(workflow) {
     videoFile: meta.videoFile || null,
     textIdea: meta.textIdea || null,
     imagePrompt: meta.imagePrompt || null,
-    shouldGenerateImage: meta.shouldGenerateImage ?? true, 
+    shouldGenerateImage: meta.shouldGenerateImage ?? true,
     storyType: meta.storyType || null,
     voice: meta.voice || null,
     voiceTone: meta.voiceTone || null,
@@ -435,7 +435,7 @@ async function _runWorkflow({
           scene.narration = await enhanceSceneWithSoundEffects(scene.prompt, scene.narration);
         }
         stopSfxEnhanceTimer?.();
-        
+
         // Re-stitch script from the enhanced narrations
         script = earlyScenePrompts.map(s => s.narration).join(" ");
       } else {
@@ -454,8 +454,8 @@ async function _runWorkflow({
         outline: outline || null,
         content: script,
         userId,
-        isPodcast: false, 
-        audioURL: null, 
+        isPodcast: false,
+        audioURL: null,
         series,
         coverArtPrompt,
         seoContent,
@@ -713,11 +713,10 @@ async function _runWorkflow({
         logger.info(
           shouldGeneratePortraits
             ? "Step 2.2: Skipping portrait generation (no characters in story metadata)."
-            : `Step 2.2: Skipping portrait generation — ${
-                uploadedMediaUrl
-                  ? "direct media upload provided (AI generation bypassed)"
-                  : "user character reference image provided (likeness already anchored)"
-              }.`,
+            : `Step 2.2: Skipping portrait generation — ${uploadedMediaUrl
+              ? "direct media upload provided (AI generation bypassed)"
+              : "user character reference image provided (likeness already anchored)"
+            }.`,
         );
       }
 
@@ -873,7 +872,7 @@ async function _runWorkflow({
             );
             stopVideoClipsTimer?.();
             mediaItems = clips.filter((c) => c.filePath).map((c) => c.filePath);
-            
+
             if (mediaItems.length > 0) {
               const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
               const videoPath = path.join(workflowTempDir, videoFilename);
@@ -886,12 +885,12 @@ async function _runWorkflow({
           } else if (mediaType === "multi_image") {
             const stopMultiImagesTimer = perf?.start("image", `Generate Multi Images (${scenePrompts.length} images)`);
             const checkpointManager = new CheckpointManager(workflowTempDir);
-            
+
             const isVertical = currentRatio === "9:16";
             const width = isVertical ? 1080 : 1920;
             const height = isVertical ? 1920 : 1080;
             const clipDuration = actualAudioDuration / scenePrompts.length;
-            
+
             const assPath = path.join(workflowTempDir, `subs-${Date.now()}.ass`);
             convertSrtToAss(srtPath, assPath, currentRatio);
             const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
@@ -904,7 +903,7 @@ async function _runWorkflow({
                 const sceneId = `scene_${String(i + 1).padStart(3, "0")}`;
                 const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
                 segmentFiles[i] = segmentPath;
-                
+
                 if (checkpointManager.isRenderCompleted(sceneId) && fs.existsSync(segmentPath)) {
                   logger.info(`⏩ [Segment ${i + 1}/${scenePrompts.length}] Skipping render (Checkpoint)`);
                   return;
@@ -921,7 +920,7 @@ async function _runWorkflow({
                   throw err;
                 }
               })();
-              
+
               segmentPromises.push(segmentPromise);
             };
 
@@ -936,18 +935,18 @@ async function _runWorkflow({
               onImageReady,
               checkpointManager
             );
-            
+
             // Wait for all async segment renders to complete
             await Promise.all(segmentPromises);
             stopMultiImagesTimer?.();
             mediaItems = images.filter((img) => img.imageUrl).map((img) => img.imageUrl);
-            
+
             // Step 5: Final Concat
             if (mediaItems.length > 0) {
               logger.info(`Step 5: Stitching video for ${currentRatio}...`);
               const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
               const videoPath = path.join(workflowTempDir, videoFilename);
-              
+
               const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
               await concatSegments(segmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, assPath);
               stopStitchTimer?.();
@@ -978,7 +977,7 @@ async function _runWorkflow({
 
         const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
         const videoPath = path.join(workflowTempDir, videoFilename);
-        
+
         if (mediaItems.length > 0) {
           const stopVideoUploadTimer = perf?.start("upload", `Upload Final Video to Cloudinary: ${currentRatio}`);
           const currentVideoURL = await uploadVideoToCloud(
@@ -1083,7 +1082,7 @@ async function _runWorkflow({
       logger.error(`⚠️ Auto-publish to Mallary failed (non-fatal): ${publishErr.message}`);
     }
 
-    // deleteTempFiles(workflowTempDir);
+    deleteTempFiles(workflowTempDir);
 
     perf?.generateReport(workflowTempDir);
 
