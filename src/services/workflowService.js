@@ -824,6 +824,8 @@ async function _runWorkflow({
 
         // 1. Determine media items — use direct upload or AI generation
         let mediaItems = [];
+        const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
+        const videoPath = path.join(workflowTempDir, videoFilename);
 
         if (uploadedMediaUrl) {
           // ✅ Direct media path: skip AI generation entirely
@@ -874,8 +876,6 @@ async function _runWorkflow({
             mediaItems = clips.filter((c) => c.filePath).map((c) => c.filePath);
 
             if (mediaItems.length > 0) {
-              const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
-              const videoPath = path.join(workflowTempDir, videoFilename);
               const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
               // Legacy non-streaming fallback for video/clips
               const dummySegmentFiles = []; // Not fully refactored for video clips yet
@@ -944,9 +944,7 @@ async function _runWorkflow({
             // Step 5: Final Concat
             if (mediaItems.length > 0) {
               logger.info(`Step 5: Stitching video for ${currentRatio}...`);
-              const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
-              const videoPath = path.join(workflowTempDir, videoFilename);
-
+              
               const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
               await concatSegments(segmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, assPath);
               stopStitchTimer?.();
@@ -966,17 +964,12 @@ async function _runWorkflow({
             stopImageTimer?.();
             if (imageResult.imageUrl) {
               mediaItems = [imageResult.imageUrl];
-              const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
-              const videoPath = path.join(workflowTempDir, videoFilename);
               const stopStitchTimer = perf?.start("video", "Stitch Single Image Video");
               await createVideo(mediaItems[0], finalAudioLocalPath, videoPath, srtPath, currentRatio);
               stopStitchTimer?.();
             }
           }
         }
-
-        const videoFilename = `${workflow.id}-${currentRatio.replace(":", "_")}-${Date.now()}.mp4`;
-        const videoPath = path.join(workflowTempDir, videoFilename);
 
         if (mediaItems.length > 0) {
           const stopVideoUploadTimer = perf?.start("upload", `Upload Final Video to Cloudinary: ${currentRatio}`);
