@@ -45,15 +45,24 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   const height = isVertical ? 1920 : 1080;
 
   // Cinematic Zoom Pulse calculations
-  const cycleFrames = ZOOM_CYCLE_SECONDS * FPS;
+  const totalFrames = Math.ceil(audioDuration * FPS);
+  const cycleFrames = totalFrames; // dynamically scale in/out cycle to clip duration
   const center = (1 + MAX_ZOOM_LEVEL) / 2;
   const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
-  const totalFrames = Math.ceil(audioDuration * FPS);
+
+  const upscaleFactor = 4;
+  const upWidth = width * upscaleFactor;
+  const upHeight = height * upscaleFactor;
+
+  // Scale image to match aspect ratio, crop excess, then apply zoompan
+  const commonScale = [
+    `[0:v]scale=${upWidth}:${upHeight}:force_original_aspect_ratio=increase`,
+    `crop=${upWidth}:${upHeight}`,
+    `setsar=1`
+  ].join(",");
 
   const filterComplex = [
-    `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase`,
-    `crop=${width}:${height}`,
-    `setsar=1`,
+    commonScale,
     `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}`,
     `subtitles='${escapedAssPath}'[vfinal]`
   ].join(",");
@@ -381,14 +390,21 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
       outputPath
     ];
   } else {
-    const cycleFrames = ZOOM_CYCLE_SECONDS * FPS;
+    const totalFrames = Math.ceil(duration * FPS);
+    const cycleFrames = totalFrames; // dynamically scale in/out cycle to clip duration
     const center = (1 + MAX_ZOOM_LEVEL) / 2;
     const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
-    const totalFrames = Math.ceil(duration * FPS);
 
-    // zoompan now receives 1 frame, and outputs totalFrames frames (d=totalFrames)
+    // Upscale by 4x to eliminate zoompan subpixel jitter (staircasing)
+    const upscaleFactor = 4;
+    const upWidth = width * upscaleFactor;
+    const upHeight = height * upscaleFactor;
+
+    const upScaleFilter = `scale=${upWidth}:${upHeight}:force_original_aspect_ratio=increase:out_color_matrix=bt709:out_range=tv:flags=bicubic,crop=${upWidth}:${upHeight},setsar=1`;
+
+    // zoompan receives the upscaled image, animates it, and outputs back at 1080p (s=widthxheight)
     const zoomFilter = `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}`;
-    const filter = `${commonScale},${zoomFilter},fps=30${subFilter}`;
+    const filter = `${upScaleFilter},${zoomFilter},fps=30${subFilter}`;
 
     args = [
       "-y", "-loglevel", "error",
