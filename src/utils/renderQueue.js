@@ -46,28 +46,7 @@ class Semaphore {
     });
   }
 
-  release() {
-    this._updateTimeMetrics();
-    this.metrics.totalTasks++;
-    
-    this.count--;
-    if (this.queue.length > 0) {
-      this.count++;
-      const nextTask = this.queue.shift();
-      
-      const waitMs = Date.now() - nextTask.enqueuedAt;
-      this.metrics.totalWaitMs += waitMs;
-      this.metrics.maxWaitMs = Math.max(this.metrics.maxWaitMs, waitMs);
-      
-      nextTask.resolve();
-    }
-  }
-
-  setMax(newMax) {
-    if (newMax === this.max) return;
-    this.max = newMax;
-    
-    // If the pool increased, dequeue immediately
+  _processQueue() {
     while (this.count < this.max && this.queue.length > 0) {
       this._updateTimeMetrics();
       this.count++;
@@ -79,6 +58,20 @@ class Semaphore {
       
       nextTask.resolve();
     }
+  }
+
+  release() {
+    this._updateTimeMetrics();
+    this.metrics.totalTasks++;
+    
+    this.count--;
+    this._processQueue();
+  }
+
+  setMax(newMax) {
+    if (newMax === this.max) return;
+    this.max = newMax;
+    this._processQueue();
   }
 
   getMetrics() {

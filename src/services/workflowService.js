@@ -60,8 +60,6 @@ import { generateCharacterBible } from "./characterService.js";
 import { perfStorage, createPerfSession, getPerfSession } from "../utils/perfLogger.js";
 import { startCpuMonitor, stopCpuMonitor } from "../utils/cpuMonitor.js";
 import { CheckpointManager } from "../utils/checkpointManager.js";
-import { enqueueSegmentRender } from "../utils/renderQueue.js";
-
 const TEMP_ROOT = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
 
@@ -918,9 +916,7 @@ async function _runWorkflow({
 
                 checkpointManager.markRenderRunning(sceneId);
                 try {
-                  await enqueueSegmentRender(async () => {
-                    await renderMediaSegment(imagePath, segmentPath, duration, width, height, escapedSegmentAssPath);
-                  });
+                  await renderMediaSegment(imagePath, segmentPath, duration, width, height, escapedSegmentAssPath);
                   checkpointManager.markRenderCompleted(sceneId);
                 } catch (err) {
                   checkpointManager.markRenderFailed(sceneId);
