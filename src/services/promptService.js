@@ -170,29 +170,28 @@ Scene Rules:
 `.trim();
 
 /**
- * Scene Prompt Instructions - Version 2 (Detailed Paragraph)
+ * Scene Prompt Instructions - Version 2 (Detailed Freeze-Frame Paragraph)
  */
 export const SCENE_PROMPT_VERSION_TWO = `
-*For each shot, incorporate ALL of the following elements into one flowing, descriptive paragraph:*
+*For each image, incorporate ALL of the following visual elements into one flowing, highly descriptive paragraph:*
 
-- Scene number and shot number
-- Camera angle (Choose the best angle for the narrative: wide establishing shot, medium shot, over-the-shoulder, bird's eye view, etc. Avoid using close-ups unless emotionally necessary)
-- Camera movement (e.g., static, pan, tilt, dolly, tracking, handheld, crane)
-- Subject/characters in frame (with brief descriptions)
-- Action or activity occurring
-- Lighting conditions (e.g., natural light, dramatic, soft, high-key, low-key)
-- Setting/location details
-- Mood or tone (e.g., tense, romantic, mysterious, energetic)
-- Relevant props or background elements
-- Character wardrobe/costume details
-- Dialogue, background music, or sound effects (if applicable)
-- Duration or timing (if applicable)
+- Main Subject (WHO): Exactly who or what is visible. Be specific (e.g., "a 1920s detective", "a weathered wooden door").
+- Current Action (WHAT): Describe ONLY the specific, physical action occurring precisely at this moment (e.g., "pushing open a creaky door", "holding a smoking flare"). Do not describe implied or past/future actions.
+- Location & Architecture (WHERE): The specific setting details (e.g., "a dimly lit abandoned hallway", "a neon-lit cyberpunk alleyway").
+- Time & Lighting (WHEN): Time of day, weather, and specific lighting (e.g., "golden hour sunlight filtering through dust", "harsh fluorescent overhead lighting").
+- Emotion & Body Language (HOW): Facial expressions, posture, and muscle tension (e.g., "eyes wide with terror", "slumped in exhaustion").
+- Camera Framing: Decide the best still-image framing (e.g., close-up, medium shot, wide shot, bird's-eye view, low-angle). NO camera movements (no pan, dolly, etc).
+- Visual Details: Highly concrete semantic details (e.g., dust particles, rain, fog, fire embers, coarse wool, rain-slicked pavement).
+
+*Critical Exclusions & Anti-Patterns:*
+- NO generic adjectives or filler phrases (do not use: "cinematic", "epic", "masterpiece", "award winning", "high quality"). Rely on semantic visual descriptions instead.
+- NO video-centric metadata: NO camera movements, NO audio, NO music, NO dialogue, NO durations.
+- NO scene/shot numbering prefixes (e.g., do not write "Scene 1, Shot 1:").
+- NO abstract storytelling or summaries. Describe only what is physically visible in the freeze-frame.
 
 *Required Format:*
-
-*Scene [X], Shot [Y]:* [Complete description incorporating all relevant attributes from the list above in a single, cohesive paragraph that reads naturally and provides a complete visual and auditory picture of the shot]
+[A single, highly detailed, visually concrete paragraph describing exactly what is visible in the frame, reading like a professional storyboard artist's instruction.]
 
 *Example:*
-
-*Scene 1, Shot 1:* Wide shot of a dimly lit coffee shop interior at dusk, with warm amber lighting from overhead pendant lamps casting soft shadows across wooden tables. The camera slowly dollies forward toward a woman in her 30s wearing a gray cardigan and jeans, sitting alone at a corner table, staring pensively out the window. The mood is melancholic and contemplative. Visible props include a half-empty coffee cup, an open laptop with a blue screen glow, and rain-streaked windows in the background. Soft jazz piano music plays faintly in the background, mixed with the ambient sound of rain. Duration: 8 seconds.
+Low-angle medium shot of a firefighter carrying an unconscious child through thick black smoke. The firefighter's face is obscured by a soot-stained mask, their shoulders hunched against the heat. Embers drift heavily through the air like fireflies, illuminated by the harsh, pulsing orange glow of a collapsing ceiling. Puddles of water on the cracked tile floor reflect the surrounding flames.
 `.trim();

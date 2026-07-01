@@ -499,15 +499,14 @@ IMPORTANT: The character reference images provided to the image model are APPEAR
     }
 
     consistencyInstructions = `
-VISUAL CONSISTENCY RULES (MANDATORY — apply to EVERY prompt):
+VISUAL CONSISTENCY BOUNDARIES:
 ${visualSuggestions ? `- User Visual Style Note: ${visualSuggestions}` : ""}
 - Narrative Synopsis: ${synopsis}
-- Art Style: ${artStyle} (Strictly follow this style)
-- Color Palette: ${colorPalette} (Lighting and atmosphere)
-- Environment: ${environmentSignature}
-- Cinematic Specs: ${cinematicSpecs}
-- Technical: Choose the most natural shot type for this story beat (wide establishing, medium, over-the-shoulder, aerial, insert, etc.). 8K, HDR. STRICTLY NO TEXT OR LETTERS IN THE IMAGE.
-- Coherence: Every image must look like it belongs to the same high-budget ${artStyle} production.`.trim();
+- Art Style: ${artStyle}
+- Color Palette: ${colorPalette}
+- General Environment Bound: ${environmentSignature}
+- Technical: 8K, HDR. STRICTLY NO TEXT OR LETTERS IN THE IMAGE.
+- Reminder: These boundaries ensure visual coherence, but your main focus must be strictly on illustrating the NARRATION ANCHOR below, not summarizing the general environment or story.`.trim();
   }
 
   // ── Step 2.5: Pre-analyze scene continuity for wardrobe consistency ─────────
@@ -567,7 +566,7 @@ OUTPUT FORMAT — Return STRICT valid JSON mapping each chunk index to an outfit
       wardrobeInstruction = `\nWARDROBE INSTRUCTIONS FOR THIS SCENE:\n${outfitContexts[i]}\nIMPORTANT: You must incorporate these exact clothing details into your prompt if the character is visible.`;
     }
 
-    const singlePrompt = `You are a world-class Cinematic Art Director and Storyboard Supervisor.
+    const singlePrompt = `You are a world-class Storyboard Artist.
 
 ${consistencyInstructions}
 
@@ -578,23 +577,24 @@ ${SCENE_PROMPT_VERSION_TWO}
 NARRATION ANCHOR — this is the exact sentence being SPOKEN when this image appears on screen:
 "${openingSentence}"
 
-Full narration chunk (for context only):
+Full narration chunk (for context only, do not describe anything here if it's not in the anchor):
 "${chunk.slice(0, 500)}"
 
-TASK: Write ONE cinematic image-generation prompt for this exact spoken moment.
+TASK: Write ONE image-generation prompt for the exact spoken moment of the NARRATION ANCHOR.
 
 Critical Rules:
-- The prompt describes a FREEZE-FRAME from a high-budget film — single moment, no motion blur descriptions.
-- Determine naturally from the narration: does a specific named character physically appear in this shot, or is it a wide environment/object/action shot? NOT every scene needs a character in frame.
-- If a character IS in the scene, describe their PHYSICAL ACTIONS, EXPRESSION, and POSE for this specific moment. DO NOT describe the reference image itself — that is handled separately for likeness matching.
-- If the scene is about an environment, object, or abstract moment — write it as such. No need to force a character into frame.
-- Choose the shot type that best serves the emotional and narrative beat — wide, medium, two-shot, POV, insert, overhead, etc. Avoid defaulting to close-ups.
-- Specify: chosen shot type, subject, lighting, atmosphere, lens, mood.
+- The prompt MUST describe ONLY what is physically happening during the NARRATION ANCHOR. Ignore the rest of the chunk if it depicts a different moment.
+- The prompt describes a FREEZE-FRAME — single moment, no motion blur descriptions.
+- Determine naturally from the anchor: does a specific named character physically appear in this shot, or is it an environment/object shot?
+- If a character IS in the scene, describe their PHYSICAL ACTIONS, EXPRESSION, and POSE for this specific moment. DO NOT describe the reference image itself.
+- If the scene is about an environment or object, write it as such. No need to force a character into frame.
+- Choose a framing (close-up, medium, wide, etc.) that best fits the anchor. NO camera movement descriptions.
+- Describe WHAT is visible, not the implied meaning. Use concrete semantic details (e.g., textures, lighting, dust).
 - STRICTLY NO text, captions, subtitles, or letters in the image.
 
 OUTPUT FORMAT — Return STRICT valid JSON:
 {
-  "prompt": "The detailed cinematic prompt string (environment, action, lighting, mood, shot type)",
+  "prompt": "The detailed visual prompt string (subject, action, location, lighting, emotion, framing, details)",
   "charactersInScene": ["list ONLY character IDs from the CHARACTER ROSTER above that physically appear in this specific shot. Use [] if no named character is in frame."]
 }`;
 
