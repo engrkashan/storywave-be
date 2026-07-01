@@ -889,11 +889,12 @@ async function _runWorkflow({
             const isVertical = currentRatio === "9:16";
             const width = isVertical ? 1080 : 1920;
             const height = isVertical ? 1920 : 1080;
-            const clipDuration = actualAudioDuration / scenePrompts.length;
-
-            const assPath = path.join(workflowTempDir, `subs-${Date.now()}.ass`);
-            convertSrtToAss(srtPath, assPath, currentRatio);
-            const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+            const getSegmentRange = (index) => {
+              const startFrame = Math.round(index * (actualAudioDuration / scenePrompts.length) * 30);
+              const endFrame = Math.round((index + 1) * (actualAudioDuration / scenePrompts.length) * 30);
+              const frames = endFrame - startFrame;
+              return { startTime: startFrame / 30, duration: frames / 30 };
+            };
 
             const segmentFiles = new Array(scenePrompts.length).fill(null);
             const segmentPromises = [];
@@ -909,15 +910,25 @@ async function _runWorkflow({
                   return;
                 }
 
+                const { startTime, duration } = getSegmentRange(i);
+                
+                const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
+                convertSrtToAss(srtPath, segmentAssPath, currentRatio, startTime, duration);
+                const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+
                 checkpointManager.markRenderRunning(sceneId);
                 try {
                   await enqueueSegmentRender(async () => {
-                    await renderMediaSegment(imagePath, segmentPath, clipDuration, width, height, escapedAssPath);
+                    await renderMediaSegment(imagePath, segmentPath, duration, width, height, escapedSegmentAssPath);
                   });
                   checkpointManager.markRenderCompleted(sceneId);
                 } catch (err) {
                   checkpointManager.markRenderFailed(sceneId);
                   throw err;
+                } finally {
+                  if (fs.existsSync(segmentAssPath)) {
+                    fs.unlinkSync(segmentAssPath);
+                  }
                 }
               })();
 
@@ -946,7 +957,7 @@ async function _runWorkflow({
               logger.info(`Step 5: Stitching video for ${currentRatio}...`);
               
               const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
-              await concatSegments(segmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, assPath);
+              await concatSegments(segmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null);
               stopStitchTimer?.();
             }
 

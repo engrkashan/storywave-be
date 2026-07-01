@@ -54,7 +54,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
     `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase`,
     `crop=${width}:${height}`,
     `setsar=1`,
-    `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}`,
+    `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}`,
     `subtitles='${escapedAssPath}'[vfinal]`
   ].join(",");
 
@@ -112,7 +112,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   }
 }
 
-export function convertSrtToAss(srtPath, assPath, aspectRatio = "16:9") {
+export function convertSrtToAss(srtPath, assPath, aspectRatio = "16:9", startTime = 0, duration = null) {
   const perf = getPerfSession();
   const stopTimer = perf?.start("subtitle", "SRT to ASS Conversion", { srtPath });
   const srtContent = fs.readFileSync(srtPath, "utf8");
@@ -167,8 +167,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     const chunkDuration = totalDuration / chunks.length;
 
     chunks.forEach((chunk, index) => {
-      const s = startSec + index * chunkDuration;
-      const e = s + chunkDuration;
+      let s = startSec + index * chunkDuration;
+      let e = s + chunkDuration;
+
+      if (duration !== null) {
+        const endTime = startTime + duration;
+        if (e <= startTime || s >= endTime) return;
+        s = Math.max(0, s - startTime);
+        e = Math.min(duration, e - startTime);
+      }
 
       ass += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${chunk}\n`;
     });
@@ -380,7 +387,7 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
     const totalFrames = Math.ceil(duration * FPS);
 
     // zoompan now receives 1 frame, and outputs totalFrames frames (d=totalFrames)
-    const zoomFilter = `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}`;
+    const zoomFilter = `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}`;
     const filter = `${commonScale},${zoomFilter},fps=30${subFilter}`;
 
     args = [
