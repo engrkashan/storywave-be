@@ -474,7 +474,6 @@ export async function concatSegments(segmentFiles, audioPath, outputPath, audioD
     "-c:v", "copy",         // ✅ Bitstream copy — no re-encode, instant
     "-c:a", "aac",
     "-b:a", "192k",
-    "-shortest",
     "-t", String(audioDuration),
     "-threads", String(config.workflow.ffmpegThreads),
     outputPath
