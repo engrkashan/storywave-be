@@ -46,7 +46,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
 
   // Cinematic Zoom Pulse calculations
   const totalFrames = Math.ceil(audioDuration * FPS);
-  const cycleFrames = totalFrames; // dynamically scale in/out cycle to clip duration
+  const cycleFrames = ZOOM_CYCLE_SECONDS * FPS; // fixed 12s cycle (6s in, 6s out)
   const center = (1 + MAX_ZOOM_LEVEL) / 2;
   const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
 
@@ -391,7 +391,7 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
     ];
   } else {
     const totalFrames = Math.ceil(duration * FPS);
-    const cycleFrames = totalFrames; // dynamically scale in/out cycle to clip duration
+    const cycleFrames = ZOOM_CYCLE_SECONDS * FPS; // fixed 12s cycle (6s in, 6s out)
     const center = (1 + MAX_ZOOM_LEVEL) / 2;
     const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
 
