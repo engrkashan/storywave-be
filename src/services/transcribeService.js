@@ -20,20 +20,22 @@ async function splitAudioFile(audioPath, outputDir) {
       if (err) return reject(err);
 
       const duration = metadata.format.duration; // seconds
-      const maxChunkDuration = 480; // ≈8 minutes (~24MB for MP3)
+      const maxChunkDuration = 600; // 10 minutes (~19.2MB for 16kHz mono WAV)
       const numChunks = Math.ceil(duration / maxChunkDuration);
       const chunkPaths = [];
 
       let processed = 0;
       for (let i = 0; i < numChunks; i++) {
         const startTime = i * maxChunkDuration;
-        const outputPath = path.join(outputDir, `chunk_${i + 1}.mp3`);
+        const outputPath = path.join(outputDir, `chunk_${i + 1}.wav`);
         chunkPaths.push(outputPath);
 
         ffmpeg(audioPath)
           .setStartTime(startTime)
           .setDuration(maxChunkDuration)
-          .audioCodec("libmp3lame")
+          .audioChannels(1)
+          .audioFrequency(16000)
+          .audioCodec("pcm_s16le")
           .output(outputPath)
           .on("end", () => {
             processed++;
@@ -84,7 +86,7 @@ function normalizeTranscript(data, provider = "whisper") {
  * Merges multiple normalized JSON transcripts into a single coherent timeline.
  * Adds the appropriate time offset to each chunk's words.
  */
-function mergeTranscript(chunks, maxChunkDuration = 480) {
+function mergeTranscript(chunks, maxChunkDuration = 600) {
   let masterWords = [];
   
   for (let i = 0; i < chunks.length; i++) {
@@ -120,7 +122,7 @@ export async function transcribeWithTimestamps(audioPath) {
     const stats = fs.statSync(audioPath);
 
     let rawChunks = [];
-    const maxChunkDuration = 480;
+    const maxChunkDuration = 600;
 
     if (stats.size > 24 * 1024 * 1024) {
       logger.info("⚙️ Large file detected. Splitting into smaller chunks...");

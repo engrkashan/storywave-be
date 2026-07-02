@@ -1,6 +1,7 @@
 import { extractFromUrl, transcribeVideo } from "./inputService.js";
 import { createLogger } from "../utils/logger.js";
 import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 import { SCENE_PROMPT_VERSION_ONE, SCENE_PROMPT_VERSION_TWO } from "./promptService.js";
 
 
@@ -469,11 +470,10 @@ export async function generateStory({
 }
 
 /**
- * Break story into visual scene prompts for image/video generation
+ * Break story into visual scene prompts for image/video generation using the Story Bible
  */
-export async function generateScenePrompts(storyScript, count = 5, metadata = null, visualSuggestions = null) {
+export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null) {
   // ── Step 1: Mechanically split the script into N equal word chunks ──────────
-  // Each image represents the exact moment that chunk is being narrated.
   const words = storyScript.split(/\s+/).filter(Boolean);
   const chunkSize = Math.ceil(words.length / count);
   const chunks = [];
@@ -482,95 +482,90 @@ export async function generateScenePrompts(storyScript, count = 5, metadata = nu
     if (slice.trim()) chunks.push(slice);
   }
 
-  // ── Step 2: Build visual consistency context from metadata ──────────────────
-  let consistencyInstructions = "";
   let characterRoster = "";
-  if (metadata) {
-    const { artStyle, colorPalette, environmentSignature, cinematicSpecs, synopsis, characters } = metadata;
-    
-    // Build a character ID map so the LLM can tag scenes correctly
-    if (characters && characters.length > 0) {
-      characterRoster = `
-CHARACTER ROSTER (for reference — only tag a character if they naturally appear in this scene):
-${characters.map(c => `- ID: "${c.id}" | Name: ${c.name} | ${c.sex || ""}, ${c.age || ""}, ${c.color || ""} | Appearance: ${c.appearance?.slice(0, 120) || ""}`).join("\n")}
-
-IMPORTANT: The character reference images provided to the image model are APPEARANCE/LIKENESS references only — they show what the character looks like (face, skin, hair). The character's ACTION and POSE in the generated image must come entirely from the scene description you write. Do NOT describe the reference image pose.
+  if (storyBible?.characters?.length > 0) {
+    characterRoster = `
+CHARACTER ROSTER (Use exactly these traits to maintain identical facial identity and build):
+${storyBible.characters.map(c => `- ID: "${c.id}" | Name: ${c.name} | Appearance: ${c.appearance}`).join("\n")}
 `;
-    }
-
-    consistencyInstructions = `
-VISUAL CONSISTENCY BOUNDARIES:
-${visualSuggestions ? `- User Visual Style Note: ${visualSuggestions}` : ""}
-- Narrative Synopsis: ${synopsis}
-- Art Style: ${artStyle}
-- Color Palette: ${colorPalette}
-- General Environment Bound: ${environmentSignature}
-- Technical: 8K, HDR. STRICTLY NO TEXT OR LETTERS IN THE IMAGE.
-- Reminder: These boundaries ensure visual coherence, but your main focus must be strictly on illustrating the NARRATION ANCHOR below, not summarizing the general environment or story.`.trim();
   }
 
-  // ── Step 2.5: Pre-analyze scene continuity for wardrobe consistency ─────────
-  let outfitContexts = new Array(chunks.length).fill("");
-  if (metadata?.characters && metadata.characters.length > 0) {
-    const continuityPrompt = `You are a Costume Designer and Script Supervisor.
-    
-Analyze the following sequential story chunks. Your job is to determine the wardrobe/outfits for the characters across these chunks.
-- Group consecutive chunks that happen in the same continuous scene (same time and location).
-- For each continuous scene, define the EXACT clothing worn by each character. The clothing MUST stay consistent across all chunks within that continuous scene.
-- If the story jumps to a new location or a new day, logically determine if the outfit should change or stay the same.
+  // ── Step 2.5: Dynamic Scene State Analysis ─────────
+  let sceneStates = new Array(chunks.length).fill({});
+  if (storyBible) {
+    const statePrompt = `You are a Script Supervisor and Continuity Director.
+Analyze the following sequential story chunks. Track the dynamic visual state of the scenes across the timeline.
 
-${characterRoster}
+For each chunk, determine:
+1. Clothing/Wardrobe for any present characters (e.g., "Brenda is wearing her blue denim jacket. Sean is wearing a black hoodie.")
+2. Time of Day & Weather (e.g., "Nighttime, raining")
+3. Emotional Tone (e.g., "High tension, fearful")
+4. Environment State (e.g., "The living room is messy", "The window is broken")
+
+STORY BIBLE (Base State):
+${JSON.stringify(storyBible, null, 2)}
 
 STORY CHUNKS:
 ${chunks.map((chunk, i) => `[CHUNK ${i}]: ${chunk.slice(0, 300)}...`).join("\n\n")}
 
-OUTPUT FORMAT — Return STRICT valid JSON mapping each chunk index to an outfit description string:
+OUTPUT FORMAT — Return STRICT valid JSON mapping each chunk index to a state description:
 {
-  "outfits": [
+  "states": [
     {
       "chunkIndex": 0,
-      "outfitContext": "Ethan is wearing a tailored charcoal suit with a crisp white shirt, slightly wrinkled from travel. Sarah is wearing a burgundy trench coat over a black turtleneck."
+      "clothing": "Brenda is wearing a blue denim jacket.",
+      "weather_time": "Late afternoon, sunny.",
+      "tone": "Calm, reflective",
+      "environment": "Normal"
     }
   ]
 }`;
 
     try {
-      logger.info("👕 Pre-analyzing script for wardrobe continuity...");
+      logger.info("🎭 Analyzing dynamic scene states and continuity...");
       const res = await openai.chat.completions.create({
         model: "gpt-4o-mini",
-        messages: [{ role: "user", content: continuityPrompt }],
+        messages: [{ role: "user", content: statePrompt }],
         temperature: 0.2,
         response_format: { type: "json_object" },
       });
       const parsed = JSON.parse(res.choices[0].message.content.trim());
-      if (parsed.outfits && Array.isArray(parsed.outfits)) {
-        parsed.outfits.forEach(o => {
-          if (o.chunkIndex >= 0 && o.chunkIndex < chunks.length) {
-            outfitContexts[o.chunkIndex] = o.outfitContext;
+      if (parsed.states && Array.isArray(parsed.states)) {
+        parsed.states.forEach(s => {
+          if (s.chunkIndex >= 0 && s.chunkIndex < chunks.length) {
+            sceneStates[s.chunkIndex] = s;
           }
         });
       }
-      logger.info("✅ Wardrobe continuity analysis complete.");
+      logger.info("✅ Scene state analysis complete.");
     } catch (err) {
-      logger.warn(`⚠️ Wardrobe continuity analysis failed: ${err.message}. Proceeding without strict wardrobe contexts.`);
+      logger.warn(`⚠️ Scene state analysis failed: ${err.message}. Proceeding without strict dynamic tracking.`);
     }
   }
 
-  // ── Step 3: Generate one tight prompt per chunk, anchored to opening line ───
+  // ── Step 3: Generate one tight prompt per chunk using Gemini ───
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY });
+  
   const scenePromises = chunks.map(async (chunk, i) => {
-    // The opening sentence is literally what the narrator says when this image appears
     const openingSentence = (chunk.match(/[^.!?]+[.!?]/)?.[0] ?? chunk.slice(0, 150)).trim();
-
-    let wardrobeInstruction = "";
-    if (outfitContexts[i]) {
-      wardrobeInstruction = `\nWARDROBE INSTRUCTIONS FOR THIS SCENE:\n${outfitContexts[i]}\nIMPORTANT: You must incorporate these exact clothing details into your prompt if the character is visible.`;
-    }
+    const state = sceneStates[i] || {};
+    
+    let dynamicStateInstruction = `
+DYNAMIC SCENE STATE FOR THIS CHUNK:
+- Clothing: ${state.clothing || "Default base clothing from Story Bible"}
+- Time/Weather: ${state.weather_time || "Consistent with previous"}
+- Tone: ${state.tone || "Neutral"}
+- Environment: ${state.environment || "Consistent with Story Bible"}
+`;
 
     const singlePrompt = `You are a world-class Storyboard Artist.
 
-${consistencyInstructions}
+STORY BIBLE (Static Persistence Rules):
+${JSON.stringify(storyBible, null, 2)}
 
-${characterRoster}${wardrobeInstruction}
+${characterRoster}
+${dynamicStateInstruction}
+${visualSuggestions ? `User Visual Style Note: ${visualSuggestions}` : ""}
 
 ${SCENE_PROMPT_VERSION_TWO}
 
@@ -582,16 +577,6 @@ Full narration chunk (for context only, do not describe anything here if it's no
 
 TASK: Write ONE image-generation prompt for the exact spoken moment of the NARRATION ANCHOR.
 
-Critical Rules:
-- The prompt MUST describe ONLY what is physically happening during the NARRATION ANCHOR. Ignore the rest of the chunk if it depicts a different moment.
-- The prompt describes a FREEZE-FRAME — single moment, no motion blur descriptions.
-- Determine naturally from the anchor: does a specific named character physically appear in this shot, or is it an environment/object shot?
-- If a character IS in the scene, describe their PHYSICAL ACTIONS, EXPRESSION, and POSE for this specific moment. DO NOT describe the reference image itself.
-- If the scene is about an environment or object, write it as such. No need to force a character into frame.
-- Choose a framing (close-up, medium, wide, etc.) that best fits the anchor. NO camera movement descriptions.
-- Describe WHAT is visible, not the implied meaning. Use concrete semantic details (e.g., textures, lighting, dust).
-- STRICTLY NO text, captions, subtitles, or letters in the image.
-
 OUTPUT FORMAT — Return STRICT valid JSON:
 {
   "prompt": "The detailed visual prompt string (subject, action, location, lighting, emotion, framing, details)",
@@ -599,17 +584,15 @@ OUTPUT FORMAT — Return STRICT valid JSON:
 }`;
 
     try {
-      const res = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: singlePrompt }],
-        temperature: 0.8,
-        max_tokens: 400,
-        response_format: { type: "json_object" },
+      const res = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [{ role: "user", parts: [{ text: singlePrompt }] }],
+        generationConfig: { responseMimeType: "application/json" }
       });
       
-      const rawText = res.choices[0].message.content.trim();
-      const parsed = JSON.parse(rawText);
-      const charIds = (parsed.charactersInScene || []).filter(id => typeof id === "string" && id.startsWith("char_"));
+      const rawText = res.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+      const parsed = JSON.parse(rawText.replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\`\`\`\s*$/i, "").trim());
+      const charIds = (parsed.charactersInScene || []).filter(id => typeof id === "string");
       
       logger.info(`✅ Scene ${i + 1}/${chunks.length}: "${parsed.prompt.slice(0, 80)}..." | chars: [${charIds.join(", ") || "none"}]`);
       return { prompt: parsed.prompt, charactersInScene: charIds, narration: chunk };

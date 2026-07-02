@@ -28,6 +28,7 @@ import {
   extractStoryMetadata,
   generateMasterPrompts,
   generateCommonVisualPrompt,
+  analyzeReferenceImage,
 } from "./promptService.js";
 import { createLogger, loggingStorage } from "../utils/logger.js";
 
@@ -180,7 +181,8 @@ async function uploadVideoToCloud(videoPath, filename) {
     resource_type: "video",
     folder: "videos",
     public_id: path.parse(filename).name,
-    chunk_size: 6000000,
+    chunk_size: 20000000, // 20 MB chunks for faster large uploads
+    timeout: 3600000, // 1 hour timeout to prevent aborting huge videos
     overwrite: true,
   });
 
@@ -396,7 +398,40 @@ async function _runWorkflow({
     if (shouldGenerateImage) {
       logger.info("Step 2.1: Extracting story metadata and master prompts...");
       const stopMetaTimer = perf?.start("metadata", "Extract metadata & master prompts");
-      storyMetadata = await extractStoryMetadata(script);
+      
+      if (userCharacterReferenceBase64) {
+        logger.info(
+          "User provided a character reference image. Uploading to Cloudinary...",
+        );
+        try {
+          const upload = await cloudinary.uploader.upload(
+            userCharacterReferenceBase64,
+            {
+              folder: "character-references",
+              resource_type: "image",
+              public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
+              overwrite: true,
+            },
+          );
+          characterReferenceUrl = upload.secure_url;
+          logger.info(
+            `✅ User Character Reference URL: ${characterReferenceUrl}`,
+          );
+        } catch (err) {
+          logger.error(
+            `⚠️ Failed to upload user character reference: ${err.message}`,
+          );
+          characterReferenceUrl = userCharacterReferenceBase64; // Fallback to inline base64 if Cloudinary fails
+        }
+      }
+
+      let referenceTraits = null;
+      if (characterReferenceUrl && characterReferenceUrl.startsWith("http")) {
+        logger.info("Extracting physical traits from reference image...");
+        referenceTraits = await analyzeReferenceImage(characterReferenceUrl);
+      }
+
+      storyMetadata = await extractStoryMetadata(script, referenceTraits);
       masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
       commonPrompt = generateCommonVisualPrompt(storyMetadata);
 
@@ -470,29 +505,6 @@ async function _runWorkflow({
       await checkCancelled(workflow.id); // ✔️ Cancellation check
 
       if (userCharacterReferenceBase64) {
-        logger.info(
-          "User provided a character reference image. Uploading to Cloudinary...",
-        );
-        try {
-          const upload = await cloudinary.uploader.upload(
-            userCharacterReferenceBase64,
-            {
-              folder: "character-references",
-              resource_type: "image",
-              public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
-              overwrite: true,
-            },
-          );
-          characterReferenceUrl = upload.secure_url;
-          logger.info(
-            `✅ User Character Reference URL: ${characterReferenceUrl}`,
-          );
-        } catch (err) {
-          logger.error(
-            `⚠️ Failed to upload user character reference: ${err.message}`,
-          );
-          characterReferenceUrl = userCharacterReferenceBase64; // Fallback to inline base64 if Cloudinary fails
-        }
         logger.info(
           "Skipping Style Reference generation since character reference is provided.",
         );

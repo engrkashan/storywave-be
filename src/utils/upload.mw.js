@@ -56,6 +56,6 @@ export const mediaUpload = multer({
   }),
   fileFilter,
   limits: {
-    fileSize: 1024 * 1024 * 1024,
+    fileSize: 5 * 1024 * 1024 * 1024, // 5 GB limit
   },
 });
