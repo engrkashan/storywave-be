@@ -39,10 +39,6 @@ const OPENAI_VALID_VOICES = new Set([
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Remove markdown formatting and bracketed/parenthetical tags from a script.
- * Pass preserveEmotions=true for Fish Audio to keep its emotion tags.
- */
 function cleanScript(script, preserveEmotions = false) {
   let cleaned = script
     .replace(/\*\*/g, "")
@@ -58,9 +54,6 @@ function cleanScript(script, preserveEmotions = false) {
   return cleaned.trim();
 }
 
-/**
- * Split text into sentence-boundary chunks of at most maxChunkSize characters.
- */
 function chunkBySentences(text, maxChunkSize = 300) {
   const chunks = [];
   const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
@@ -89,9 +82,6 @@ const ELEVENLABS_PRESETS = new Set([
   "CwhRBWXzGAHq8TQ4Fs17", "EXAVITQu4vr4xnSDxMaL", "FGY2WhTYpPnrIDTdsKH5", "IKne3meq5aSn9XLyUdCD", "JBFqnCBsd6RMkjVDRZzb", "N2lVS1w4EtoT3dr4eOWO", "SAz9YHcvj6GT2YYXdXww", "SOYHLrjzK2X1ezoPC6cr", "TX3LPaxmHKxFdv7VOQHJ", "Xb7hH8MSUJpSbSDYk0k2", "XrExE9yKIg1WjnnlVkGX", "bIHbv24MWmeRgasZH58o", "cgSgspJ2msm6clMCkdW9", "cjVigY5qzO86Huf0OWal", "hpp4J3VqNfWAUOO0d1Us", "iP95p4xoKVk53GoZ742B", "nPczCjzI2devNBz1zQrb", "onwK4e9ZLuTAKqWW03F9", "pFZP5JQG7iQjIQuC4Bku", "pNInz6obpgDQGcFmaJgB", "pqHfZKP75CvOlQylNhV4", "21m00Tcm4TlvDq8ikWAM"
 ]);
 
-/**
- * ElevenLabs TTS — uses the ElevenLabs voice ID directly, no OpenAI validation.
- */
 async function ttsElevenLabs(text, voiceId) {
   try {
     logger.info(`[ElevenLabs] Converting text with voice ID: ${voiceId}`);
@@ -113,9 +103,6 @@ async function ttsElevenLabs(text, voiceId) {
   }
 }
 
-/**
- * ElevenLabs Sound Effects — generates background SFX audio.
- */
 async function sfxElevenLabs(text) {
   try {
     logger.info(`[ElevenLabs SFX] Generating: "${text}"`);
@@ -135,9 +122,6 @@ async function sfxElevenLabs(text) {
   }
 }
 
-/**
- * Fish Audio TTS — uses Fish Audio reference_id directly, no OpenAI validation.
- */
 async function ttsFishAudio(text, referenceId) {
   try {
     logger.info(
@@ -153,10 +137,6 @@ async function ttsFishAudio(text, referenceId) {
   }
 }
 
-/**
- * OpenAI TTS — validates voice against allowed enum BEFORE calling the API.
- * Never call this with an ElevenLabs or Fish voice ID.
- */
 async function ttsOpenAI(text, voice) {
   let validVoice = typeof voice === "string" ? voice : voice?.id || "onyx";
 
@@ -176,21 +156,10 @@ async function ttsOpenAI(text, voice) {
 
 // ─── Main TTS Generator ───────────────────────────────────────────────────────
 
-/**
- * Generate a voiceover for the given script using the correct provider.
- *
- * voiceObj shape: { id: string, provider: "elevenlabs" | "fish" | "openai", label: string }
- *
- * Routing rules (strict, no cross-provider leakage):
- *   provider === "elevenlabs" → ttsElevenLabs (+ sfxElevenLabs for [SFX] tags)
- *   provider === "fish"       → ttsFishAudio
- *   anything else             → ttsOpenAI (with voice enum validation)
- */
 export async function generateVoiceover(script, filename, voiceObj, tempDir) {
   const localPath = path.join(tempDir, filename);
   fs.mkdirSync(tempDir, { recursive: true });
 
-  // ── Intake validation: log full voiceObj to catch any upstream corruption ──
   logger.info(
     `[generateVoiceover] Raw voiceObj received: ${JSON.stringify(voiceObj)}`,
   );
@@ -205,11 +174,9 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
     voiceObj = { id: "nova", provider: "openai", label: "Nova (default)" };
   }
 
-  // ── Determine provider ──────────────────────────────────────────────────────
   let rawProvider = voiceObj?.provider ?? "";
   let voiceId = voiceObj?.id ?? voiceObj;
 
-  // Auto-detect provider if missing or if voiceObj is just a string
   if (!rawProvider && typeof voiceId === "string") {
     if (OPENAI_VALID_VOICES.has(voiceId.toLowerCase())) {
       rawProvider = "openai";
@@ -241,15 +208,11 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
       ? "Fish Audio S1"
       : "OpenAI";
 
-  // ── Final routing guard: removed since ttsOpenAI handles fallbacks gracefully ────────────
-
   logger.info(
     `🎙️ [generateVoiceover] provider="${providerLabel}" | ` +
-      `raw="${rawProvider}" | finalVoiceId="${finalVoiceId}" | label="${voiceObj?.label}"`,
+    `raw="${rawProvider}" | finalVoiceId="${finalVoiceId}" | label="${voiceObj?.label}"`,
   );
 
-  // ── Build segment list ───────────────────────────────────────────────────────
-  // Split script into text + SFX segments (handles [tag] and (tag)) for ALL providers
   const segments = [];
 
   const regex = /\[(.*?)\]|\((.*?)\)/g;
@@ -298,61 +261,76 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
   let currentDelayMs = 0;
 
   try {
-    for (let i = 0; i < segments.length; i++) {
-      const segment = segments[i];
-      if (!segment.content || !segment.content.trim()) continue; // Safety check
+    // Dependency-free concurrency pool
+    async function mapConcurrent(items, limit, asyncFn) {
+      const results = new Array(items.length);
+      let index = 0;
+      const workers = new Array(limit).fill(0).map(async () => {
+        while (index < items.length) {
+          const currentIndex = index++;
+          results[currentIndex] = await asyncFn(items[currentIndex], currentIndex);
+        }
+      });
+      await Promise.all(workers);
+      return results;
+    }
 
-      logger.info(`  [${i + 1}/${segments.length}] type=${segment.type}`);
+    logger.info(`🚀 Starting concurrent TTS generation (limit: 5)...`);
+    const resolvedSegments = await mapConcurrent(segments, 5, async (segment, i) => {
+      if (!segment.content || !segment.content.trim()) return null; // Safety check
 
-      // ── SFX segment (ElevenLabs only) ──────────────────────────────────────
-      if (segment.type === "sfx") {
-        const sfxBuf = await sfxElevenLabs(segment.content);
-        const sfxPath = path.join(tempDir, `sfx_${Date.now()}_part_${i}.mp3`);
-        fs.writeFileSync(sfxPath, sfxBuf);
+      logger.info(`  [${i + 1}/${segments.length}] type=${segment.type} (Dispatched)`);
 
-        // Start SFX exactly where we are in the narration timeline
-        sfxLayers.push({ file: sfxPath, delayMs: currentDelayMs });
-        logger.info(
-          `  🎵 SFX queued at ${(currentDelayMs / 1000).toFixed(2)}s: "${segment.content}"`,
+      try {
+        // ── SFX segment (ElevenLabs only) ──────────────────────────────────────
+        if (segment.type === "sfx") {
+          const sfxBuf = await sfxElevenLabs(segment.content);
+          const sfxPath = path.join(tempDir, `sfx_${Date.now()}_part_${i}.mp3`);
+          fs.writeFileSync(sfxPath, sfxBuf);
+          return { type: "sfx", path: sfxPath, content: segment.content };
+        }
+
+        // ── Text segment ────────────────────────────────────────────────────────
+        let buffer;
+        if (isElevenLabs) {
+          buffer = await ttsElevenLabs(segment.content, finalVoiceId);
+        } else if (isFish) {
+          buffer = await ttsFishAudio(segment.content, finalVoiceId);
+        } else {
+          buffer = await ttsOpenAI(segment.content, finalVoiceId);
+        }
+
+        const chunkPath = path.join(
+          tempDir,
+          `${path.parse(filename).name}_part_${i}.mp3`
         );
-        continue;
+        fs.writeFileSync(chunkPath, buffer);
+
+        let durationMs = 0;
+        if (isElevenLabs) {
+          const dur = await getAudioDuration(chunkPath);
+          durationMs = dur * 1000;
+        }
+        return { type: "text", path: chunkPath, durationMs };
+      } catch (err) {
+        logger.error(`❌ Error generating chunk ${i + 1}: ${err.message}`);
+        throw err;
       }
+    });
 
-      // ── Text segment ────────────────────────────────────────────────────────
+    // ── Sequential timeline calculation for precise SFX layering ─────────────
+    for (const res of resolvedSegments) {
+      if (!res) continue;
 
-      let buffer;
-
-      if (isElevenLabs) {
-        // ✅ ElevenLabs provider → ElevenLabs API only
-        logger.info(
-          `  [TTS Dispatch] → ElevenLabs | voiceId="${finalVoiceId}"`,
-        );
-        buffer = await ttsElevenLabs(segment.content, finalVoiceId);
-      } else if (isFish) {
-        // ✅ Fish Audio provider → Fish Audio API only
-        logger.info(
-          `  [TTS Dispatch] → Fish Audio | referenceId="${finalVoiceId}"`,
-        );
-        buffer = await ttsFishAudio(segment.content, finalVoiceId);
-      } else {
-        // ✅ OpenAI provider → OpenAI API only (voice enum validated inside)
-        logger.info(`  [TTS Dispatch] → OpenAI | voice="${finalVoiceId}"`);
-        buffer = await ttsOpenAI(segment.content, finalVoiceId);
-      }
-
-      const chunkPath = path.join(
-        tempDir,
-        `${path.parse(filename).name}_part_${i}.mp3`,
-      );
-      fs.writeFileSync(chunkPath, buffer);
-      chunkFiles.push(chunkPath);
-
-      if (isElevenLabs) {
-        const dur = await getAudioDuration(chunkPath);
-        currentDelayMs += dur * 1000;
-        logger.info(
-          `  📏 Chunk duration: ${dur.toFixed(2)}s → timeline at ${(currentDelayMs / 1000).toFixed(2)}s`,
-        );
+      if (res.type === "sfx") {
+        sfxLayers.push({ file: res.path, delayMs: currentDelayMs });
+        logger.info(`  🎵 SFX queued at ${(currentDelayMs / 1000).toFixed(2)}s: "${res.content}"`);
+      } else if (res.type === "text") {
+        chunkFiles.push(res.path);
+        if (isElevenLabs) {
+          currentDelayMs += res.durationMs;
+          logger.info(`  📏 Chunk duration: ${(res.durationMs / 1000).toFixed(2)}s → timeline at ${(currentDelayMs / 1000).toFixed(2)}s`);
+        }
       }
     }
 
