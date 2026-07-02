@@ -21,7 +21,7 @@ import {
   generateVideoClips,
   concatSegments,
   renderMediaSegment,
-  convertSrtToAss
+  convertTranscriptToAss
 } from "./videoService.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
 import {
@@ -336,7 +336,7 @@ async function _runWorkflow({
   // Keep the session ID synced with the DB workflow ID
   perf.workflowId = workflow.id;
 
-  let srtPath = null;
+  let transcriptPath = null;
 
   try {
     // 1. Prepare input text
@@ -805,9 +805,9 @@ async function _runWorkflow({
 
       logger.info("Step 5: Generating subtitles...");
       const stopSubTimer = perf?.start("subtitle", "Transcribe Audio to Subtitles (Whisper)");
-      const srtContent = await transcribeWithTimestamps(voiceLocalPath);
-      srtPath = path.join(workflowTempDir, `subtitles-${workflow.id}.srt`);
-      fs.writeFileSync(srtPath, srtContent);
+      const transcriptContent = await transcribeWithTimestamps(voiceLocalPath);
+      transcriptPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
+      fs.writeFileSync(transcriptPath, transcriptContent);
       stopSubTimer?.();
 
       const videoResults = {};
@@ -911,7 +911,7 @@ async function _runWorkflow({
                 const { startTime, duration } = getSegmentRange(i);
                 
                 const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
-                convertSrtToAss(srtPath, segmentAssPath, currentRatio, startTime, duration);
+                convertTranscriptToAss(transcriptPath, segmentAssPath, currentRatio, startTime, duration);
                 const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
                 checkpointManager.markRenderRunning(sceneId);
@@ -972,7 +972,7 @@ async function _runWorkflow({
             if (imageResult.imageUrl) {
               mediaItems = [imageResult.imageUrl];
               const stopStitchTimer = perf?.start("video", "Stitch Single Image Video");
-              await createVideo(mediaItems[0], finalAudioLocalPath, videoPath, srtPath, currentRatio);
+              await createVideo(mediaItems[0], finalAudioLocalPath, videoPath, transcriptPath, currentRatio);
               stopStitchTimer?.();
             }
           }
@@ -1114,7 +1114,7 @@ async function _runWorkflow({
   } catch (err) {
     logger.info(`Workflow failed: ${err.message}`, "\x1b[31m");
 
-    if (srtPath && fs.existsSync(srtPath)) fs.unlinkSync(srtPath);
+    if (transcriptPath && fs.existsSync(transcriptPath)) fs.unlinkSync(transcriptPath);
     deleteTempFiles(workflowTempDir);
 
     perf?.generateReport(workflowTempDir);

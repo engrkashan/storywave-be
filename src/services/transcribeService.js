@@ -1,5 +1,3 @@
-
-
 import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
@@ -50,69 +48,65 @@ async function splitAudioFile(audioPath, outputDir) {
 
 /**
  * Transcribes a single audio file using Whisper API.
+ * Requests verbose_json with word-level timestamps.
  */
 async function transcribeChunk(chunkPath) {
   logger.info(`🎧 Transcribing: ${path.basename(chunkPath)}`);
   const result = await openai.audio.transcriptions.create({
     file: fs.createReadStream(chunkPath),
     model: "whisper-1",
-    response_format: "srt",
+    response_format: "verbose_json",
+    timestamp_granularities: ["word"],
   });
   return result;
 }
 
 /**
- * Merge multiple SRT chunks into a single coherent SRT file with fixed timestamps.
+ * Normalizes provider-specific transcript data into a standard internal format.
  */
-function mergeSRTs(srtChunks) {
-  let merged = "";
-  let offset = 0;
-
-  for (const srt of srtChunks) {
-    const lines = srt.split("\n");
-    for (let line of lines) {
-      // Adjust timestamps
-      if (line.includes("-->")) {
-        const [start, end] = line.split(" --> ");
-        const newStart = shiftTime(start, offset);
-        const newEnd = shiftTime(end, offset);
-        line = `${newStart} --> ${newEnd}`;
-      }
-      merged += line + "\n";
+function normalizeTranscript(data, provider = "whisper") {
+  if (provider === "whisper") {
+    // Whisper verbose_json format has a `words` array
+    if (!data || !data.words || !Array.isArray(data.words)) {
+      return [];
     }
-
-    // Estimate offset: last timestamp in current SRT
-    const lastTime = srt.match(/(\d{2}:\d{2}:\d{2},\d{3})/g);
-    if (lastTime && lastTime.length > 0) {
-      offset += timeToSeconds(lastTime[lastTime.length - 1]);
-    }
+    return data.words.map((w) => ({
+      word: w.word,
+      start: w.start,
+      end: w.end,
+    }));
   }
-
-  return merged.trim();
-}
-
-function timeToSeconds(timeStr) {
-  const [h, m, s] = timeStr.replace(",", ":").split(":").map(Number);
-  return h * 3600 + m * 60 + s;
-}
-
-function shiftTime(timeStr, offsetSec) {
-  const [h, m, sMs] = timeStr.split(":");
-  const [s, ms] = sMs.split(",");
-  let totalMs =
-    ((+h * 3600 + +m * 60 + +s + offsetSec) * 1000) + +ms;
-  const newH = Math.floor(totalMs / 3600000);
-  totalMs %= 3600000;
-  const newM = Math.floor(totalMs / 60000);
-  totalMs %= 60000;
-  const newS = Math.floor(totalMs / 1000);
-  const newMs = totalMs % 1000;
-  return `${String(newH).padStart(2, "0")}:${String(newM).padStart(2, "0")}:${String(newS).padStart(2, "0")},${String(newMs).padStart(3, "0")}`;
+  // Add other providers here later (e.g. ElevenLabs, Deepgram)
+  return [];
 }
 
 /**
- * Transcribe large audio file with timestamps (SRT format),
+ * Merges multiple normalized JSON transcripts into a single coherent timeline.
+ * Adds the appropriate time offset to each chunk's words.
+ */
+function mergeTranscript(chunks, maxChunkDuration = 480) {
+  let masterWords = [];
+  
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkWords = chunks[i];
+    const offset = i * maxChunkDuration; 
+    
+    for (const w of chunkWords) {
+      masterWords.push({
+        word: w.word,
+        start: w.start + offset,
+        end: w.end + offset
+      });
+    }
+  }
+
+  return masterWords;
+}
+
+/**
+ * Transcribe large audio file with timestamps,
  * automatically splitting if above size limit.
+ * Saves raw output for debugging and returns the normalized JSON transcript.
  */
 export async function transcribeWithTimestamps(audioPath) {
   if (!fs.existsSync(audioPath)) {
@@ -125,24 +119,35 @@ export async function transcribeWithTimestamps(audioPath) {
     const outputDir = path.join(path.dirname(audioPath), "chunks");
     const stats = fs.statSync(audioPath);
 
-    let srtChunks = [];
+    let rawChunks = [];
+    const maxChunkDuration = 480;
 
     if (stats.size > 24 * 1024 * 1024) {
       logger.info("⚙️ Large file detected. Splitting into smaller chunks...");
       const chunkPaths = await splitAudioFile(audioPath, outputDir);
       for (const chunk of chunkPaths) {
-        const srt = await transcribeChunk(chunk);
-        srtChunks.push(srt);
+        const result = await transcribeChunk(chunk);
+        rawChunks.push(result);
       }
       fs.rmSync(outputDir, { recursive: true, force: true });
     } else {
-      const srt = await transcribeChunk(audioPath);
-      srtChunks = [srt];
+      const result = await transcribeChunk(audioPath);
+      rawChunks.push(result);
     }
 
-    const finalSRT = mergeSRTs(srtChunks);
+    // Save RAW output for debugging
+    const rawPath = path.join(path.dirname(audioPath), `${path.parse(audioPath).name}-raw-transcript.json`);
+    fs.writeFileSync(rawPath, JSON.stringify(rawChunks, null, 2));
+    logger.info(`💾 Saved raw transcript to ${rawPath}`);
+
+    // Normalize and Merge
+    const normalizedChunks = rawChunks.map(c => normalizeTranscript(c, "whisper"));
+    const finalTranscript = mergeTranscript(normalizedChunks, maxChunkDuration);
+    
     logger.info("✅ Transcription complete!");
-    return finalSRT;
+    
+    // Return standard stringified JSON containing the {words: [...]} structure
+    return JSON.stringify({ words: finalTranscript }, null, 2);
   } catch (error) {
     logger.error("❌ Whisper API Transcription Error:", error);
     throw new Error("Failed to transcribe audio with Whisper.");

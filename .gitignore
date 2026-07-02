@@ -35,6 +35,6 @@ Thumbs.db
 .cache/
 .next/
 out/
-tmp/
+temp/
 
 public/

@@ -16,7 +16,7 @@ const ZOOM_CYCLE_SECONDS = 12; // Total time for one full In-Out pulse (6s in, 6
 const MAX_ZOOM_LEVEL = 1.2;   // Maximum zoom factor
 const FPS = 30;               // Standard frame rate
 
-export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspectRatio = "16:9") {
+export async function createVideo(imageUrl, audioPath, outputPath, transcriptPath, aspectRatio = "16:9") {
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -30,7 +30,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   }
 
   const assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
-  convertSrtToAss(srtPath, assPath, aspectRatio);
+  convertTranscriptToAss(transcriptPath, assPath, aspectRatio);
 
   const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
   const audioDuration = await getAudioDuration(audioPath);
@@ -121,11 +121,10 @@ export async function createVideo(imageUrl, audioPath, outputPath, srtPath, aspe
   }
 }
 
-export function convertSrtToAss(srtPath, assPath, aspectRatio = "16:9", startTime = 0, duration = null) {
+export function convertTranscriptToAss(transcriptPath, assPath, aspectRatio = "16:9", startTime = 0, duration = null) {
   const perf = getPerfSession();
-  const stopTimer = perf?.start("subtitle", "SRT to ASS Conversion", { srtPath });
-  const srtContent = fs.readFileSync(srtPath, "utf8");
-  const blocks = srtContent.trim().split(/\n\s*\n/);
+  const stopTimer = perf?.start("subtitle", "Transcript to ASS Conversion", { transcriptPath });
+  const content = fs.readFileSync(transcriptPath, "utf8");
 
   const isVertical = aspectRatio === "9:16";
   const resX = isVertical ? 1080 : 1920;
@@ -151,6 +150,110 @@ Style: GoldGlow,Bebas Neue Bold,${fontSize},&H0000B8E6&,&H0000BFFF&,&H00FFFFFF&,
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
+
+  try {
+    const json = JSON.parse(content);
+    if (json.words && Array.isArray(json.words)) {
+      ass += parseJsonToAss(json.words, posX, posY, startTime, duration);
+      fs.writeFileSync(assPath, ass);
+      stopTimer?.();
+      return;
+    }
+  } catch (e) {
+    // Not a JSON file, fallback to SRT parsing
+  }
+
+  ass += parseSrtToAss(content, posX, posY, startTime, duration);
+  fs.writeFileSync(assPath, ass);
+  stopTimer?.();
+}
+
+function parseJsonToAss(words, posX, posY, startTime, duration) {
+  let dialogueLines = "";
+  let chunks = [];
+  let currentChunk = [];
+  
+  const maxWordsPerChunk = 3;
+  const maxPauseGap = 0.35; // seconds
+  const minDuration = 0.15; // 150ms
+  const maxDuration = 2.5; // seconds
+
+  const conjunctions = new Set(['and', 'but', 'or']);
+  const prepositions = new Set(['to', 'of', 'in', 'at', 'for', 'with', 'into', 'onto', 'from']);
+  const articles = new Set(['the', 'a', 'an']);
+
+  for (let i = 0; i < words.length; i++) {
+    const wordObj = words[i];
+    const text = wordObj.word.trim();
+    const cleanText = text.replace(/[.,!?;:]/g, '').toLowerCase();
+    
+    currentChunk.push(wordObj);
+    
+    const nextWordObj = (i + 1 < words.length) ? words[i + 1] : null;
+    const nextCleanText = nextWordObj ? nextWordObj.word.trim().replace(/[.,!?;:]/g, '').toLowerCase() : "";
+    
+    let shouldBreak = false;
+    
+    if (currentChunk.length >= maxWordsPerChunk) {
+      shouldBreak = true;
+    } else if (nextWordObj) {
+      // 1. Timing-gap awareness
+      if (nextWordObj.start - wordObj.end > maxPauseGap) {
+        shouldBreak = true;
+      }
+      // 2. Phrase boundaries (break before the next word if it starts a new phrase)
+      else if (/[.?!]$/.test(text)) {
+        shouldBreak = true; // Break on sentence ends
+      } else if (/[,;:]$/.test(text)) {
+        shouldBreak = true; // Break on commas/pauses
+      } else if (currentChunk.length >= 2) {
+        if (conjunctions.has(nextCleanText) || prepositions.has(nextCleanText) || articles.has(nextCleanText)) {
+          shouldBreak = true;
+        }
+      }
+    } else {
+      shouldBreak = true; // Last word
+    }
+    
+    if (shouldBreak) {
+      chunks.push([...currentChunk]);
+      currentChunk = [];
+    }
+  }
+
+  for (const chunk of chunks) {
+    if (chunk.length === 0) continue;
+    let s = chunk[0].start;
+    let e = chunk[chunk.length - 1].end;
+    
+    // Duration clamping
+    let chunkDuration = e - s;
+    if (chunkDuration < minDuration) {
+      e = s + minDuration;
+      chunkDuration = minDuration;
+    }
+    if (chunkDuration > maxDuration) {
+      e = s + maxDuration;
+      chunkDuration = maxDuration;
+    }
+
+    if (duration !== null) {
+      const endTime = startTime + duration;
+      if (e <= startTime || s >= endTime) continue;
+      s = Math.max(0, s - startTime);
+      e = Math.min(duration, e - startTime);
+    }
+
+    const chunkText = chunk.map(w => w.word.trim()).join(" ");
+    dialogueLines += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${chunkText}\n`;
+  }
+  
+  return dialogueLines;
+}
+
+function parseSrtToAss(srtContent, posX, posY, startTime, duration) {
+  let dialogueLines = "";
+  const blocks = srtContent.trim().split(/\n\s*\n/);
 
   for (const block of blocks) {
     const lines = block.split("\n");
@@ -186,12 +289,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         e = Math.min(duration, e - startTime);
       }
 
-      ass += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${chunk}\n`;
+      dialogueLines += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${chunk}\n`;
     });
   }
-
-  fs.writeFileSync(assPath, ass);
-  stopTimer?.();
+  return dialogueLines;
 }
 
 function parseSrtTime(timeStr) {
