@@ -52,7 +52,8 @@ Return STRICT valid JSON:
       }
     });
 
-    const text = response.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    const raw = response.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    const text = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
     return JSON.parse(text);
   } catch (err) {
     logger.error("❌ Failed to analyze reference image:", err);
