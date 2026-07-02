@@ -468,7 +468,7 @@ export async function generateMultiImages(
           styleUrl,
           onCheckCancelled,
         });
-      }, `Image ${index + 1}`);
+      }, `Image ${index + 1}`, 6, 8000);
 
       activeModelTier = result.activeModelTier; 
       logger.info(`✅ [Multi-Image ${index + 1}/${prompts.length}] Successfully generated: ${result.filePath}`);
@@ -575,6 +575,8 @@ export async function generateImage(
       if (i < 2) {
         logger.info(`🧼 Sanitizing prompt before retry...`);
         safePrompt = await sanitizePrompt(safePrompt);
+        logger.info(`⏳ Waiting 8s before retrying Gemini...`);
+        await new Promise((res) => setTimeout(res, 8000));
       }
     }
   }

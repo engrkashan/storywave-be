@@ -957,6 +957,72 @@ async function _runWorkflow({
 
             // Wait for all async segment renders to complete
             await Promise.all(segmentPromises);
+
+            // Fallback for failed image segments to keep audio/video sync
+            const fallbackPromises = [];
+            for (let i = 0; i < scenePrompts.length; i++) {
+              if (!segmentFiles[i]) {
+                logger.warn(`⚠️ Segment ${i + 1} was not generated. Attempting to regenerate the image...`);
+                
+                const fallbackPromise = (async () => {
+                  try {
+                    // Try to regenerate the single image that failed
+                    const imageResult = await generateImage(
+                      scenePrompts[i],
+                      i + 1,
+                      ratioDir,
+                      currentRatio,
+                      commonPrompt,
+                      characterReferences,
+                      styleReferenceUrl
+                    );
+
+                    let fallbackImage = imageResult.imageUrl;
+
+                    // If regeneration STILL fails, duplicate an adjacent image as a last resort
+                    if (!fallbackImage) {
+                      logger.warn(`❌ Regeneration for segment ${i + 1} failed. Duplicating adjacent image...`);
+                      for (let j = i - 1; j >= 0; j--) { if (images[j]?.imageUrl) { fallbackImage = images[j].imageUrl; break; } }
+                      if (!fallbackImage) {
+                        for (let j = i + 1; j < images.length; j++) { if (images[j]?.imageUrl) { fallbackImage = images[j].imageUrl; break; } }
+                      }
+                    }
+
+                    if (fallbackImage) {
+                      const sceneId = `scene_${String(i + 1).padStart(3, "0")}`;
+                      const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
+                      segmentFiles[i] = segmentPath;
+
+                      const { startTime, duration } = getSegmentRange(i);
+                      const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
+                      convertTranscriptToAss(transcriptPath, segmentAssPath, currentRatio, startTime, duration);
+                      const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+
+                      try {
+                        await renderMediaSegment(fallbackImage, segmentPath, duration, width, height, escapedSegmentAssPath);
+                        logger.info(`✅ Fallback segment ${i + 1} rendered successfully.`);
+                      } catch (err) {
+                        logger.error(`❌ Failed to render fallback segment for scene ${i + 1}`, err);
+                        segmentFiles[i] = null;
+                      } finally {
+                        if (fs.existsSync(segmentAssPath)) fs.unlinkSync(segmentAssPath);
+                      }
+                    } else {
+                      logger.warn(`❌ No fallback image found for segment ${i + 1} after all attempts.`);
+                    }
+                  } catch (err) {
+                    logger.error(`❌ Error during fallback generation for scene ${i + 1}:`, err);
+                    segmentFiles[i] = null;
+                  }
+                })();
+                fallbackPromises.push(fallbackPromise);
+              }
+            }
+            
+            if (fallbackPromises.length > 0) {
+              await Promise.all(fallbackPromises);
+            }
+
             stopMultiImagesTimer?.();
             mediaItems = images.filter((img) => img.imageUrl).map((img) => img.imageUrl);
 
@@ -964,8 +1030,9 @@ async function _runWorkflow({
             if (mediaItems.length > 0) {
               logger.info(`Step 5: Stitching video for ${currentRatio}...`);
               
-              const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
-              await concatSegments(segmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null);
+              const validSegmentFiles = segmentFiles.filter(Boolean);
+              const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${validSegmentFiles.length} items)`);
+              await concatSegments(validSegmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null);
               stopStitchTimer?.();
             }
 
