@@ -16,8 +16,11 @@ import {
 } from "./storyService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { getAudioDuration } from "./audioService.js";
+import { convertToWav } from "./audioService.js";
+import { buildMasterTimeline, saveMasterTimeline } from "./timelineService.js";
 import {
   createVideo,
+  createVideoWithTimeline,
   generateVideoClips,
   concatSegments,
   renderMediaSegment,
@@ -817,10 +820,46 @@ async function _runWorkflow({
 
       logger.info("Step 5: Generating subtitles...");
       const stopSubTimer = perf?.start("subtitle", "Transcribe Audio to Subtitles (Whisper)");
-      const transcriptContent = await transcribeWithTimestamps(voiceLocalPath);
+
+      // Phase 1/2 fix: transcribe from lossless WAV to eliminate MP3 encoder delay
+      const narrationWavPath = path.join(workflowTempDir, `narration-${workflow.id}.wav`);
+      await convertToWav(voiceLocalPath, narrationWavPath);
+
+      const transcriptContent = await transcribeWithTimestamps(narrationWavPath);
       transcriptPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
       fs.writeFileSync(transcriptPath, transcriptContent);
       stopSubTimer?.();
+
+      // Master Timeline — built once, used by ALL ratios and segments
+      const narrationDuration = await getAudioDuration(narrationWavPath);
+      const { words: timelineWords } = JSON.parse(transcriptContent);
+
+      // Pre-generate scenePrompts here (outside ratio loop) so both
+      // dualPlatform ratios share the same timeline and scene count.
+      let preGeneratedScenePrompts = null;
+      if (mediaType === "multi_image" && !uploadedMediaUrl) {
+        if (earlyScenePrompts) {
+          preGeneratedScenePrompts = earlyScenePrompts;
+        } else {
+          const dynamicCount = Math.max(5, Math.ceil(narrationDuration / 5));
+          const count = imageCount || dynamicCount;
+          const stopPromptTimer = perf?.start("story", `Generate ${count} Scene Prompts`);
+          preGeneratedScenePrompts = await generateScenePrompts(
+            script,
+            count,
+            storyMetadata,
+            visualSuggestions,
+          );
+          stopPromptTimer?.();
+        }
+      }
+
+      // Build the immutable Master Timeline
+      const targetSceneCount = preGeneratedScenePrompts?.length || imageCount || 5;
+      const masterTimeline = buildMasterTimeline(timelineWords, narrationDuration, targetSceneCount);
+      const timelinePath = path.join(workflowTempDir, "timeline.json");
+      saveMasterTimeline(masterTimeline, timelinePath);
+      logger.info(`🗺️  Master Timeline: ${masterTimeline.actualSceneCount} scenes, ${masterTimeline.subtitleGroups.length} subtitle groups`);
 
       const videoResults = {};
 
@@ -855,20 +894,9 @@ async function _runWorkflow({
               },
             ];
           } else {
-            const dynamicCount = Math.max(
-              5,
-              Math.ceil(actualAudioDuration / 5),
-            );
-            const count =
-              mediaType === "multi_image" ? imageCount : dynamicCount;
-            const stopPromptTimer = perf?.start("story", `Generate ${count} Scene Prompts`);
-            scenePrompts = await generateScenePrompts(
-              script,
-              count,
-              storyMetadata,
-              visualSuggestions,
-            );
-            stopPromptTimer?.();
+            // multi_image: use pre-generated prompts built before ratio loop
+            scenePrompts = preGeneratedScenePrompts || [];
+            logger.info(`Using ${scenePrompts.length} pre-generated scene prompts from Master Timeline step`);
           }
           logger.info("Scene Prompts:", scenePrompts);
 
@@ -893,27 +921,32 @@ async function _runWorkflow({
               stopStitchTimer?.();
             }
           } else if (mediaType === "multi_image") {
+            // Use pre-generated prompts (built before ratio loop alongside timeline)
+            const scenePrompts = preGeneratedScenePrompts || [];
             const stopMultiImagesTimer = perf?.start("image", `Generate Multi Images (${scenePrompts.length} images)`);
             const checkpointManager = new CheckpointManager(workflowTempDir);
 
             const isVertical = currentRatio === "9:16";
-            const width = isVertical ? 1080 : 1920;
+            const width  = isVertical ? 1080 : 1920;
             const height = isVertical ? 1920 : 1080;
+
+            // Scene boundary lookup from Master Timeline (replaces equal-division arithmetic)
             const getSegmentRange = (index) => {
-              const startFrame = Math.round(index * (actualAudioDuration / scenePrompts.length) * 30);
-              const endFrame = Math.round((index + 1) * (actualAudioDuration / scenePrompts.length) * 30);
-              const frames = endFrame - startFrame;
-              return { startTime: startFrame / 30, duration: frames / 30 };
+              const scene = masterTimeline.scenes[index];
+              if (scene) return { startTime: scene.startSec, duration: scene.durationSec };
+              // Fallback for out-of-bounds (should not happen with clamped scenes)
+              const approxDuration = masterTimeline.totalDuration / scenePrompts.length;
+              return { startTime: index * approxDuration, duration: approxDuration };
             };
 
-            const segmentFiles = new Array(scenePrompts.length).fill(null);
+            const segmentFiles  = new Array(scenePrompts.length).fill(null);
             const segmentPromises = [];
 
             const onImageReady = async (imagePath, i) => {
               const segmentPromise = (async () => {
-                const sceneId = `scene_${String(i + 1).padStart(3, "0")}`;
-                const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
-                segmentFiles[i] = segmentPath;
+                const sceneId       = `scene_${String(i + 1).padStart(3, "0")}`;
+                const segmentPath   = path.join(ratioDir, `${sceneId}_seg.mp4`);
+                segmentFiles[i]     = segmentPath;
 
                 if (checkpointManager.isRenderCompleted(sceneId) && fs.existsSync(segmentPath)) {
                   logger.info(`⏩ [Segment ${i + 1}/${scenePrompts.length}] Skipping render (Checkpoint)`);
@@ -921,9 +954,10 @@ async function _runWorkflow({
                 }
 
                 const { startTime, duration } = getSegmentRange(i);
-                
+
+                // Pass masterTimeline + sceneIndex → zero-drift subtitle generation
                 const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
-                convertTranscriptToAss(transcriptPath, segmentAssPath, currentRatio, startTime, duration);
+                convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, i);
                 const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
                 checkpointManager.markRenderRunning(sceneId);
@@ -1037,6 +1071,7 @@ async function _runWorkflow({
             }
 
           } else {
+            // single_image: use timeline for full subtitle track (sceneIndex = null)
             const stopImageTimer = perf?.start("image", "Generate Single Image");
             const imageResult = await generateImage(
               scenePrompts[0],
@@ -1051,7 +1086,8 @@ async function _runWorkflow({
             if (imageResult.imageUrl) {
               mediaItems = [imageResult.imageUrl];
               const stopStitchTimer = perf?.start("video", "Stitch Single Image Video");
-              await createVideo(mediaItems[0], finalAudioLocalPath, videoPath, transcriptPath, currentRatio);
+              // For single image, pass the timeline with sceneIndex=null to use all subtitle groups
+              await createVideoWithTimeline(mediaItems[0], finalAudioLocalPath, videoPath, masterTimeline, currentRatio, actualAudioDuration);
               stopStitchTimer?.();
             }
           }

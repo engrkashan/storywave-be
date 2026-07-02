@@ -16,6 +16,112 @@ const ZOOM_CYCLE_SECONDS = 12; // Total time for one full In-Out pulse (6s in, 6
 const MAX_ZOOM_LEVEL = 1.2;   // Maximum zoom factor
 const FPS = 30;               // Standard frame rate
 
+export async function createVideoWithTimeline(imageUrl, audioPath, outputPath, masterTimeline, aspectRatio = "16:9", audioDurationParam = null) {
+  const TEMP_DIR = path.resolve(process.cwd(), "temp");
+  fs.mkdirSync(TEMP_DIR, { recursive: true });
+
+  let imagePath = imageUrl;
+  if (imageUrl.startsWith("http")) {
+    const localImage = path.join(TEMP_DIR, `story-bg-${Date.now()}.png`);
+    const res = await fetch(imageUrl);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    fs.writeFileSync(localImage, buffer);
+    imagePath = localImage;
+  }
+
+  const assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
+  // Pass timeline object and null for sceneIndex (use all subtitles)
+  convertTranscriptToAss(masterTimeline, assPath, aspectRatio, null);
+
+  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+  const audioDuration = audioDurationParam || await getAudioDuration(audioPath);
+
+  if (!audioDuration || isNaN(audioDuration)) {
+    logger.warn("⚠️ Could not detect audio duration. Fallback to -shortest only.");
+  }
+
+  // Determine target dimensions
+  const isVertical = aspectRatio === "9:16";
+  const width = isVertical ? 1080 : 1920;
+  const height = isVertical ? 1920 : 1080;
+
+  // Cinematic Zoom Pulse calculations
+  const totalFrames = Math.ceil(audioDuration * FPS);
+  const cycleFrames = ZOOM_CYCLE_SECONDS * FPS; // fixed 12s cycle (6s in, 6s out)
+  const center = (1 + MAX_ZOOM_LEVEL) / 2;
+  const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
+
+  const upscaleFactor = 4;
+  const upWidth = width * upscaleFactor;
+  const upHeight = height * upscaleFactor;
+
+  // Scale image to match aspect ratio, crop excess, then apply zoompan
+  const commonScale = [
+    `[0:v]scale=${upWidth}:${upHeight}:force_original_aspect_ratio=increase`,
+    `crop=${upWidth}:${upHeight}`,
+    `setsar=1`
+  ].join(",");
+
+  const filterComplex = [
+    commonScale,
+    `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}`,
+    `subtitles='${escapedAssPath}'[vfinal]`
+  ].join(",");
+
+  const filterScriptPath = path.join(TEMP_DIR, `filter-${Date.now()}.txt`);
+  fs.writeFileSync(filterScriptPath, filterComplex, "utf8");
+
+  const args = [
+    "-y",
+    "-loglevel", "error",
+    "-loop", "1",
+    "-i", imagePath,
+    "-i", audioPath,
+    "-filter_complex_script", filterScriptPath,
+    "-map", "[vfinal]",
+    "-map", "1:a",
+    "-c:v", "libx264",
+    "-crf", "17",
+    "-preset", "veryfast",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "copy",
+    "-shortest",
+    "-threads", String(config.workflow.ffmpegThreads)
+  ];
+
+  if (audioDuration) {
+    args.push("-t", String(audioDuration));
+  }
+  args.push(outputPath);
+
+  try {
+    await enqueueRender(async () => {
+      await new Promise((resolve, reject) => {
+        const ff = spawn("ffmpeg", args);
+
+        let errorLog = "";
+        ff.stderr.on("data", (data) => {
+          errorLog += data.toString();
+        });
+
+        ff.on("close", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(errorLog || `FFmpeg exited with code ${code}`));
+        });
+
+        ff.on("error", (err) => reject(err));
+      });
+    });
+  } catch (err) {
+    logger.error(`FFmpeg Error: ${err.message}`);
+    throw new Error("🎥 Video creation failed. Check FFmpeg output above.");
+  } finally {
+    if (imagePath !== imageUrl && fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+    if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
+    if (fs.existsSync(filterScriptPath)) fs.unlinkSync(filterScriptPath);
+  }
+}
+
 export async function createVideo(imageUrl, audioPath, outputPath, transcriptPath, aspectRatio = "16:9") {
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -121,51 +227,71 @@ export async function createVideo(imageUrl, audioPath, outputPath, transcriptPat
   }
 }
 
-export function convertTranscriptToAss(transcriptPath, assPath, aspectRatio = "16:9", startTime = 0, duration = null) {
-  const perf = getPerfSession();
-  const stopTimer = perf?.start("subtitle", "Transcript to ASS Conversion", { transcriptPath });
-  const content = fs.readFileSync(transcriptPath, "utf8");
+/**
+ * Convert transcript data to an ASS subtitle file.
+ *
+ * Accepts two calling conventions:
+ *
+ * NEW (Master Timeline):
+ *   convertTranscriptToAss(timeline, assPath, aspectRatio, sceneIndex)
+ *   - `timeline`   — the master timeline object from timelineService
+ *   - `sceneIndex` — integer (0-based) or null for single-image (all subtitles)
+ *   Uses pre-computed subtitleGroups from the timeline. Zero drift.
+ *
+ * LEGACY (file path):
+ *   convertTranscriptToAss(transcriptPath, assPath, aspectRatio, startTime, duration)
+ *   - `transcriptPath` — path to JSON or SRT file
+ *   Preserved for backward compatibility.
+ */
+export function convertTranscriptToAss(transcriptSourceOrPath, assPath, aspectRatio = "16:9", sceneIndexOrStartTime = null, durationLegacy = null) {
+  const perf     = getPerfSession();
+  const stopTimer = perf?.start("subtitle", "Transcript to ASS Conversion", { assPath });
 
   const isVertical = aspectRatio === "9:16";
-  const resX = isVertical ? 1080 : 1920;
-  const resY = isVertical ? 1920 : 1080;
-  const fontSize = isVertical ? 80 : 130; // Slightly smaller fonts for vertical
-  const posX = resX / 2;
-  const posY = isVertical ? 1400 : 900; // Position lower for vertical, standard for horizontal
+  const resX       = isVertical ? 1080 : 1920;
+  const resY       = isVertical ? 1920 : 1080;
+  const fontSize   = isVertical ? 80 : 130;
+  const posX       = resX / 2;
+  const posY       = isVertical ? 1400 : 900;
 
-  let ass = `[Script Info]
-Title: Cinematic Shorts Subs
-ScriptType: v4.00+
-PlayResX: ${resX}
-PlayResY: ${resY}
-WrapStyle: 0
-ScaledBorderAndShadow: yes
+  const header = `[Script Info]\nTitle: Cinematic Shorts Subs\nScriptType: v4.00+\nPlayResX: ${resX}\nPlayResY: ${resY}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n\n; ---- GOLD GRADIENT FILL WITH BRIGHT STROKE & GLOW ----\nStyle: GoldGlow,Bebas Neue Bold,${fontSize},&H0000B8E6&,&H0000BFFF&,&H00FFFFFF&,&H64000000&,1,0,0,0,100,100,2,0,1,12,5,3,2,60,60,120,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
 
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-
-; ---- GOLD GRADIENT FILL WITH BRIGHT STROKE & GLOW ----
-Style: GoldGlow,Bebas Neue Bold,${fontSize},&H0000B8E6&,&H0000BFFF&,&H00FFFFFF&,&H64000000&,1,0,0,0,100,100,2,0,1,12,5,3,2,60,60,120,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-`;
-
-  try {
-    const json = JSON.parse(content);
-    if (json.words && Array.isArray(json.words)) {
-      ass += parseJsonToAss(json.words, posX, posY, startTime, duration);
-      fs.writeFileSync(assPath, ass);
-      stopTimer?.();
-      return;
-    }
-  } catch (e) {
-    // Not a JSON file, fallback to SRT parsing
+  // ── NEW PATH: Timeline object ─────────────────────────────────────────────
+  if (transcriptSourceOrPath && typeof transcriptSourceOrPath === "object" && transcriptSourceOrPath.subtitleGroups) {
+    const timeline   = transcriptSourceOrPath;
+    const scene      = sceneIndexOrStartTime !== null ? timeline.scenes[sceneIndexOrStartTime] : null;
+    const dialogues  = _assDialoguesFromTimeline(timeline.subtitleGroups, scene, posX, posY);
+    fs.writeFileSync(assPath, header + dialogues);
+    stopTimer?.();
+    return;
   }
 
-  ass += parseSrtToAss(content, posX, posY, startTime, duration);
-  fs.writeFileSync(assPath, ass);
-  stopTimer?.();
+  // ── LEGACY PATH: File path string ────────────────────────────────────────
+  const transcriptPath   = transcriptSourceOrPath;
+  const startTime        = typeof sceneIndexOrStartTime === "number" && sceneIndexOrStartTime % 1 !== 0
+    ? sceneIndexOrStartTime   // float → it's a legacy startTime
+    : 0;
+  const duration         = durationLegacy;
+
+  try {
+    const content = fs.readFileSync(transcriptPath, "utf8");
+    try {
+      const json = JSON.parse(content);
+      if (json.words && Array.isArray(json.words)) {
+        const dialogues = parseJsonToAss(json.words, posX, posY, startTime, duration);
+        fs.writeFileSync(assPath, header + dialogues);
+        stopTimer?.();
+        return;
+      }
+    } catch (_) { /* not JSON, fall through to SRT */ }
+
+    const dialogues = parseSrtToAss(content, posX, posY, startTime, duration);
+    fs.writeFileSync(assPath, header + dialogues);
+    stopTimer?.();
+  } catch (err) {
+    stopTimer?.();
+    throw err;
+  }
 }
 
 function parseJsonToAss(words, posX, posY, startTime, duration) {
@@ -250,6 +376,37 @@ function parseJsonToAss(words, posX, posY, startTime, duration) {
   
   return dialogueLines;
 }
+/**
+ * Build ASS dialogue lines from pre-computed timeline subtitle groups.
+ * Groups are already in absolute time — just filter the scene window
+ * and rebase by subtracting scene.startSec.
+ *
+ * @param {Array<{start,end,text}>} groups  — from timeline.subtitleGroups
+ * @param {{startSec,endSec,durationSec}|null} scene — null = use all (single image)
+ * @param {number} posX
+ * @param {number} posY
+ * @returns {string} ASS dialogue lines
+ */
+function _assDialoguesFromTimeline(groups, scene, posX, posY) {
+  let dialogues = "";
+  const startSec = scene ? scene.startSec : 0;
+  const endSec   = scene ? scene.endSec   : Infinity;
+
+  for (const g of groups) {
+    // Include group if it overlaps the scene window
+    if (g.end <= startSec || g.start >= endSec) continue;
+
+    // Rebase to segment-local time
+    const s = Math.max(0, g.start - startSec);
+    const e = Math.min(scene ? scene.durationSec : g.end, g.end - startSec);
+
+    if (e <= s) continue;
+
+    dialogues += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${g.text}\n`;
+  }
+
+  return dialogues;
+}
 
 function parseSrtToAss(srtContent, posX, posY, startTime, duration) {
   let dialogueLines = "";
@@ -302,10 +459,15 @@ function parseSrtTime(timeStr) {
 }
 
 function secToAssTime(sec) {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = Math.floor(sec % 60);
-  const cs = Math.floor((sec - Math.floor(sec)) * 100);
+  const h  = Math.floor(sec / 3600);
+  const m  = Math.floor((sec % 3600) / 60);
+  const s  = Math.floor(sec % 60);
+  // Math.round (not Math.floor) for accurate centisecond representation
+  const cs = Math.round((sec - Math.floor(sec)) * 100);
+  // Guard against rounding up to 100cs
+  if (cs >= 100) {
+    return secToAssTime(Math.floor(sec) + 1);
+  }
   return `${h}:${pad(m)}:${pad(s)}.${pad(cs)}`;
 }
 

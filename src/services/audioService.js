@@ -150,3 +150,27 @@ export async function mixAudioFiles(mainFile, sfxLayers, outputFile) {
       });
   });
 }
+
+/**
+ * Convert any audio file to lossless 48kHz mono PCM WAV.
+ * Eliminates MP3 encoder delay (~13ms/chunk) before Whisper transcription,
+ * preventing cumulative drift in the Master Timeline.
+ */
+export async function convertToWav(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .audioChannels(1)
+      .audioFrequency(48000)
+      .audioCodec("pcm_s16le")
+      .output(outputPath)
+      .on("end", () => {
+        logger.info(`✅ Converted to lossless WAV: ${outputPath}`);
+        resolve(outputPath);
+      })
+      .on("error", (err) => {
+        logger.error("WAV conversion error:", err.message);
+        reject(err);
+      })
+      .run();
+  });
+}
