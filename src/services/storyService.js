@@ -147,10 +147,63 @@ Style Mode: Cinematic_Movie_Storytelling (scene-driven, visual, emotive).
 };
 
 /* -------------------------------------------------------------------------- */
+/* 🧩 STEP -1 — Analyze Context (Build Story Bible)                            */
+/* -------------------------------------------------------------------------- */
+async function analyzeStoryContext({ inputText, storyGuidelines, storyType, voiceTone }) {
+  logger.info("🧠 Analyzing story context and extracting Story Bible...");
+  const prompt = `You are an expert Story Editor and Narrative Designer.
+Your task is to analyze the provided raw story material and the user's specific story guidelines, and extract a highly structured "Story Bible".
+This Story Bible will be used by the writing engine to ensure strict adherence to character details, tone, and plot constraints.
+
+RAW STORY MATERIAL:
+${inputText.slice(0, 15000)}
+
+USER STORY GUIDELINES / CONSTRAINTS:
+${storyGuidelines || "None provided."}
+
+GENRE/TYPE: ${storyType}
+TONE: ${voiceTone}
+
+Extract the following in STRICT JSON format:
+{
+  "characters": [
+    {
+      "name": "Character Name",
+      "role": "Role in story",
+      "traits": "Key personality traits or motives",
+      "appearance": "Physical description if available"
+    }
+  ],
+  "settings": ["List of key locations or environment constraints"],
+  "key_plot_points": ["Major narrative beats extracted from the material"],
+  "tone_and_rules": ["List of specific writing constraints or rules derived from the user guidelines to strictly follow"]
+}`;
+
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+    });
+
+    const parsed = JSON.parse(res.choices[0].message.content.trim());
+    return JSON.stringify(parsed, null, 2);
+  } catch (err) {
+    logger.warn("⚠️ Context analysis failed, falling back to raw guidelines:", err.message);
+    return JSON.stringify({
+      fallback_guidelines: storyGuidelines || "None",
+      fallback_material: "Use raw input material."
+    }, null, 2);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* 🧩 STEP 0 — Generate Introduction (with characters and beginning)         */
 /* -------------------------------------------------------------------------- */
 async function generateIntro({
   inputText,
+  analyzedContext,
   storyType,
   voiceTone,
   words,
@@ -182,7 +235,10 @@ async function generateIntro({
 
       Generate the INTRODUCTION: ~${words} words, including the introduction of characters in a story tone and the beginning of the story.
       Tone: ${voiceTone}.
-      Input context for the story: ${inputText}.
+      STORY BIBLE / ANALYSIS CONTEXT (Follow strictly!):
+      ${analyzedContext}
+
+      Raw Input context for reference: ${inputText}.
       Do NOT include:
       - greetings or introductions
       - music cues
@@ -217,6 +273,7 @@ async function generateIntro({
 /* -------------------------------------------------------------------------- */
 async function generateBodyPart({
   inputText,
+  analyzedContext,
   storyType,
   voiceTone,
   previous,
@@ -252,7 +309,10 @@ async function generateBodyPart({
 
       Develop the plot step by step, building tension and character development.
       Tone: ${voiceTone}.
-      Input context for the story: ${inputText}.
+      STORY BIBLE / ANALYSIS CONTEXT (Follow strictly!):
+      ${analyzedContext}
+
+      Raw Input context for reference: ${inputText}.
       Do NOT include:
       - greetings or introductions
       - music cues
@@ -289,6 +349,7 @@ async function generateBodyPart({
 /* -------------------------------------------------------------------------- */
 async function generateClosing({
   inputText,
+  analyzedContext,
   storyType,
   voiceTone,
   previous,
@@ -323,7 +384,10 @@ async function generateClosing({
 
       Provide a satisfying resolution, wrapping up the arc with emotional depth.
       Tone: ${voiceTone}.
-      Input context for the story: ${inputText}.
+      STORY BIBLE / ANALYSIS CONTEXT (Follow strictly!):
+      ${analyzedContext}
+
+      Raw Input context for reference: ${inputText}.
       Do NOT include:
       - greetings or introductions
       - music cues
@@ -362,10 +426,23 @@ export async function generateStory({
   voiceTone = "neutral",
   storyLength = "30 minutes",
   voice,
+  storyGuidelines,
 }) {
   let inputText = textIdea || "";
   if (url) inputText = await extractFromUrl(url);
   if (videoFile) inputText = await transcribeVideo(videoFile);
+
+  if (!inputText || inputText.trim().length < 50) {
+    throw new Error("Insufficient or invalid input content.");
+  }
+
+  // 🧠 STEP -1: Generate the structured Story Bible context first
+  const analyzedContext = await analyzeStoryContext({
+    inputText,
+    storyGuidelines,
+    storyType,
+    voiceTone
+  });
 
   if (!inputText || inputText.trim().length < 50) {
     throw new Error("Insufficient or invalid input content.");
@@ -423,6 +500,7 @@ export async function generateStory({
     generateIntro,
     {
       inputText,
+      analyzedContext,
       storyType,
       voiceTone,
     },
@@ -439,6 +517,7 @@ export async function generateStory({
       generateBodyPart,
       {
         inputText,
+        analyzedContext,
         storyType,
         voiceTone,
         previous,
@@ -455,6 +534,7 @@ export async function generateStory({
     generateClosing,
     {
       inputText,
+      analyzedContext,
       storyType,
       voiceTone,
       previous,

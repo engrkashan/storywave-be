@@ -116,6 +116,7 @@ export async function runScheduledWorkflows() {
       url: meta.url || null,
       videoFile: meta.videoFile || null,
       textIdea: meta.textIdea || null,
+      storyGuidelines: meta.storyGuidelines || null,
       imagePrompt: meta.imagePrompt || null,
       shouldGenerateImage: meta.shouldGenerateImage ?? true,
       storyType: meta.storyType || null,
@@ -155,6 +156,7 @@ export async function processExistingWorkflow(workflow) {
     url: meta.url || null,
     videoFile: meta.videoFile || null,
     textIdea: meta.textIdea || null,
+    storyGuidelines: meta.storyGuidelines || null,
     imagePrompt: meta.imagePrompt || null,
     shouldGenerateImage: meta.shouldGenerateImage ?? true,
     storyType: meta.storyType || null,
@@ -224,6 +226,7 @@ async function _runWorkflow({
   url = null,
   videoFile = null,
   textIdea = null,
+  storyGuidelines = null,
   imagePrompt = null,
   shouldGenerateImage,
   storyType,
@@ -384,6 +387,7 @@ async function _runWorkflow({
         storyType,
         voiceTone,
         storyLength,
+        storyGuidelines,
       }));
       stopStoryTimer?.();
     } else {
