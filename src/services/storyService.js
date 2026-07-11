@@ -550,145 +550,94 @@ export async function generateStory({
 }
 
 /**
- * Break story into visual scene prompts for image/video generation using the Story Bible
+ * generateScenePrompts — Universal Story-to-Motion-Graphic Image Workflow v6.3
+ *
+ * Converts a finished script into validated standalone image prompts using the
+ * 8-module gated production engine. Runs ALL modules in order before generating
+ * any frame — Full-Story-First rule enforced.
+ *
+ * FUNCTION SIGNATURE IS UNCHANGED — drop-in replacement for the legacy version.
+ * Returns the same { prompt, charactersInScene, narration }[] shape.
+ *
+ * Core Execution Rule: run modules 1→8 in order. Each module receives validated
+ * inputs, performs one task, audits required fields, repairs failures, and passes
+ * forward only validated data. Never generates frames before story, cast, world,
+ * scenes, continuity, and frame allocation are complete.
+ *
+ * @param {string} storyScript — the complete story/script text
+ * @param {number} count — exact number of images (Non-negotiable: Exact Count rule)
+ * @param {object|null} storyBible — pre-built metadata from extractStoryMetadata (Schema A/B)
+ * @param {string|null} visualSuggestions — user visual style note
+ * @returns {Promise<Array<{ prompt: string, charactersInScene: string[], narration: string, _framePackage: object, _negativePrompt: string, _globalNegativePrompt: string, _motionMovement: object }>>}
  */
 export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null) {
-  // ── Step 1: Mechanically split the script into N equal word chunks ──────────
-  const words = storyScript.split(/\s+/).filter(Boolean);
-  const chunkSize = Math.ceil(words.length / count);
-  const chunks = [];
-  for (let i = 0; i < count; i++) {
-    const slice = words.slice(i * chunkSize, (i + 1) * chunkSize).join(" ");
-    if (slice.trim()) chunks.push(slice);
-  }
-
-  let characterRoster = "";
-  if (storyBible?.characters?.length > 0) {
-    characterRoster = `
-CHARACTER ROSTER (Use exactly these traits to maintain identical facial identity and build):
-${storyBible.characters.map(c => `- ID: "${c.id}" | Name: ${c.name} | Appearance: ${c.appearance}`).join("\n")}
-`;
-  }
-
-  // ── Step 2.5: Dynamic Scene State Analysis ─────────
-  let sceneStates = new Array(chunks.length).fill({});
-  if (storyBible) {
-    const statePrompt = `You are a Script Supervisor and Continuity Director.
-Analyze the following sequential story chunks. Track the dynamic visual state of the scenes across the timeline.
-
-For each chunk, determine:
-1. Clothing/Wardrobe for any present characters (e.g., "Brenda is wearing her blue denim jacket. Sean is wearing a black hoodie.")
-2. Time of Day & Weather (e.g., "Nighttime, raining")
-3. Emotional Tone (e.g., "High tension, fearful")
-4. Environment State (e.g., "The living room is messy", "The window is broken")
-
-STORY BIBLE (Base State):
-${JSON.stringify(storyBible, null, 2)}
-
-STORY CHUNKS:
-${chunks.map((chunk, i) => `[CHUNK ${i}]: ${chunk.slice(0, 300)}...`).join("\n\n")}
-
-OUTPUT FORMAT — Return STRICT valid JSON mapping each chunk index to a state description:
-{
-  "states": [
-    {
-      "chunkIndex": 0,
-      "clothing": "Brenda is wearing a blue denim jacket.",
-      "weather_time": "Late afternoon, sunny.",
-      "tone": "Calm, reflective",
-      "environment": "Normal"
-    }
-  ]
-}`;
-
-    try {
-      logger.info("🎭 Analyzing dynamic scene states and continuity...");
-      const res = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: statePrompt }],
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-      });
-      const parsed = JSON.parse(res.choices[0].message.content.trim());
-      if (parsed.states && Array.isArray(parsed.states)) {
-        parsed.states.forEach(s => {
-          if (s.chunkIndex >= 0 && s.chunkIndex < chunks.length) {
-            sceneStates[s.chunkIndex] = s;
-          }
-        });
-      }
-      logger.info("✅ Scene state analysis complete.");
-    } catch (err) {
-      logger.warn(`⚠️ Scene state analysis failed: ${err.message}. Proceeding without strict dynamic tracking.`);
-    }
-  }
-
-  // ── Step 3: Generate one tight prompt per chunk using Gemini ───
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY });
-  
-  const scenePromises = chunks.map(async (chunk, i) => {
-    const openingSentence = (chunk.match(/[^.!?]+[.!?]/)?.[0] ?? chunk.slice(0, 150)).trim();
-    const state = sceneStates[i] || {};
-    
-    let dynamicStateInstruction = `
-DYNAMIC SCENE STATE FOR THIS CHUNK:
-- Clothing: ${state.clothing || "Default base clothing from Story Bible"}
-- Time/Weather: ${state.weather_time || "Consistent with previous"}
-- Tone: ${state.tone || "Neutral"}
-- Environment: ${state.environment || "Consistent with Story Bible"}
-`;
-
-    const singlePrompt = `You are a world-class Storyboard Artist.
-
-STORY BIBLE (Static Persistence Rules):
-${JSON.stringify(storyBible, null, 2)}
-
-${characterRoster}
-${dynamicStateInstruction}
-${visualSuggestions ? `User Visual Style Note: ${visualSuggestions}` : ""}
-
-${SCENE_PROMPT_VERSION_TWO}
-
-NARRATION ANCHOR — this is the exact sentence being SPOKEN when this image appears on screen:
-"${openingSentence}"
-
-Full narration chunk (for context only, do not describe anything here if it's not in the anchor):
-"${chunk.slice(0, 500)}"
-
-TASK: Write ONE image-generation prompt for the exact spoken moment of the NARRATION ANCHOR.
-
-OUTPUT FORMAT — Return STRICT valid JSON:
-{
-  "prompt": "The detailed visual prompt string (subject, action, location, lighting, emotion, framing, details)",
-  "charactersInScene": ["list ONLY character IDs from the CHARACTER ROSTER above that physically appear in this specific shot. Use [] if no named character is in frame."]
-}`;
-
-    try {
-      const res = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [{ role: "user", parts: [{ text: singlePrompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
-      });
-      
-      const rawText = res.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-      const parsed = JSON.parse(rawText.replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\`\`\`\s*$/i, "").trim());
-      const charIds = (parsed.charactersInScene || []).filter(id => typeof id === "string");
-      
-      logger.info(`✅ Scene ${i + 1}/${chunks.length}: "${parsed.prompt.slice(0, 80)}..." | chars: [${charIds.join(", ") || "none"}]`);
-      return { prompt: parsed.prompt, charactersInScene: charIds, narration: chunk };
-    } catch (err) {
-      logger.warn(`⚠️ Scene ${i + 1} prompt failed: ${err.message} — using opening sentence fallback`);
-      return { prompt: openingSentence, charactersInScene: [], narration: chunk };
-    }
-  });
+  logger.info(`🎬 [v6.3 Engine] generateScenePrompts — ${count} frames requested`);
 
   try {
-    const scenes = await Promise.all(scenePromises);
-    logger.info(`✅ Generated ${scenes.length} chunk-anchored scene prompts`);
-    return scenes;
+    const { runFullMotionGraphicEngine } = await import("./motionGraphicEngine.js");
+
+    const result = await runFullMotionGraphicEngine({
+      storyScript,
+      imageCount: count,
+      aspectRatio: "16:9",
+      title: storyBible?.title || "Story",
+      storyType: storyBible?.storyType || "script",
+      storyBible,
+      referenceTraits: null,
+      visualSuggestions,
+      storyGuidelines: storyBible?.storyGuidelines || null,
+    });
+
+    const { scenePrompts, finalAudit } = result;
+
+    logger.info(`[v6.3 Engine] Final Audit: ${finalAudit.passed ? "✅ PASSED" : "⚠️ ISSUES"} | frames: ${scenePrompts.length}/${count} | rejected: ${finalAudit.rejected_frame_ids?.length || 0}`);
+
+    if (!finalAudit.exact_count_check) {
+      logger.warn(`[v6.3 Engine] ⚠️ Exact count mismatch — got ${scenePrompts.length}, expected ${count}. Adjusting...`);
+      while (scenePrompts.length > count) scenePrompts.pop();
+      while (scenePrompts.length < count) {
+        const last = scenePrompts[scenePrompts.length - 1];
+        scenePrompts.push({ ...last, narration: last.narration + " (continued)" });
+      }
+    }
+
+    logger.info(`✅ [v6.3 Engine] Generated ${scenePrompts.length} validated standalone frame prompts`);
+    return scenePrompts;
+
   } catch (err) {
-    logger.error("Failed to generate scene prompts:", err);
-    return [];
+    logger.error(`❌ [v6.3 Engine] Full engine failed (${err.message}) — falling back to chunked generation`);
+
+    const words = storyScript.split(/\s+/).filter(Boolean);
+    const chunkSize = Math.ceil(words.length / count);
+    const fallbackScenes = [];
+
+    for (let i = 0; i < count; i++) {
+      const chunk = words.slice(i * chunkSize, (i + 1) * chunkSize).join(" ");
+      const openingSentence = (chunk.match(/[^.!?]+[.!?]/)?.[0] ?? chunk.slice(0, 150)).trim();
+
+      let charContext = "";
+      if (storyBible?.characters?.length > 0) {
+        charContext = storyBible.characters.map(c => `${c.name}: ${c.appearance}`).join(". ");
+      }
+
+      fallbackScenes.push({
+        prompt: [
+          openingSentence,
+          charContext ? `Characters: ${charContext}.` : "",
+          visualSuggestions || "",
+          "Cinematic photorealistic film still, 8k, hyper-realistic. No text in image.",
+        ].filter(Boolean).join(" ").trim(),
+        charactersInScene: (storyBible?.characters || []).map(c => c.id).filter(Boolean),
+        narration: chunk,
+        _negativePrompt: "",
+        _globalNegativePrompt: "",
+        _motionMovement: null,
+        _framePackage: null,
+      });
+    }
+
+    logger.info(`✅ Fallback: Generated ${fallbackScenes.length} chunk-anchored scene prompts`);
+    return fallbackScenes;
   }
 }
 

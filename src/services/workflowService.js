@@ -628,6 +628,8 @@ async function _runWorkflow({
             commonPrompt,
             characterReferenceUrl,
             styleReferenceUrl,
+            // v6.3 Engine: globalNegativePrompt stored here for image generation steps
+            globalNegativePrompt: null, // Populated after generateScenePrompts resolves
           },
         },
       });
@@ -855,6 +857,30 @@ async function _runWorkflow({
             visualSuggestions,
           );
           stopPromptTimer?.();
+
+          // v6.3 Engine: extract globalNegativePrompt and FINAL_AUDIT from first scene prompt
+          const _globalNeg = preGeneratedScenePrompts?.[0]?._globalNegativePrompt || null;
+          const _finalAudit = {
+            passed: !preGeneratedScenePrompts?.some(sp => sp._negativePrompt?.includes("REJECTED")),
+            total_frames: preGeneratedScenePrompts?.length,
+          };
+          if (_globalNeg) {
+            logger.info(`[v6.3 Engine] Global Negative Prompt captured (${_globalNeg.length} chars)`);
+            try {
+              await prisma.workflow.update({
+                where: { id: workflow.id },
+                data: {
+                  metadata: {
+                    ...(workflow.metadata || {}),
+                    globalNegativePrompt: _globalNeg,
+                    finalAudit: _finalAudit,
+                  },
+                },
+              });
+            } catch (dbErr) {
+              logger.warn(`[v6.3 Engine] Failed to store audit in metadata: ${dbErr.message}`);
+            }
+          }
         }
       }
 

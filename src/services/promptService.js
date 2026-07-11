@@ -62,78 +62,193 @@ Return STRICT valid JSON:
 }
 
 /**
- * Phase 2: Story Bible Generation
- * Analyzes story text and reference traits to extract persistent visual metadata.
+ * Phase 2: Story Bible Generation — v6.3 (Universal Motion Graphic Engine)
+ *
+ * Analyzes story text and reference traits to extract a full MATERIALIZED STORY BIBLE
+ * using Schema A CHARACTER_CAPSULEs and Schema B LOCATION_RECORDs.
+ *
+ * MATERIALIZATION RULE: A racial/ethnic/national label is identity only — it must
+ * always be paired with a full physical/behavioral CHARACTER_CAPSULE.
+ * A location name alone is never sufficient — pair with a full LOCATION_RECORD.
+ *
+ * Returns a storyMetadata object whose shape is BACKWARD COMPATIBLE with the
+ * existing workflowService.js (characters[], locations[], artStyle, colorPalette,
+ * cinematicSpecs, synopsis) while adding the full v6.3 bible fields.
  */
 export async function extractStoryMetadata(storyText, referenceTraits = null) {
   let refContext = "";
   if (referenceTraits) {
     refContext = `
-A main character reference image was provided. Include these exact traits in the main character's definition:
+A main character reference image was provided. Lock these exact traits to the main character's CHARACTER_CAPSULE:
 ${JSON.stringify(referenceTraits, null, 2)}
 `;
   }
 
-  const prompt = `
-Analyze the following story script and extract metadata to build a comprehensive STORY BIBLE for visual consistency.
+  const prompt = `You are a casting director, character-identity designer, production designer, and cultural/period researcher.
+Analyze the COMPLETE story script below — including the ending — and extract a full MATERIALIZED STORY BIBLE.
+
+NON-NEGOTIABLE RULES:
+1. MATERIALIZATION: A racial/ethnic/national label (e.g. "Black Jamaican Afro-Caribbean man") is IDENTITY ONLY.
+   It MUST be paired with a full physical CHARACTER_CAPSULE. A location name alone is NEVER sufficient.
+2. STANDARD: a label + age + build FAILS. Every field below must be physically defined so an image generator CANNOT invent the face.
+3. UNIVERSAL WORLD: detect world details from the actual source; never hard-code an unrelated country/culture/climate.
+4. No-Shorthand: never use "same," "unchanged," "as before" etc. Always write current values in full.
+
+CONDITIONAL CULTURAL MODULE:
+- Identify Jamaican characters as Jamaican (not generic Caribbean).
+- Black Jamaican characters as Black Jamaican Afro-Caribbean — each with individual physical description.
+- Forbid drift into African American, Afro-Latino, Haitian, Trinidadian, Barbadian, white, or ambiguous substitutes.
+- Match location details to the specific parish/city/district. Never substitute U.S. urban-crime imagery for Jamaica.
+
 ${refContext}
 
-Extract every persistent visual entity (characters, locations, objects, vehicles).
+STORY:
+${storyText}
 
 Return STRICT valid JSON:
 {
   "characters": [
     {
       "id": "char_1",
-      "name": "Character Name",
-      "importance": "main or supporting",
-      "appearance": "Extremely detailed physical description (face, hair, skin, age, build)",
-      "base_clothing": "Default clothing worn at the start of the story",
-      "personality": "Traits influencing micro-expressions"
+      "name": "Exact character name from story",
+      "importance": "main | supporting",
+      "isMainCharacter": true,
+      "identity_culture": {
+        "race": "string",
+        "ethnicity_cultural_identity": "string",
+        "nationality": "string",
+        "regional_community_identity": "string"
+      },
+      "sketch_artist_appearance": {
+        "age_range": "string",
+        "gender_presentation": "string",
+        "height": "string",
+        "body_type": "string (shoulders/torso/waist/limbs proportions)",
+        "canonical_skin_tone": "string (never rewritten by lighting)",
+        "canonical_undertone": "string",
+        "complexion_texture_marks": "string",
+        "face_structure": "string (shape/forehead/brows)",
+        "eyes": "string (color/shape/spacing)",
+        "nose": "string",
+        "cheeks": "string",
+        "mouth_lips": "string",
+        "jaw_chin": "string",
+        "ears": "string",
+        "hair": "string (texture/density/style/length/hairline/allowed drift/forbidden drift)",
+        "facial_hair": "string (beard type/length/density/grooming)",
+        "permanent_identifiers": "string (scars/tattoos/birthmarks/moles)"
+      },
+      "body_language": {
+        "posture": "string",
+        "resting_tension": "string",
+        "resting_emotional_face": "string",
+        "social_energy": "string"
+      },
+      "base_wardrobe": {
+        "upper_garment": "string",
+        "lower_garment": "string",
+        "outerwear": "string",
+        "exact_color_family": "string",
+        "footwear": "string",
+        "accessories": "string",
+        "class_occupation_cues": "string"
+      },
+      "identity_restrictions": {
+        "may_not_change": ["list of Level 1 Hard Identity fields that are locked"],
+        "forbidden_substitutions": ["foreign/generic archetype substitutions that are forbidden"],
+        "forbidden_drift": ["specific drift patterns to prevent"]
+      },
+      "appearance": "FULL physical description paragraph (backward-compatible field) — combine all sketch_artist_appearance fields into one detailed string",
+      "base_clothing": "FULL clothing description paragraph (backward-compatible field)",
+      "personality": "Key personality traits influencing body language and micro-expressions"
     }
   ],
   "locations": [
     {
       "id": "loc_1",
-      "name": "Location Name",
-      "description": "Specific architectural and layout details. E.g., 'small suburban home with white walls, wooden porch, red mailbox'"
+      "name": "string",
+      "geographic_cultural_id": {
+        "country": "string",
+        "region": "string",
+        "city_parish_district": "string",
+        "urban_rural_category": "string",
+        "social_class": "string",
+        "cultural_identity": "string",
+        "period": "string"
+      },
+      "construction": {
+        "wall_roof_floor_ceiling_material": "string",
+        "paint_condition": "string",
+        "structural_wear": "string"
+      },
+      "lighting_atmosphere": {
+        "light_source": "string",
+        "color_temp": "string",
+        "emotional_effect": "string",
+        "time_of_day": "string"
+      },
+      "forbidden_drift": ["list of foreign visual archetypes explicitly prohibited"],
+      "description": "FULL production-design-level description paragraph (backward-compatible field) — detailed enough that a production designer can physically rebuild the space"
     }
   ],
   "objects": [
     {
       "id": "obj_1",
-      "name": "Object Name",
+      "name": "string",
       "description": "Detailed visual description of the recurring object or vehicle"
     }
   ],
-  "artStyle": "Specific cinematic photographic style",
-  "colorPalette": "Dominant tones, contrast ratios, and accent colors",
-  "cinematicSpecs": "Professional camera and lighting setup",
-  "synopsis": "A visual-narrative blueprint (50-100 words) describing the scale, lighting atmosphere, and emotional arc."
-}
-
-Story:
-${storyText}
-`;
+  "world": {
+    "country": "string",
+    "cultural_social_economic_environment": "string",
+    "climate_weather_logic": "string",
+    "period": "string",
+    "forbidden_foreign_archetypes": ["list"]
+  },
+  "artStyle": "Specific cinematic photographic style (backward-compatible)",
+  "colorPalette": "Dominant tones, contrast ratios, and accent colors (backward-compatible)",
+  "cinematicSpecs": "Professional camera and lighting setup (backward-compatible)",
+  "synopsis": "A visual-narrative blueprint (50-100 words) describing scale, lighting atmosphere, and emotional arc (backward-compatible)"
+}`;
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.5-flash",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
+      config: {
         responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 0 },
       }
     });
 
     const raw = response.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
     const text = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+
+    // Validate minimum Schema A materialization for each character
+    for (const char of (parsed.characters || [])) {
+      if (!char.sketch_artist_appearance?.canonical_skin_tone) {
+        logger.warn(`[promptService] extractStoryMetadata: ${char.name} missing canonical_skin_tone — bible may be under-materialized`);
+      }
+      if (!char.appearance) {
+        // Synthesize backward-compatible appearance string from sketch_artist_appearance
+        const sa = char.sketch_artist_appearance || {};
+        char.appearance = [sa.age_range, sa.gender_presentation, sa.height, sa.body_type, sa.canonical_skin_tone, sa.face_structure, sa.eyes, sa.nose, sa.hair, sa.facial_hair, sa.permanent_identifiers].filter(Boolean).join(". ");
+      }
+      if (!char.base_clothing) {
+        const bw = char.base_wardrobe || {};
+        char.base_clothing = [bw.upper_garment, bw.lower_garment, bw.outerwear, bw.exact_color_family, bw.footwear, bw.accessories].filter(Boolean).join(", ");
+      }
+    }
+
+    return parsed;
   } catch (err) {
     logger.error("❌ Failed to extract story metadata:", err);
     return {
       characters: [],
       locations: [],
       objects: [],
+      world: {},
       artStyle: "Cinematic Realistic Film",
       colorPalette: "Natural Cinematic Colors",
       cinematicSpecs: "High-end cinematic lighting and camera setup",
@@ -213,31 +328,59 @@ Scene Rules:
 `.trim();
 
 /**
- * Scene Prompt Instructions - Version 2 (Story Bible Continuity)
+ * Scene Prompt Instructions - v6.3 (Module 7 — Standalone Production Prompt Template)
+ *
+ * ZERO-ASSUMPTION FRAME: each final prompt must work standalone.
+ * Assume the image generator has NO memory of anything prior:
+ * no prompts, bibles, scenes, wardrobe, props, injuries, lighting, weather, blocking, or context.
+ *
+ * NO-SHORTHAND RULE: NEVER use "same," "unchanged," "identical," "as before,"
+ * "continues unchanged," "all six men retain appearance," etc.
+ * If something carries forward, write its CURRENT VALUES in full.
+ *
+ * PRODUCTION PROMPT PRIORITY ORDER (always follow within the prompt string):
+ *   1. Main subject/action
+ *   2. Character identity/appearance (full Level 1 physical detail)
+ *   3. Clothing/physical state (exact current wardrobe, Level 2)
+ *   4. Relationships/blocking (how characters relate spatially)
+ *   5. Camera composition (shot size, angle, distance, lens feel, depth of field)
+ *   6. Location/cultural identity (full standalone production-design-level detail)
+ *   7. Foreground/midground/background layers
+ *   8. Lighting/weather/atmosphere
+ *   9. Visual style/technical quality
+ *  10. Prohibited drift (inline, specific to this frame)
+ *
+ * MATERIALIZATION RULE: A racial/ethnic/national label is NOT sufficient.
+ * Always include full physical/behavioral description inline in the prompt.
+ *
+ * IDENTITY CONTINUITY (Level 1 — never changes without story justification):
+ *   race, ethnicity, nationality, canonical skin tone/undertone, face/body structure,
+ *   eye/nose/mouth/jaw shape, hair texture/style/hairline, facial hair, age range, permanent marks.
+ *
+ * OUTPUT FORMAT: One standalone paragraph that reads like a professional storyboard
+ * artist's instruction, self-contained, with all identity/wardrobe/location/camera/lighting details.
+ * STRICTLY NO text, captions, subtitles, or letters in the image.
  */
 export const SCENE_PROMPT_VERSION_TWO = `
-*For each image, incorporate ALL of the following visual elements into one flowing, highly descriptive paragraph:*
+*UNIVERSAL STORY-TO-MOTION-GRAPHIC IMAGE WORKFLOW — v6.3 Frame Instruction*
 
-- Main Subject (WHO): Exactly who or what is visible. Use the exact physical traits from the Story Bible.
-- Current Action (WHAT): Describe ONLY the specific, physical action occurring precisely at this moment.
-- Location & Architecture (WHERE): Use the exact location descriptions from the Story Bible.
-- Time & Lighting (WHEN): Time of day, weather, and specific lighting based on the Dynamic Scene State.
-- Emotion & Body Language (HOW): Facial expressions based on the Tone from the Dynamic Scene State.
-- Camera Framing: Decide the best still-image framing. NO camera movements.
-- Visual Details: Highly concrete semantic details.
+For each image, produce ONE STANDALONE paragraph in the following PRIORITY ORDER:
 
-*Critical Continuity Rules (MANDATORY):*
-- Maintain identical facial identity, hair, age, and build for characters as defined in the Story Bible.
-- Maintain identical clothing as defined in the Dynamic Scene State.
-- Maintain identical locations, objects, and vehicles as defined in the Story Bible.
-- Preserve cinematic continuity from previous scenes. Never leave consistency to chance.
+1. MAIN SUBJECT & ACTION: Exactly who or what is visible; the specific physical action at this precise moment.
+2. CHARACTER IDENTITY & APPEARANCE (Level 1 — never changes): Full physical description inline — race, ethnicity, nationality, canonical skin tone with undertone, face structure, eye color/shape/spacing, nose, mouth/lips, jaw/chin, hair texture/style/length/hairline, facial hair, age range, permanent marks (scars/tattoos). Never use a racial label alone.
+3. CLOTHING & PHYSICAL STATE (Level 2): Exact current wardrobe — upper garment, lower garment, outerwear, exact color family, fabric/cut/wear state, footwear, accessories, injuries/dirt/sweat if present.
+4. RELATIONSHIPS & BLOCKING: How characters relate spatially to each other and the environment; eyelines; who is foreground/background.
+5. CAMERA COMPOSITION: Shot size (ECU/CU/MCU/MS/MLS/LS/ELS), angle, height, lens feel, depth of field, primary focus, aspect ratio framing.
+6. LOCATION & CULTURAL IDENTITY: Full standalone production-design-level description — country, region, city/district, architecture materials, surface condition, signage, vegetation, period markers. Enough to physically rebuild the space without inventing anything.
+7. FOREGROUND / MIDGROUND / BACKGROUND: Layered environmental detail.
+8. LIGHTING & ATMOSPHERE: Natural/practical light source, color temperature, shadow direction, weather, atmospheric density, time-of-day logic.
+9. VISUAL STYLE & TECHNICAL QUALITY: Cinematic photorealistic still, 8k detail, hyper-realistic skin rendering, volumetric lighting.
+10. PROHIBITED DRIFT (inline): Specifically state what must NOT appear in this frame.
 
-*Critical Exclusions & Anti-Patterns:*
-- NO generic adjectives or filler phrases (do not use: "cinematic", "epic", "masterpiece").
-- NO video-centric metadata: NO camera movements, NO audio, NO dialogue.
-- NO abstract storytelling. Describe only what is physically visible in the freeze-frame.
-- STRICTLY NO text, captions, subtitles, or letters in the image.
-
-*Required Format:*
-[A single, highly detailed, visually concrete paragraph describing exactly what is visible in the frame, reading like a professional storyboard artist's instruction.]
+*MANDATORY EXCLUSIONS:*
+- NO shorthand: never write "same," "unchanged," "as before," "identical to," "as described," "continues unchanged."
+- NO generic filler: no "cinematic," "epic," "masterpiece," "breathtaking" without specific detail.
+- NO camera movements — describe freeze-frame stills only.
+- NO audio, dialogue, or non-visual metadata.
+- STRICTLY NO text, captions, subtitles, watermarks, or logos in the image.
 `.trim();
