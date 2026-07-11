@@ -247,6 +247,8 @@ async function _runWorkflow({
   visualSuggestions = null,
   uploadedMediaUrl = null,
   characterReferenceBase64: userCharacterReferenceBase64 = null,
+  // New: multi-character reference array [{ name, base64 }]
+  characterReferences: userMultiCharacterReferences = null,
 }) {
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
@@ -302,6 +304,7 @@ async function _runWorkflow({
           visualSuggestions,
           uploadedMediaUrl,
           characterReferenceBase64: userCharacterReferenceBase64,
+          characterReferences: userMultiCharacterReferences,
         },
       },
     });
@@ -406,36 +409,61 @@ async function _runWorkflow({
       logger.info("Step 2.1: Extracting story metadata and master prompts...");
       const stopMetaTimer = perf?.start("metadata", "Extract metadata & master prompts");
       
-      if (userCharacterReferenceBase64) {
-        logger.info(
-          "User provided a character reference image. Uploading to Cloudinary...",
-        );
-        try {
-          const upload = await cloudinary.uploader.upload(
-            userCharacterReferenceBase64,
-            {
+      // ── Upload user-supplied character reference images ────────────────────
+      //
+      // Two code paths (backward compatible):
+      //   A) New: userMultiCharacterReferences = [{ name, base64 }, ...]
+      //      → upload each, fuzzy-match to story character, populate characterReferences[]
+      //   B) Legacy: userCharacterReferenceBase64 = single base64 string
+      //      → upload once, assign to main character (unchanged behaviour)
+
+      const uploadedMultiRefs = []; // { name, url } after Cloudinary upload
+
+      if (Array.isArray(userMultiCharacterReferences) && userMultiCharacterReferences.length > 0) {
+        logger.info(`User provided ${userMultiCharacterReferences.length} multi-character reference image(s). Uploading...`);
+        for (const entry of userMultiCharacterReferences) {
+          if (!entry.base64) continue;
+          try {
+            const upload = await cloudinary.uploader.upload(entry.base64, {
               folder: "character-references",
               resource_type: "image",
-              public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
+              public_id: `user-char-ref-${workflow.id}-${(entry.name || "char").replace(/\s+/g, "-").toLowerCase()}-${Date.now()}`,
               overwrite: true,
-            },
-          );
+            });
+            uploadedMultiRefs.push({ name: entry.name || "", url: upload.secure_url });
+            logger.info(`✅ Multi-char ref uploaded: "${entry.name}" → ${upload.secure_url}`);
+          } catch (err) {
+            logger.error(`⚠️ Failed to upload character ref for "${entry.name}": ${err.message}`);
+            // Fallback: use inline base64 so this character still has a reference
+            uploadedMultiRefs.push({ name: entry.name || "", url: entry.base64 });
+          }
+        }
+      } else if (userCharacterReferenceBase64) {
+        // Legacy single-character path
+        logger.info("User provided a character reference image (legacy). Uploading to Cloudinary...");
+        try {
+          const upload = await cloudinary.uploader.upload(userCharacterReferenceBase64, {
+            folder: "character-references",
+            resource_type: "image",
+            public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
+            overwrite: true,
+          });
           characterReferenceUrl = upload.secure_url;
-          logger.info(
-            `✅ User Character Reference URL: ${characterReferenceUrl}`,
-          );
+          logger.info(`✅ User Character Reference URL: ${characterReferenceUrl}`);
         } catch (err) {
-          logger.error(
-            `⚠️ Failed to upload user character reference: ${err.message}`,
-          );
-          characterReferenceUrl = userCharacterReferenceBase64; // Fallback to inline base64 if Cloudinary fails
+          logger.error(`⚠️ Failed to upload user character reference: ${err.message}`);
+          characterReferenceUrl = userCharacterReferenceBase64;
         }
       }
 
+      // Extract reference traits for extractStoryMetadata from the FIRST/MAIN uploaded reference
       let referenceTraits = null;
-      if (characterReferenceUrl && characterReferenceUrl.startsWith("http")) {
-        logger.info("Extracting physical traits from reference image...");
-        referenceTraits = await analyzeReferenceImage(characterReferenceUrl);
+      const firstRef = uploadedMultiRefs[0];
+      const mainRefUrl = (firstRef?.url?.startsWith("http") ? firstRef.url : null)
+        || (characterReferenceUrl?.startsWith("http") ? characterReferenceUrl : null);
+      if (mainRefUrl) {
+        logger.info("Extracting physical traits from main reference image...");
+        referenceTraits = await analyzeReferenceImage(mainRefUrl);
       }
 
       storyMetadata = await extractStoryMetadata(script, referenceTraits);
@@ -634,29 +662,61 @@ async function _runWorkflow({
         },
       });
 
-      // 2.2 Generate Character References for all characters
+      // 2.2 Match uploaded multi-char refs to story characters by fuzzy name,
+      //     OR assign legacy single ref to main character
       logger.info("Step 2.2: Processing Multi-Character References...");
       const charactersList = storyMetadata.characters || [];
 
-      // Assign user-uploaded image to the main character
+      /**
+       * Fuzzy name match: returns true if charName contains refName or vice versa
+       * (case-insensitive, trimmed). Handles "Marcus" matching "Marcus Johnson", etc.
+       */
+      const nameMatch = (charName = "", refName = "") => {
+        const a = charName.trim().toLowerCase();
+        const b = refName.trim().toLowerCase();
+        return a && b && (a.includes(b) || b.includes(a));
+      };
+
+      // Identify the main character for legacy compat
       const mainCharacter =
         charactersList.find((c) => c.isMainCharacter) || charactersList[0];
-      if (characterReferenceUrl && mainCharacter) {
+
+      if (uploadedMultiRefs.length > 0) {
+        // New multi-character path
+        for (const ref of uploadedMultiRefs) {
+          // Find best-matching story character
+          const matchedChar = charactersList.find(c => nameMatch(c.name, ref.name))
+            || (ref === uploadedMultiRefs[0] ? mainCharacter : null); // first ref → main char if no name match
+
+          if (matchedChar) {
+            characterReferences.push({ id: matchedChar.id, url: ref.url });
+            logger.info(`✅ Matched "${ref.name}" → character "${matchedChar.name || matchedChar.id}"`);
+            // Keep legacy characterReferenceUrl pointing to main character's URL
+            if (matchedChar.id === mainCharacter?.id) {
+              characterReferenceUrl = ref.url;
+            }
+          } else {
+            logger.warn(`⚠️ No story character matched ref name "${ref.name}" — reference not assigned`);
+          }
+        }
+      } else if (characterReferenceUrl && mainCharacter) {
+        // Legacy single-reference path
         characterReferences.push({
           id: mainCharacter.id,
-          url: characterReferenceUrl, // The Cloudinary URL we generated earlier
+          url: characterReferenceUrl,
         });
         logger.info(
           `✅ Assigned user-uploaded character reference to ${mainCharacter.name || mainCharacter.id}`,
         );
       }
 
-      // 2.2 Generate Character Portraits for all story characters
+      // 2.2 Generate Character Portraits for all story characters not yet covered
       // SKIP portrait generation when:
-      //   a) User uploaded a direct media file (uploadedMediaUrl) — AI generation is bypassed entirely
-      //   b) User provided a character reference image — we already have the likeness anchor
-      const shouldGeneratePortraits =
-        !uploadedMediaUrl && !userCharacterReferenceBase64;
+      //   a) User uploaded direct media (uploadedMediaUrl) — AI bypassed entirely
+      //   b) User provided any character reference (single or multi) — likeness anchored
+      const hasAnyUserReference =
+        uploadedMultiRefs.length > 0 || !!userCharacterReferenceBase64;
+      const shouldGeneratePortraits = !uploadedMediaUrl && !hasAnyUserReference;
 
       if (shouldGeneratePortraits && (
         mediaType === "video" ||
@@ -732,20 +792,22 @@ async function _runWorkflow({
         logger.info(
           shouldGeneratePortraits
             ? "Step 2.2: Skipping portrait generation (no characters in story metadata)."
-            : `Step 2.2: Skipping portrait generation — ${uploadedMediaUrl
-              ? "direct media upload provided (AI generation bypassed)"
-              : "user character reference image provided (likeness already anchored)"
+            : `Step 2.2: Skipping portrait generation — ${
+              uploadedMediaUrl
+                ? "direct media upload provided (AI generation bypassed)"
+                : `${characterReferences.length} user character reference(s) provided (likeness already anchored)`
             }.`,
         );
       }
 
-      // Update the database with the new character references array
+      // Store uploaded multi-char refs in metadata for audit/debug
       await prisma.workflow.update({
         where: { id: workflow.id },
         data: {
           metadata: {
             ...(workflow.metadata || {}),
             characterReferences,
+            userCharacterRefNames: uploadedMultiRefs.map(r => r.name).filter(Boolean),
           },
         },
       });

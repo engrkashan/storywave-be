@@ -45,6 +45,8 @@ export const createWorkflow = async (req, res) => {
       visualSuggestions,
       uploadedMediaUrl,
       characterReferenceBase64,
+      // New: array of { name, base64 } — one per character
+      characterReferences: userCharacterReferences,
       autoPublish,
       autoPublishDelayMinutes,
     } = req.body;
@@ -95,6 +97,10 @@ export const createWorkflow = async (req, res) => {
           visualSuggestions,
           uploadedMediaUrl,
           characterReferenceBase64: characterReferenceBase64 || null,
+          // Multi-character references: [{ name, base64 }]
+          characterReferences: Array.isArray(userCharacterReferences) && userCharacterReferences.length > 0
+            ? userCharacterReferences
+            : null,
           autoPublish,
           autoPublishDelayMinutes,
         },
@@ -138,6 +144,10 @@ export const createWorkflow = async (req, res) => {
       visualSuggestions,
       uploadedMediaUrl,
       characterReferenceBase64: characterReferenceBase64 || null,
+      // Multi-character references array
+      characterReferences: Array.isArray(userCharacterReferences) && userCharacterReferences.length > 0
+        ? userCharacterReferences
+        : null,
       autoPublish,
       autoPublishDelayMinutes,
     };
