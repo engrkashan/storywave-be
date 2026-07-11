@@ -404,6 +404,7 @@ async function _runWorkflow({
     let styleReferenceUrl = null;
     let characterReferences = [];
     let earlyScenePrompts = null; // Cache for later
+    let uploadedMultiRefs = []; // { name, url } after Cloudinary upload
 
     if (shouldGenerateImage) {
       logger.info("Step 2.1: Extracting story metadata and master prompts...");
@@ -416,8 +417,6 @@ async function _runWorkflow({
       //      → upload each, fuzzy-match to story character, populate characterReferences[]
       //   B) Legacy: userCharacterReferenceBase64 = single base64 string
       //      → upload once, assign to main character (unchanged behaviour)
-
-      const uploadedMultiRefs = []; // { name, url } after Cloudinary upload
 
       if (Array.isArray(userMultiCharacterReferences) && userMultiCharacterReferences.length > 0) {
         logger.info(`User provided ${userMultiCharacterReferences.length} multi-character reference image(s). Uploading...`);
