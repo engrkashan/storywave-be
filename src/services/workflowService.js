@@ -455,15 +455,31 @@ async function _runWorkflow({
         }
       }
 
-      // Extract reference traits for extractStoryMetadata from the FIRST/MAIN uploaded reference
-      let referenceTraits = null;
-      const firstRef = uploadedMultiRefs[0];
-      const mainRefUrl = (firstRef?.url?.startsWith("http") ? firstRef.url : null)
-        || (characterReferenceUrl?.startsWith("http") ? characterReferenceUrl : null);
-      if (mainRefUrl) {
+      // Extract reference traits for extractStoryMetadata from uploaded references
+      let referenceTraits = [];
+      
+      if (uploadedMultiRefs.length > 0) {
+        logger.info(`Extracting physical traits from ${uploadedMultiRefs.length} reference images...`);
+        const traitPromises = uploadedMultiRefs.map(async (ref) => {
+          if (ref.url && ref.url.startsWith("http")) {
+            const traits = await analyzeReferenceImage(ref.url);
+            if (traits) {
+              return { characterName: ref.name || "Main Character", ...traits };
+            }
+          }
+          return null;
+        });
+        const resolvedTraits = await Promise.all(traitPromises);
+        referenceTraits = resolvedTraits.filter(Boolean);
+      } else if (characterReferenceUrl && characterReferenceUrl.startsWith("http")) {
         logger.info("Extracting physical traits from main reference image...");
-        referenceTraits = await analyzeReferenceImage(mainRefUrl);
+        const traits = await analyzeReferenceImage(characterReferenceUrl);
+        if (traits) {
+          referenceTraits.push({ characterName: "Main Character", ...traits });
+        }
       }
+      
+      if (referenceTraits.length === 0) referenceTraits = null;
 
       storyMetadata = await extractStoryMetadata(script, referenceTraits);
       masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
@@ -688,7 +704,7 @@ async function _runWorkflow({
             || (ref === uploadedMultiRefs[0] ? mainCharacter : null); // first ref → main char if no name match
 
           if (matchedChar) {
-            characterReferences.push({ id: matchedChar.id, url: ref.url });
+            characterReferences.push({ id: matchedChar.id, name: matchedChar.name, url: ref.url });
             logger.info(`✅ Matched "${ref.name}" → character "${matchedChar.name || matchedChar.id}"`);
             // Keep legacy characterReferenceUrl pointing to main character's URL
             if (matchedChar.id === mainCharacter?.id) {
@@ -702,6 +718,7 @@ async function _runWorkflow({
         // Legacy single-reference path
         characterReferences.push({
           id: mainCharacter.id,
+          name: mainCharacter.name,
           url: characterReferenceUrl,
         });
         logger.info(
@@ -769,6 +786,7 @@ async function _runWorkflow({
               stopCharUploadTimer?.();
               characterReferences.push({
                 id: char.id,
+                name: char.name,
                 url: upload.secure_url,
               });
               logger.info(

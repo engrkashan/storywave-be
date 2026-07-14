@@ -77,7 +77,12 @@ Return STRICT valid JSON:
  */
 export async function extractStoryMetadata(storyText, referenceTraits = null) {
   let refContext = "";
-  if (referenceTraits) {
+  if (Array.isArray(referenceTraits) && referenceTraits.length > 0) {
+    refContext = `
+The following character reference images were provided. Lock these exact traits to their respective CHARACTER_CAPSULEs:
+${JSON.stringify(referenceTraits, null, 2)}
+`;
+  } else if (referenceTraits && !Array.isArray(referenceTraits)) {
     refContext = `
 A main character reference image was provided. Lock these exact traits to the main character's CHARACTER_CAPSULE:
 ${JSON.stringify(referenceTraits, null, 2)}
@@ -88,17 +93,17 @@ ${JSON.stringify(referenceTraits, null, 2)}
 Analyze the COMPLETE story script below — including the ending — and extract a full MATERIALIZED STORY BIBLE.
 
 NON-NEGOTIABLE RULES:
-1. MATERIALIZATION: A racial/ethnic/national label (e.g. "Black Jamaican Afro-Caribbean man") is IDENTITY ONLY.
+1. MATERIALIZATION: A racial/ethnic/national label (e.g., "Japanese man", "Nigerian woman") is IDENTITY ONLY.
    It MUST be paired with a full physical CHARACTER_CAPSULE. A location name alone is NEVER sufficient.
 2. STANDARD: a label + age + build FAILS. Every field below must be physically defined so an image generator CANNOT invent the face.
 3. UNIVERSAL WORLD: detect world details from the actual source; never hard-code an unrelated country/culture/climate.
 4. No-Shorthand: never use "same," "unchanged," "as before" etc. Always write current values in full.
 
 CONDITIONAL CULTURAL MODULE:
-- Identify Jamaican characters as Jamaican (not generic Caribbean).
-- Black Jamaican characters as Black Jamaican Afro-Caribbean — each with individual physical description.
-- Forbid drift into African American, Afro-Latino, Haitian, Trinidadian, Barbadian, white, or ambiguous substitutes.
-- Match location details to the specific parish/city/district. Never substitute U.S. urban-crime imagery for Jamaica.
+- Accurately identify and preserve the specific cultural, regional, and ethnic identities of the characters and locations as described in the story.
+- Do not generalize specific cultures into broad categories (e.g., do not turn a specific African nation into "generic African").
+- Strictly forbid cultural drift into unrelated or dominant global archetypes (e.g., do not substitute U.S. or European aesthetics for other global locations unless explicitly set there).
+- Match location details to the specific real-world or described region, city, or district.
 
 ${refContext}
 

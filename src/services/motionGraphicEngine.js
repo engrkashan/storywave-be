@@ -305,7 +305,7 @@ Extract every recurring/named character from the story analysis below and build 
 
 STANDARD: a label + age + build is NEVER sufficient — every category below must be physically defined so an image generator CANNOT invent the face.
 
-MATERIALIZATION RULE: A racial/ethnic/national label (e.g. "Black Jamaican Afro-Caribbean man") is identity only — it MUST be paired with a full physical/behavioral CHARACTER_CAPSULE. Same for locations.
+MATERIALIZATION RULE: A racial/ethnic/national label (e.g., "Japanese man", "Nigerian woman") is identity only — it MUST be paired with a full physical/behavioral CHARACTER_CAPSULE. Same for locations.
 
 ${refContext}
 
@@ -315,8 +315,8 @@ STORY WORLD MAP:
 ${JSON.stringify(storyWorldMap, null, 2)}
 
 CONDITIONAL CULTURAL MODULE (activate when supported by the story):
-- Identify Jamaican characters as Jamaican (not generic Caribbean); Black Jamaican characters as Black Jamaican Afro-Caribbean.
-- Forbid drift into African American, Afro-Latino, Haitian, Trinidadian, Barbadian, white, mixed-race, or ambiguous substitutes unless the story establishes it.
+- Accurately identify and preserve the specific cultural, regional, and ethnic identities of the characters as described in the story.
+- Forbid drift into unrelated or dominant global archetypes (e.g., U.S. or European substitutes) unless the story establishes it.
 - Each character must have individual physical description and canonical complexion — never group them.
 
 Return STRICT valid JSON:
@@ -1149,7 +1149,7 @@ Return STRICT valid JSON:
  * Scene audit: characters listed = records completed; entry = exit states.
  * Sequence audit: source order correct; exact image count; no drift; no shorthand.
  * Automatic rejection scan: rebuild any frame using shorthand, broad-only identity,
- *   generic-only location, or any Jamaican environment passable as US/European.
+ *   generic-only location, or any non-Western environment passable as US/European.
  * Repair rule: on failure, return to earliest responsible module. Never expose failed drafts.
  */
 export async function runModule8_FinalAudit(
@@ -1234,7 +1234,7 @@ export async function runModule8_FinalAudit(
     }
   }
 
-  // 5. Geographic drift scan — detect if any Jamaican/non-US setting got US/European substitutes
+  // 5. Geographic drift scan — detect if any non-US setting got US/European substitutes
   const worldCountry = (worldBible.locations?.[0]?.geographic_cultural_id?.country || "").toLowerCase();
   if (worldCountry && !worldCountry.includes("united states") && !worldCountry.includes("uk") && !worldCountry.includes("england")) {
     for (const fp of frames) {

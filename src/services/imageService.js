@@ -145,13 +145,13 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
         const ref = characterReferences.find(c => c.id === charId);
         if (ref && ref.url) {
           const charData = await fetchImageAsBase64(ref.url);
-          inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64 });
+          inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64, charId: ref.id, charName: ref.name });
         }
       }
     } else if (characterReferences.length > 0 && characterReferences[0].url) {
-       // Fallback for single character mode if sceneCharacters is empty
-       const charData = await fetchImageAsBase64(characterReferences[0].url);
-       inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64 });
+       const ref = characterReferences[0];
+       const charData = await fetchImageAsBase64(ref.url);
+       inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64, charId: ref.id, charName: ref.name });
     }
   } catch (err) {
     logger.warn(`⚠️ Could not fetch some character reference images: ${err.message}`);
@@ -183,6 +183,10 @@ ${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
           // Build multimodal contents: text + optional character reference images
           const parts = [{ text: finalPrompt }];
           for (const inlineImg of inlineImages) {
+            const charIdentifier = inlineImg.charName || inlineImg.charId;
+            if (charIdentifier) {
+              parts.push({ text: `\n[Reference Image for character: ${charIdentifier}]\n` });
+            }
             parts.push({
               inlineData: {
                 mimeType: inlineImg.mimeType,
@@ -485,7 +489,9 @@ export async function generateMultiImages(
              index: index + 1,
              tempDir,
              aspectRatio,
-             characterUrl: characterReferences.length > 0 ? characterReferences[0].url : null,
+             characterUrl: sceneCharacters.length > 0
+               ? characterReferences.filter(c => sceneCharacters.includes(c.id)).map(c => c.url).join(" ") || null
+               : characterReferences.length > 0 ? characterReferences.map(c => c.url).join(" ") : null,
              styleUrl,
           });
         }, `MidJourney ${index + 1}`);
