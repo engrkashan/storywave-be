@@ -901,7 +901,8 @@ async function _runWorkflow({
       const narrationDuration = await getAudioDuration(narrationWavPath);
       const { words: timelineWords } = JSON.parse(transcriptContent);
       const targetSceneCount = imageCount || Math.max(5, Math.ceil(narrationDuration / 5));
-      const masterTimeline = buildMasterTimeline(timelineWords, narrationDuration, targetSceneCount);
+      // script variable holds the original text at this point. 
+      const masterTimeline = buildMasterTimeline(timelineWords, narrationDuration, targetSceneCount, script);
       const timelinePath = path.join(workflowTempDir, "timeline.json");
       saveMasterTimeline(masterTimeline, timelinePath);
       logger.info(`🗺️  Master Timeline: ${masterTimeline.actualSceneCount} scenes, ${masterTimeline.subtitleGroups.length} subtitle groups`);

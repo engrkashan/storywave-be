@@ -275,16 +275,21 @@ function _splitToCount(scenes, target) {
  * @param {Array<{word,start,end}>} words          — from Whisper (absolute timestamps)
  * @param {number}                  totalDuration  — measured from narration WAV via ffprobe
  * @param {number}                  targetSceneCount — user-requested count (imageCount)
+ * @param {string}                  originalScript   — the original user script for exact subtitle matching
  * @returns {Object} timeline
  */
-export function buildMasterTimeline(words, totalDuration, targetSceneCount) {
+export function buildMasterTimeline(words, totalDuration, targetSceneCount, originalScript = "") {
   logger.info(
     `🕐 Building Master Timeline: ${words.length} words | ` +
     `${totalDuration.toFixed(2)}s | target ${targetSceneCount} scenes`
   );
 
   const scenes         = buildSceneBoundaries(words, totalDuration, targetSceneCount);
-  const subtitleGroups = buildSubtitleGroups(words);
+  let subtitleGroups   = buildSubtitleGroups(words);
+  
+  if (originalScript && originalScript.trim().length > 0) {
+    subtitleGroups = alignScriptToSubtitleGroups(originalScript, subtitleGroups);
+  }
 
   const timeline = {
     version:          1,
@@ -326,4 +331,57 @@ export function loadMasterTimeline(filePath) {
     throw new Error(`Invalid or corrupt timeline.json at ${filePath}`);
   }
   return timeline;
+}
+
+/**
+ * Replaces the Whisper transcribed text in subtitle groups with the perfectly
+ * formatted original script using a deterministic word-count alignment.
+ *
+ * @param {string} script
+ * @param {Array<{start, end, text}>} subtitleGroups
+ */
+function alignScriptToSubtitleGroups(script, subtitleGroups) {
+  let remainingScript = script.trim();
+
+  for (let i = 0; i < subtitleGroups.length; i++) {
+    const group = subtitleGroups[i];
+    const groupWords = group.text.trim().split(/\s+/);
+    const numWords = groupWords.length;
+
+    let wordCount = 0;
+    let splitIdx = 0;
+    let inWord = false;
+    for (let j = 0; j < remainingScript.length; j++) {
+      if (/\s/.test(remainingScript[j])) {
+        if (inWord) {
+          wordCount++;
+          inWord = false;
+          if (wordCount === numWords) {
+            splitIdx = j;
+            break;
+          }
+        }
+      } else {
+        inWord = true;
+      }
+    }
+
+    if (splitIdx === 0 && remainingScript.length > 0) {
+      splitIdx = remainingScript.length;
+    }
+
+    const matchedText = remainingScript.substring(0, splitIdx).trim();
+    remainingScript = remainingScript.substring(splitIdx).trim();
+
+    if (matchedText) {
+      group.text = matchedText; // replace whisper text with exact script text
+    }
+  }
+
+  // Any leftover text gets appended to the last group
+  if (remainingScript.length > 0 && subtitleGroups.length > 0) {
+    subtitleGroups[subtitleGroups.length - 1].text += " " + remainingScript;
+  }
+
+  return subtitleGroups;
 }
