@@ -766,6 +766,7 @@ function initializeVisualState(worldBible, castBible) {
   return {
     location: null,
     environment: "",
+    props_and_objects: "", // newly tracked
     lighting: "natural cinematic lighting",
     weather: "clear",
     timeOfDay: "daytime",
@@ -816,7 +817,8 @@ Output a strict JSON state delta. Only output what changes. For characters, only
   "environment_delta": {
     "lighting": "string or null",
     "weather": "string or null",
-    "timeOfDay": "string or null"
+    "timeOfDay": "string or null",
+    "props_and_objects": "string or null (update all visible props, furniture, and vehicles)"
   },
   "camera_delta": {
     "lens": "string or null (e.g. 50mm, wide angle)",
@@ -863,6 +865,7 @@ function applyDeltas(currentState, deltas, worldBible, castBible) {
     if (deltas.environment_delta.lighting) newState.lighting = deltas.environment_delta.lighting;
     if (deltas.environment_delta.weather) newState.weather = deltas.environment_delta.weather;
     if (deltas.environment_delta.timeOfDay) newState.timeOfDay = deltas.environment_delta.timeOfDay;
+    if (deltas.environment_delta.props_and_objects) newState.props_and_objects = deltas.environment_delta.props_and_objects;
   }
 
   if (deltas?.camera_delta) {
@@ -908,6 +911,9 @@ function runPromptWriter(state, castBible, worldBible, aspectRatio) {
   if (state.location) {
      const loc = state.location;
      prompt += `Location: ${loc.geographic_cultural_id?.name || loc.name}. ${loc.construction?.wall_roof_floor_ceiling_material || ""}. ${loc.surface_condition || ""}. ${loc.fixed_elements || ""}. `;
+  }
+  if (state.props_and_objects) {
+     prompt += `Key objects/props present: ${state.props_and_objects}. `;
   }
   prompt += `Lighting: ${state.lighting}. Weather: ${state.weather}. Time of day: ${state.timeOfDay}. `;
 
@@ -1016,7 +1022,7 @@ async function runMovieGuideGeneration(storyScript, castBible, worldBible, refer
   let refLockSection = "";
   if (Array.isArray(referenceTraits) && referenceTraits.length > 0) {
     const locks = referenceTraits.map(r =>
-      `- ${r.characterName}: face=${r.face}, hair=${r.hair}, skin=${r.skin}, age=${r.age}, build=${r.build}, clothing=${r.clothing || "N/A"}`
+      `- ${r.characterName}: face=${r.face}, hair=${r.hair}, skin=${r.skin}, ethnicity=${r.ethnicity || "N/A"}, age=${r.age}, build=${r.build}, clothing=${r.clothing || "N/A"}`
     ).join("\n");
     refLockSection = `
 REFERENCE IMAGE LOCKS (HARD CANONICAL APPEARANCE — MUST BE REPRODUCED EXACTLY IN EVERY FRAME):
@@ -1072,6 +1078,7 @@ RULES:
 - Use explicit character names ALWAYS.
 - Describe ONLY what is visually on screen. No dialogue. No internal thoughts.
 - Be extremely precise about positions, props, and wardrobe.
+- EVERY SINGLE OBJECT mentioned in the story (e.g., rooms, home, corridor, car, clock, weapons, tech) MUST be explicitly listed in the 'props_and_objects' field for the beat it appears in.
 - Never skip a moment; the next beat must flow logically from the previous one.
 
 Return STRICT valid JSON:

@@ -30,6 +30,7 @@ Return STRICT valid JSON:
   "face": "detailed facial structure and features",
   "hair": "hairstyle, color, texture",
   "skin": "skin tone and complexion",
+  "ethnicity": "perceived ethnicity or cultural background",
   "age": "approximate age",
   "build": "body type and proportions",
   "expression": "default expression or vibe",
