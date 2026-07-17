@@ -404,6 +404,7 @@ async function _runWorkflow({
     let styleReferenceUrl = null;
     let characterReferences = [];
     let uploadedMultiRefs = []; // { name, url } after Cloudinary upload
+    let referenceTraits = null;  // ← hoisted so generateScenePrompts can access it after transcription
 
     if (shouldGenerateImage) {
       logger.info("Step 2.1: Extracting story metadata and master prompts...");
@@ -455,7 +456,7 @@ async function _runWorkflow({
       }
 
       // Extract reference traits for extractStoryMetadata from uploaded references
-      let referenceTraits = [];
+      let localRefTraits = [];
       
       if (uploadedMultiRefs.length > 0) {
         logger.info(`Extracting physical traits from ${uploadedMultiRefs.length} reference images...`);
@@ -469,16 +470,16 @@ async function _runWorkflow({
           return null;
         });
         const resolvedTraits = await Promise.all(traitPromises);
-        referenceTraits = resolvedTraits.filter(Boolean);
+        localRefTraits = resolvedTraits.filter(Boolean);
       } else if (characterReferenceUrl && characterReferenceUrl.startsWith("http")) {
         logger.info("Extracting physical traits from main reference image...");
         const traits = await analyzeReferenceImage(characterReferenceUrl);
         if (traits) {
-          referenceTraits.push({ characterName: "Main Character", ...traits });
+          localRefTraits.push({ characterName: "Main Character", ...traits });
         }
       }
       
-      if (referenceTraits.length === 0) referenceTraits = null;
+      referenceTraits = localRefTraits.length > 0 ? localRefTraits : null;
 
       storyMetadata = await extractStoryMetadata(script, referenceTraits);
       masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
