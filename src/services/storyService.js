@@ -605,29 +605,83 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
     return scenePrompts;
 
   } catch (err) {
-    logger.error(`❌ [v6.3 Engine] Full engine failed (${err.message}) — falling back to chunked generation`);
+    logger.error(`❌ [v6.3 Engine] Full engine failed (${err.message}) — engaging enriched fallback generation`);
 
     const words = storyScript.split(/\s+/).filter(Boolean);
     const chunkSize = Math.ceil(words.length / count);
     const fallbackScenes = [];
 
+    // Build character description map for quick lookup
+    const charDescMap = {};
+    if (storyBible?.characters?.length > 0) {
+      for (const c of storyBible.characters) {
+        charDescMap[c.id] = { name: c.name, appearance: c.appearance || "", clothing: c.base_clothing || "" };
+      }
+    }
+
+    // Build location keyword → description map so each chunk can detect its active location
+    const locationRecords = storyBible?.locations || [];
+
+    /**
+     * Detect the most likely active location for a chunk of text.
+     * Scores each location by how many times its name (or keywords from its description)
+     * appear in the chunk text. Falls back to the first location if nothing matches.
+     */
+    function detectActiveLocation(chunkText) {
+      if (!locationRecords.length) return null;
+      const lower = chunkText.toLowerCase();
+      let best = locationRecords[0];
+      let bestScore = 0;
+      for (const loc of locationRecords) {
+        const keywords = [
+          loc.name,
+          ...(loc.description || "").split(/[\s,;.]+/).filter(w => w.length > 4),
+        ].filter(Boolean).map(k => k.toLowerCase());
+        const score = keywords.reduce((s, kw) => s + (lower.includes(kw) ? 1 : 0), 0);
+        if (score > bestScore) { bestScore = score; best = loc; }
+      }
+      return best;
+    }
+
     for (let i = 0; i < count; i++) {
       const chunk = words.slice(i * chunkSize, (i + 1) * chunkSize).join(" ");
-      const openingSentence = (chunk.match(/[^.!?]+[.!?]/)?.[0] ?? chunk.slice(0, 150)).trim();
 
-      let charContext = "";
-      if (storyBible?.characters?.length > 0) {
-        charContext = storyBible.characters.map(c => `${c.name}: ${c.appearance}`).join(". ");
-      }
+      // Detect active location for this chunk
+      const activeLoc = detectActiveLocation(chunk);
+      const locationSection = activeLoc
+        ? `LOCATION: ${activeLoc.name}. ${activeLoc.description || ""}`.slice(0, 400)
+        : "";
+
+      // Identify characters mentioned in this chunk
+      const chunkLower = chunk.toLowerCase();
+      const mentionedChars = storyBible?.characters?.filter(c =>
+        c.name && chunkLower.includes(c.name.toLowerCase())
+      ) || storyBible?.characters || [];
+
+      const characterSection = mentionedChars.length > 0
+        ? `CHARACTERS PRESENT: ${mentionedChars.map(c =>
+            `${c.name} (${c.appearance || "as described in story"}${c.base_clothing ? ", wearing: " + c.base_clothing : ""})`
+          ).join("; ")}.`
+        : "";
+
+      // Extract the most action-rich sentence from the chunk (not just the first)
+      const sentences = chunk.match(/[^.!?]+[.!?]/g) || [chunk.slice(0, 200)];
+      const actionSentence = sentences.reduce((best, s) =>
+        s.split(/\s+/).length > best.split(/\s+/).length ? s : best
+      , sentences[0] || chunk.slice(0, 200)).trim();
+
+      const prompt = [
+        locationSection,
+        characterSection,
+        `ACTION: ${actionSentence}`,
+        visualSuggestions || "",
+        "Cinematic photorealistic film still, 8K detail, hyper-realistic, sharp focus, volumetric lighting.",
+        `Maintain consistent ${activeLoc ? activeLoc.name + " environment" : "environment"}. Do not switch locations. STRICTLY NO TEXT in the image.`,
+      ].filter(Boolean).join(" ").trim();
 
       fallbackScenes.push({
-        prompt: [
-          openingSentence,
-          charContext ? `Characters: ${charContext}.` : "",
-          visualSuggestions || "",
-          "Cinematic photorealistic film still, 8k, hyper-realistic. No text in image.",
-        ].filter(Boolean).join(" ").trim(),
-        charactersInScene: (storyBible?.characters || []).map(c => c.id).filter(Boolean),
+        prompt,
+        charactersInScene: mentionedChars.map(c => c.id).filter(Boolean),
         narration: chunk,
         _negativePrompt: "",
         _globalNegativePrompt: "",
@@ -636,7 +690,7 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
       });
     }
 
-    logger.info(`✅ Fallback: Generated ${fallbackScenes.length} chunk-anchored scene prompts`);
+    logger.info(`✅ Enriched Fallback: Generated ${fallbackScenes.length} location-aware scene prompts`);
     return fallbackScenes;
   }
 }

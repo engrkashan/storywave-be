@@ -996,10 +996,21 @@ async function _runWorkflow({
             logger.info("Using pre-generated scene prompts from Step 2.5...");
             scenePrompts = earlyScenePrompts;
           } else if (mediaType === "single_image") {
+            // Build a rich single-image prompt using story metadata when available
+            const mainChar = storyMetadata?.characters?.[0];
+            const mainLoc  = storyMetadata?.locations?.[0];
+            const singleImagePrompt = imagePrompt ||
+              [
+                mainChar ? `CHARACTER: ${mainChar.name}. ${mainChar.appearance || ""}` : "",
+                mainLoc  ? `LOCATION: ${mainLoc.name}. ${mainLoc.description || ""}` : "",
+                storyMetadata?.synopsis ? `STORY CONTEXT: ${storyMetadata.synopsis}` : "",
+                "Cinematic photorealistic film still, 8K, hyper-realistic, volumetric lighting. NO TEXT in image.",
+              ].filter(Boolean).join(" ").trim() ||
+              "Cinematic storytelling scene, photorealistic, 8K detail";
             scenePrompts = [
               {
-                prompt: imagePrompt || script || "Cinematic storytelling scene",
-                charactersInScene: [],
+                prompt: singleImagePrompt,
+                charactersInScene: mainChar?.id ? [mainChar.id] : [],
               },
             ];
           } else {
@@ -1120,41 +1131,33 @@ async function _runWorkflow({
                       styleReferenceUrl
                     );
 
-                    let fallbackImage = imageResult.imageUrl;
-
-                    // If regeneration STILL fails, duplicate an adjacent image as a last resort
-                    if (!fallbackImage) {
-                      logger.warn(`❌ Regeneration for segment ${i + 1} failed. Duplicating adjacent image...`);
-                      for (let j = i - 1; j >= 0; j--) { if (images[j]?.imageUrl) { fallbackImage = images[j].imageUrl; break; } }
-                      if (!fallbackImage) {
-                        for (let j = i + 1; j < images.length; j++) { if (images[j]?.imageUrl) { fallbackImage = images[j].imageUrl; break; } }
-                      }
-                    }
-
-                    if (fallbackImage) {
+                    // If the regenerated image is available, render the segment
+                    if (imageResult.imageUrl) {
                       const sceneId = `scene_${String(i + 1).padStart(3, "0")}`;
                       const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
                       segmentFiles[i] = segmentPath;
 
                       const { startTime, duration } = getSegmentRange(i);
                       const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
-                      convertTranscriptToAss(transcriptPath, segmentAssPath, currentRatio, startTime, duration);
+                      convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, i);
                       const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
                       try {
-                        await renderMediaSegment(fallbackImage, segmentPath, duration, width, height, escapedSegmentAssPath);
-                        logger.info(`✅ Fallback segment ${i + 1} rendered successfully.`);
+                        await renderMediaSegment(imageResult.imageUrl, segmentPath, duration, width, height, escapedSegmentAssPath);
+                        logger.info(`✅ Regenerated segment ${i + 1} rendered successfully.`);
                       } catch (err) {
-                        logger.error(`❌ Failed to render fallback segment for scene ${i + 1}`, err);
+                        logger.error(`❌ Failed to render regenerated segment for scene ${i + 1}`, err);
                         segmentFiles[i] = null;
                       } finally {
                         if (fs.existsSync(segmentAssPath)) fs.unlinkSync(segmentAssPath);
                       }
                     } else {
-                      logger.warn(`❌ No fallback image found for segment ${i + 1} after all attempts.`);
+                      // Regeneration also failed — leave segment null. Never reuse another image.
+                      logger.error(`❌ Scene ${i + 1} image generation permanently failed. Segment will be skipped from final video. No adjacent image will be substituted.`);
+                      segmentFiles[i] = null;
                     }
                   } catch (err) {
-                    logger.error(`❌ Error during fallback generation for scene ${i + 1}:`, err);
+                    logger.error(`❌ Error during regeneration for scene ${i + 1}:`, err);
                     segmentFiles[i] = null;
                   }
                 })();

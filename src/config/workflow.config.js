@@ -16,5 +16,21 @@ export const config = {
     host: process.env.REDIS_HOST || "127.0.0.1",
     port: parseInt(process.env.REDIS_PORT || "6379", 10),
     password: process.env.REDIS_PASSWORD || undefined,
-  }
+  },
+
+  // ─── AI Image Model Configuration ─────────────────────────────────────────
+  // Store all model IDs here so upgrades are a single-line change.
+  // Never scatter model strings throughout the codebase.
+  ai: {
+    image: {
+      // Tier 1 — Primary: best quality, multimodal, supports reference images
+      primaryModel: process.env.GEMINI_IMAGE_PRIMARY_MODEL || "gemini-3-pro-image",
+      // Tier 2 — Fallback: used ONLY when primaryModel fails (quota, timeout, server error)
+      fallbackModel: process.env.GEMINI_IMAGE_FALLBACK_MODEL || "gemini-3.1-flash-image-preview",
+      // Text model used exclusively for intelligent safety prompt repair
+      repairModel: process.env.GEMINI_REPAIR_MODEL || "gemini-2.5-flash",
+      // OpenAI model used as fallback for prompt repair when Gemini repair model is unavailable
+      openaiRepairModel: process.env.OPENAI_REPAIR_MODEL || "gpt-4o-mini",
+    },
+  },
 };

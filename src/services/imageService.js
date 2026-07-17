@@ -1,31 +1,43 @@
+/**
+ * imageService.js — Storywave Image Generation Pipeline
+ *
+ * Provider chain (in priority order):
+ *   Tier 1: Gemini Pro Image   (config.ai.image.primaryModel)  — multimodal, best quality
+ *   Tier 2: Gemini Flash Image (config.ai.image.fallbackModel) — fallback on quota/timeout/server error
+ *
+ * Safety Violations trigger intelligent LLM-based prompt repair (up to MAX_SAFETY_REPAIRS attempts)
+ * before the scene is declared failed. Image reuse / adjacent-frame duplication is NEVER performed.
+ *
+ * Every generation attempt is logged in a per-scene PromptDebugReport.
+ */
+
 import fs from "fs";
 import path from "path";
-import fetch from "node-fetch";
 import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 import { config } from "../config/workflow.config.js";
 import { createLogger } from "../utils/logger.js";
 import { withExponentialBackoff } from "../utils/retry.js";
+
+// OpenAI client — used as fallback for prompt repair when Gemini repair model is unavailable
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
 const logger = createLogger("ImageService");
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
-  timeout: 180000 // 180 seconds for high-res images
+  timeout: 180000, // 180 s — high-res generation can be slow
 });
-const MIDJOURNEY_API_BASE = "https://api.midapi.ai/api/v1/mj";
 
+// ─── Model IDs come from config — never hardcoded here ───────────────────────
 const MODELS = {
-  PREMIUM: "gemini-3.1-flash-image-preview",
-  FAST: "imagen-4.0-fast-generate-001",
+  PRO:   config.ai.image.primaryModel,  // Tier 1
+  FLASH: config.ai.image.fallbackModel, // Tier 2 — fallback only
 };
 
-/* --------------------------------------------------
-   GLOBAL STATE (IN-MEMORY)
--------------------------------------------------- */
-
-let imagenCounter = 0;
-let isThrottling = false;
-let throttlePromise = null;
+const MAX_SAFETY_REPAIRS = 3; // Max LLM prompt-repair cycles before failing a scene
 
 /* --------------------------------------------------
    UTILS
@@ -37,386 +49,669 @@ async function ensureDir(dir) {
   await fs.promises.mkdir(dir, { recursive: true });
 }
 
-async function downloadImage(url, filePath) {
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Failed to download image: ${response.statusText}`);
-  }
-
-  const buffer = await response.buffer();
-  await fs.promises.writeFile(filePath, buffer);
-}
-
-async function sanitizePrompt(prompt) {
-  // Minimal safe sanitizer (replace with LLM if needed)
-  return prompt
-    .replace(/blood|gore|nude|explicit|violence|fighting|weapon|kill|death|scary|horror/gi, "")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
 /* --------------------------------------------------
    CHARACTER REF: Fetch remote image → base64 for Gemini multimodal
 -------------------------------------------------- */
 async function fetchImageAsBase64(url) {
-  // If it's already a base64 data URL from the frontend, parse it directly
+  // Already a base64 data URL from the frontend — parse directly
   if (url.startsWith("data:image")) {
     const match = url.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
     if (match) {
       return { mimeType: match[1], base64: match[2] };
     }
   }
-
-  // Otherwise, fetch it (for backward compatibility with old Cloudinary URLs)
+  // Cloudinary / remote URL
+  const { default: fetch } = await import("node-fetch");
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`Failed to fetch character reference: ${response.statusText}`);
+  if (!response.ok)
+    throw new Error(`Failed to fetch character reference: ${response.statusText}`);
   const buffer = await response.buffer();
   const mimeType = response.headers.get("content-type") || "image/jpeg";
   return { base64: buffer.toString("base64"), mimeType };
 }
 
 /* --------------------------------------------------
-   GEMINI / IMAGEN
+   STRUCTURED ERROR CLASSIFICATION
+   Each error type maps to a specific handling strategy:
+     SAFETY        → intelligent prompt repair → retry
+     RATE_LIMIT    → switch to Flash tier
+     QUOTA         → switch to Flash tier
+     INTERNAL      → retry same model
+     PROMPT_TOO_LONG → compress prompt → retry
+     INVALID_PROMPT  → repair prompt → retry
+     UNKNOWN       → retry up to limit, then fail
 -------------------------------------------------- */
+function classifyGeminiError(err) {
+  const msg = (err.message || "").toLowerCase();
 
-async function generateWithImagen({
+  if (
+    msg.includes("safety") ||
+    msg.includes("blocked") ||
+    msg.includes("policy") ||
+    msg.includes("prohibited") ||
+    msg.includes("harmful") ||
+    msg.includes("inappropriate") ||
+    msg.includes("finish_reason: safety") ||
+    msg.includes("content_filter")
+  ) {
+    return "SAFETY";
+  }
+  if (msg.includes("429") || msg.includes("too many requests") || msg.includes("rate limit")) {
+    return "RATE_LIMIT";
+  }
+  if (msg.includes("quota") || msg.includes("resource_exhausted")) {
+    return "QUOTA";
+  }
+  if (
+    msg.includes("500") ||
+    msg.includes("502") ||
+    msg.includes("503") ||
+    msg.includes("504") ||
+    msg.includes("internal server error") ||
+    msg.includes("service unavailable") ||
+    msg.includes("econnreset") ||
+    msg.includes("timeout") ||
+    msg.includes("fetch failed")
+  ) {
+    return "INTERNAL";
+  }
+  if (msg.includes("token") || msg.includes("too long") || msg.includes("max_tokens")) {
+    return "PROMPT_TOO_LONG";
+  }
+  if (msg.includes("invalid") || msg.includes("malformed")) {
+    return "INVALID_PROMPT";
+  }
+  return "UNKNOWN";
+}
+
+/* --------------------------------------------------
+   INTELLIGENT SAFETY PROMPT REPAIR
+   Uses a cheap text model to rewrite ONLY the unsafe wording.
+   Preserves: location, characters, actions, emotions, continuity.
+   Never modifies: narration, scene metadata, frame package, story bible.
+   Returns { repairedPrompt, reasoning } or throws on failure.
+-------------------------------------------------- */
+async function repairSafetyPrompt({
+  originalPrompt,
+  safetyErrorMessage,
+  sceneMeta = {},       // { sceneId, location, environment, characters, action, narration, emotion, camera, storyProgress, negativeGuidance }
+  previousScenePrompt = null,
+  nextScenePrompt = null,
+  attemptNumber = 1,
+}) {
+  logger.warn(`🔧 [PromptRepair] Scene ${sceneMeta.sceneId} — Safety repair attempt #${attemptNumber}`);
+
+  const systemInstruction = `You are a cinematic image prompt editor for a storytelling platform.
+
+A generated image prompt was rejected by the AI image generator due to a safety policy violation.
+
+YOUR TASK:
+Rewrite ONLY the words or phrases that likely triggered the safety filter.
+
+STRICT RULES:
+1. PRESERVE the exact same scene: location, characters, emotions, actions, camera framing.
+2. DO NOT simplify the scene or remove dramatic tension.
+3. DO NOT shorten the prompt unnecessarily.
+4. DO NOT change the story progression or character identity.
+5. DO NOT alter the narration, scene metadata, or story bible — you only rewrite the production_prompt string.
+6. Replace violent or graphic language with cinematic equivalents (e.g. "tense confrontation" instead of "fighting").
+7. Replace explicit content with tasteful alternatives.
+8. Replace copyrighted terms with descriptive equivalents.
+9. The repaired prompt must be semantically identical while being Gemini-policy compliant.
+10. Return ONLY a JSON object: { "repairedPrompt": "...", "reasoning": "what you changed and why" }`;
+
+  const userMessage = `
+ORIGINAL PROMPT (rejected):
+${originalPrompt}
+
+SAFETY ERROR:
+${safetyErrorMessage}
+
+SCENE METADATA (immutable — do not change these values, only use them as guidance):
+${JSON.stringify(sceneMeta, null, 2)}
+
+${previousScenePrompt ? `PREVIOUS SCENE PROMPT (for continuity reference):\n${previousScenePrompt}\n` : ""}
+${nextScenePrompt ? `NEXT SCENE PROMPT (for continuity reference):\n${nextScenePrompt}\n` : ""}
+
+INSTRUCTION: Rewrite ONLY the unsafe wording in the original prompt. Return { "repairedPrompt": "...", "reasoning": "..." }`;
+
+  // ── Try Gemini repair model first ───────────────────────────────────────
+  let parsed = null;
+  try {
+    const geminiResponse = await ai.models.generateContent({
+      model: config.ai.image.repairModel,
+      contents: [{ role: "user", parts: [{ text: userMessage }] }],
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    });
+    const rawGemini = geminiResponse.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    const cleanedGemini = rawGemini.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    parsed = JSON.parse(cleanedGemini);
+    if (!parsed.repairedPrompt) throw new Error("Gemini repair returned empty repairedPrompt");
+    logger.info(`🔧 [PromptRepair/Gemini] Scene ${sceneMeta.sceneId} v${attemptNumber + 1} — ${parsed.reasoning}`);
+  } catch (geminiRepairErr) {
+    // ── Gemini repair model unavailable — fall back to OpenAI ────────────
+    logger.warn(`⚠️ [PromptRepair] Gemini repair failed (${geminiRepairErr.message}). Falling back to OpenAI...`);
+
+    if (!openai) {
+      throw new Error(`Prompt repair failed: Gemini unavailable and OPENAI_API_KEY not set. Original error: ${geminiRepairErr.message}`);
+    }
+
+    const openaiModel = process.env.OPENAI_REPAIR_MODEL || config.ai.image.openaiRepairModel || "gpt-4o-mini";
+    logger.info(`🔧 [PromptRepair/OpenAI] Scene ${sceneMeta.sceneId} — Using ${openaiModel}`);
+
+    const openaiResponse = await openai.chat.completions.create({
+      model: openaiModel,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user",   content: userMessage },
+      ],
+      temperature: 0.3,
+      max_tokens: 2048,
+    });
+
+    const rawOpenAI = openaiResponse.choices?.[0]?.message?.content || "{}";
+    parsed = JSON.parse(rawOpenAI);
+    if (!parsed.repairedPrompt) throw new Error("OpenAI repair returned empty repairedPrompt");
+    logger.info(`🔧 [PromptRepair/OpenAI] Scene ${sceneMeta.sceneId} v${attemptNumber + 1} — ${parsed.reasoning}`);
+  }
+
+  return parsed;
+}
+
+/* --------------------------------------------------
+   PRE-FLIGHT PROMPT VALIDATION
+   Validates before any Gemini API call. Repairs issues inline.
+   Returns { valid: boolean, issues: string[] }
+-------------------------------------------------- */
+function validatePrompt(prompt, sceneMeta = {}) {
+  const issues = [];
+
+  if (!prompt || prompt.trim().length < 20) issues.push("Prompt is too short or empty");
+  if (/same as (previous|before|above)/i.test(prompt)) issues.push("Prompt contains forbidden shorthand 'same as previous'");
+  if (/unchanged|identical to/i.test(prompt)) issues.push("Prompt contains forbidden shorthand 'unchanged'");
+  if (/\[.*?\]/g.test(prompt) && /\[location\]|\[character\]|\[action\]/i.test(prompt)) issues.push("Prompt contains unresolved template variables");
+  if (!sceneMeta.location && !prompt.toLowerCase().includes("location")) issues.push("No location information present");
+  if (!sceneMeta.action && prompt.split(" ").length < 30) issues.push("Prompt may be too brief to convey action");
+
+  // Token limit: Gemini handles ~8000 tokens; we cap at ~4000 words as safety margin
+  const wordCount = prompt.split(/\s+/).length;
+  if (wordCount > 4000) issues.push(`Prompt exceeds safe length (${wordCount} words > 4000 limit)`);
+
+  return { valid: issues.length === 0, issues };
+}
+
+/* --------------------------------------------------
+   PROMPT BUILDER
+   Assembles the final multimodal prompt using professional prompt engineering strategies:
+   - Hyper-specific descriptions (not labels — full material/texture/color detail)
+   - Context + intent framing so the model understands the PURPOSE of the scene
+   - Step-by-step scene decomposition (background → midground → foreground → subject)
+   - Camera and cinematic language (shot size, lens feel, depth of field, angle)
+   - Semantic negative prompts embedded as affirmative directives ("an empty street with no
+     traffic" instead of "no cars")
+-------------------------------------------------- */
+function buildFinalPrompt({ prompt, commonPrompt, characterTextSection, styleSection, continuityInstructions, sceneMeta = {} }) {
+  // Context + intent block: helps the model understand WHY this image is being created
+  const intentBlock = [
+    sceneMeta.storyProgress ? `STORY CONTEXT: This is ${sceneMeta.storyProgress} of the narrative.` : "",
+    sceneMeta.narration ? `NARRATION HEARD BY VIEWER: "${sceneMeta.narration.slice(0, 200)}"` : "",
+    sceneMeta.emotion ? `EMOTIONAL BEAT: ${sceneMeta.emotion}` : "",
+  ].filter(Boolean).join(" ");
+
+  return [
+    `# VISUAL STYLE & INTENT:`,
+    commonPrompt || "Cinematic, hyper-realistic, professional photography",
+    intentBlock,
+    styleSection || "",
+    characterTextSection || "",
+    "",
+    `# SCENE COMPOSITION (step-by-step, background → foreground):`,
+    `Step 1 — BACKGROUND: Establish the environment. ${sceneMeta.location ? `The scene takes place in: ${sceneMeta.location}.` : ""} Render full architectural depth, surface textures, and ambient atmosphere.`,
+    `Step 2 — MIDGROUND: Place supporting elements, secondary characters or objects that give the scene context and scale.`,
+    `Step 3 — FOREGROUND SUBJECT: ${prompt}`,
+    "",
+    `# CAMERA & LENS:`,
+    sceneMeta.camera
+      ? `Shot: ${sceneMeta.camera}. Use cinematic depth of field appropriate to this shot size. Control focus to emphasize the primary subject.`
+      : "Medium shot, eye-level perspective, anamorphic lens feel, shallow depth of field drawing attention to the primary subject.",
+    "",
+    `# CONTINUITY & ENVIRONMENT CONSTRAINTS:`,
+    continuityInstructions || "Maintain consistent architecture, lighting, and character appearance throughout.",
+    "",
+    `# TECHNICAL SPECS:`,
+    "Photographed on Arri Alexa 65 with anamorphic prime lenses. 8K resolution, razor-sharp focus, volumetric lighting, cinematic color grading, masterpiece quality.",
+    "The image must contain absolutely no text, words, letters, numbers, captions, subtitles, watermarks, or logos anywhere in the frame.",
+  ].filter(s => s.trim() !== "").join("\n");
+}
+
+/* --------------------------------------------------
+   CONTINUITY INSTRUCTIONS BUILDER
+   Uses SEMANTIC NEGATIVE PROMPTS — affirmative descriptions of the intended state
+   rather than prohibition lists. Gemini responds better to affirmative direction.
+   Example:  ❌ "No location drift"
+             ✅ "The scene takes place inside a wood-paneled federal courtroom with
+                elevated judge's bench, American flag, and fluorescent overhead lighting.
+                This is an interior space. No outdoor elements, street scenes, or
+                natural light sources should appear anywhere in the frame."
+-------------------------------------------------- */
+function buildContinuityInstructions({ visualState, globalNegativePrompt, frameNegativePrompt }) {
+  const lines = [];
+
+  // Environment — describe it fully in the affirmative, then state the exclusion
+  if (visualState?.location) {
+    lines.push(`ENVIRONMENT: The scene is set inside/at: ${visualState.location}. This is the ONLY valid setting for this image. Render it as a complete, believable space with full depth and atmosphere.`);
+  }
+  if (visualState?.architecture) {
+    lines.push(`ARCHITECTURAL DETAIL: ${visualState.architecture}. Reproduce every surface, texture, and structural element as described. The architecture does not change between frames.`);
+  }
+  if (visualState?.lighting) {
+    lines.push(`LIGHTING LOCK: The light source is ${visualState.lighting}. This specific quality and direction of light must be consistent. Do not introduce new windows, lamps, or outdoor light.`);
+  }
+  if (visualState?.weather) {
+    lines.push(`WEATHER & ATMOSPHERE: ${visualState.weather}. The atmospheric conditions are fixed for this sequence.`);
+  }
+  if (visualState?.wardrobe) {
+    lines.push(`WARDROBE LOCK: Characters are dressed as follows: ${visualState.wardrobe}. Clothing does not change unless the story explicitly describes it changing.`);
+  }
+  if (visualState?.activeCharacters?.length > 0) {
+    lines.push(`CAST: The only people present in this scene are: ${visualState.activeCharacters.join(", ")}. The frame contains exactly these individuals — no additional bystanders, crowds, or unnamed figures unless the scene description requires them.`);
+  }
+
+  // Convert negative prompt strings into affirmative semantic equivalents
+  const negSource = [globalNegativePrompt, frameNegativePrompt].filter(Boolean).join(", ");
+  if (negSource) {
+    if (/race|ethnicity|complexion/i.test(negSource)) {
+      lines.push("IDENTITY LOCK: Each character's race, ethnicity, skin tone, undertone, facial bone structure, nose shape, eye shape, hair texture and color are fixed attributes established earlier. These attributes are immutable. Reproduce them identically.");
+    }
+    if (/location|geographic|architecture/i.test(negSource)) {
+      lines.push("LOCATION INTEGRITY: The architectural language, cultural aesthetic, and geographic identity of this setting are fixed. Do not substitute with any other country's architecture, any generic placeholder, or any tourist-resort aesthetic.");
+    }
+    if (/wardrobe|clothing/i.test(negSource)) {
+      lines.push("WARDROBE INTEGRITY: Do not reassign clothing between characters, introduce new outfits, or alter fabric colors or cuts unless the scene text explicitly describes the change.");
+    }
+    if (/face swap|identity/i.test(negSource)) {
+      lines.push("FACE INTEGRITY: Each character occupies their own distinct visual identity. Faces are not blended, swapped, or composited with features from other characters.");
+    }
+    if (/age/i.test(negSource)) {
+      lines.push("AGE LOCK: Character ages are fixed. Do not make characters appear younger, older, or more/less mature than established.");
+    }
+  }
+
+  // Universal — always applied
+  lines.push("TEXT-FREE FRAME: The image contains absolutely no text, words, letters, numbers, captions, subtitles, watermarks, logos, or printed labels anywhere in the frame — not on signs, clothing, books, screens, or any surface.");
+
+  return lines.join("\n");
+}
+
+/* --------------------------------------------------
+   SHARED GEMINI IMAGE CALLER
+   Single internal function used by both PRO and FLASH tiers.
+   Handles: multimodal parts assembly, API call, response parsing, logging.
+-------------------------------------------------- */
+async function callGeminiImageModel({
+  modelId,
+  finalPrompt,
+  inlineImages,
+  aspectRatio,
+  sceneId,
+  attempt,
+}) {
+  const startMs = Date.now();
+  logger.info(`📡 [${modelId}] Scene ${sceneId} — Attempt ${attempt} | CharRefs: ${inlineImages.length} | PromptLen: ${finalPrompt.length} chars`);
+
+  // Build multimodal parts:
+  // Prompt text first, then character reference images each preceded by a label
+  const parts = [{ text: finalPrompt }];
+  for (const inlineImg of inlineImages) {
+    const charIdentifier = inlineImg.charName || inlineImg.charId || "Character";
+    parts.push({ text: `\n[Reference Image for character: ${charIdentifier}]\n` });
+    parts.push({ inlineData: { mimeType: inlineImg.mimeType, data: inlineImg.base64 } });
+  }
+
+  if (inlineImages.length > 0) {
+    logger.info(`🖼️ [${modelId}] Scene ${sceneId} — ${inlineImages.length} character reference(s) included: ${inlineImages.map(i => i.charName || i.charId).join(", ")}`);
+  }
+
+  const response = await ai.models.generateContent({
+    model: modelId,
+    contents: [{ role: "user", parts }],
+    config: {
+      generationConfig: {
+        candidateCount: 1,
+        quality: "pro",
+      },
+      imageConfig: {
+        aspectRatio,
+        imageSize: "4K",
+        responseMimeType: "image/png",
+      },
+    },
+  });
+
+  // Check for safety blocks in response metadata
+  const candidate = response.candidates?.[0];
+  if (candidate?.finishReason === "SAFETY") {
+    const safetyRatings = candidate.safetyRatings?.map(r => `${r.category}:${r.probability}`).join(", ") || "unknown";
+    throw new Error(`SAFETY: Image blocked by safety filters — ratings: ${safetyRatings}`);
+  }
+
+  const imagePart = candidate?.content?.parts?.find((p) => p.inlineData);
+  const imageBytes = imagePart?.inlineData?.data;
+
+  const durationMs = Date.now() - startMs;
+  logger.info(`⏱️ [${modelId}] Scene ${sceneId} — API call completed in ${durationMs}ms`);
+
+  return { imageBytes, durationMs };
+}
+
+/* --------------------------------------------------
+   CORE GENERATION FUNCTION (replaces generateWithImagen)
+   Tier 1 (PRO) → Tier 2 (FLASH) on infrastructure failures.
+   Safety violations → intelligent repair → retry (same tier).
+   Logs a PromptDebugReport for every scene.
+-------------------------------------------------- */
+async function generateWithGemini({
   prompt,
   commonPrompt,
   index,
   tempDir,
   aspectRatio = "16:9",
-  activeModelTier,
-  resolution = "4K",
   characterReferences = [],
   sceneCharacters = [],
   styleUrl = null,
+  visualState = null,             // Full VisualState object for continuity constraints
+  globalNegativePrompt = null,    // From MGE _globalNegativePrompt
+  frameNegativePrompt = null,     // From MGE _negativePrompt
+  sceneMeta = {},                 // { location, characters, action, narration, emotion, camera, storyProgress }
+  previousScenePrompt = null,
+  nextScenePrompt = null,
   onCheckCancelled = null,
 }) {
-
   await ensureDir(tempDir);
-  logger.info(`🎨 Generating image for scene ${index} with prompt: "${prompt.slice(0, 80)}..."`);
 
-  const styleSection = styleUrl
-    ? `\n# STYLE REFERENCE ANCHOR:\nMatch the exact visual style, color grading, film grain, lens characteristics, and lighting mood of this reference image: ${styleUrl}. Every output image MUST look visually consistent with it.`
-    : "";
+  const sceneId = `scene_${String(index).padStart(3, "0")}`;
+  logger.info(`🎨 [GenWithGemini] ${sceneId} — starting | Prompt preview: "${prompt.slice(0, 80)}..."`);
 
-  let characterTextSection = "";
-  if (sceneCharacters.length > 0 && characterReferences.length > 0) {
-    characterTextSection = `\n# CHARACTER LIKENESS REFERENCES:\nThe attached reference image(s) define what these characters LOOK LIKE — their face, skin tone, hair texture, body structure, age, and distinctive physical features ONLY.
-    
-CRITICAL INSTRUCTION FOR AI IMAGE GENERATOR:
-1. Extract ONLY the facial features, skin tone, and body structure from the reference image.
-2. COMPLETELY IGNORE the action, pose, clothing, and expression shown in the reference image.
-3. The characters MUST be performing the exact action and showing the exact expression described in the SCENE DESCRIPTION below.
-4. If the scene says they are running, they must be running. If it says they are crying, they must be crying. Do NOT make them stand still like the reference image!`;
-  } else if (characterReferences.length > 0) {
-    characterTextSection = `\n# CHARACTER LIKENESS REFERENCE:\nThe attached reference image defines what the main character LOOKS LIKE — face, skin tone, hair texture, body structure, age, and features ONLY.
-    
-CRITICAL INSTRUCTION FOR AI IMAGE GENERATOR:
-1. Extract ONLY the facial features, skin tone, and body structure from the reference image.
-2. COMPLETELY IGNORE the action, pose, clothing, and expression shown in the reference image.
-3. The character MUST be performing the exact action and showing the exact expression described in the SCENE DESCRIPTION below.
-4. If the scene says they are running, they must be running. If it says they are crying, they must be crying. Do NOT make them stand still like the reference image!`;
+  // ── Build per-scene PromptDebugReport ────────────────────────────────────
+  const debugReport = {
+    sceneId,
+    narration: sceneMeta.narration || null,
+    location: sceneMeta.location || visualState?.location || "unknown",
+    characters: sceneMeta.characters || [],
+    referenceImages: [],
+    attempts: [],
+    finalModel: null,
+    finalPromptVersion: null,
+    generatedImage: null,
+    totalDurationMs: 0,
+    safetyRepairs: 0,
+    outcome: "pending",
+  };
+
+  // ── Pre-flight validation ─────────────────────────────────────────────────
+  const validation = validatePrompt(prompt, { ...sceneMeta, location: visualState?.location });
+  if (!validation.valid) {
+    logger.warn(`⚠️ [PreFlight] ${sceneId} — Validation issues: ${validation.issues.join("; ")}`);
   }
 
-  const finalPrompt = `
-# VISUAL STYLE GUIDE: 
-${commonPrompt || "Cinematic, hyper-realistic, professional photography"}
-${styleSection}
-${characterTextSection}
+  // ── Build character text section ──────────────────────────────────────────
+  let characterTextSection = "";
+  if (sceneCharacters.length > 0 && characterReferences.length > 0) {
+    characterTextSection = `
+# CHARACTER LIKENESS REFERENCES:
+The attached reference image(s) define what these characters LOOK LIKE — face, skin tone, hair texture, body structure, age, and distinctive physical features ONLY.
 
-# SCENE DESCRIPTION: 
-${prompt}
+CRITICAL:
+1. Extract ONLY facial features, skin tone, and body structure from the reference image.
+2. COMPLETELY IGNORE the action, pose, clothing, and expression shown in the reference image.
+3. Characters MUST perform the exact action and show the exact expression described in the SCENE DESCRIPTION.
+4. Do NOT freeze characters in a neutral pose from the reference image.`;
+  } else if (characterReferences.length > 0) {
+    characterTextSection = `
+# CHARACTER LIKENESS REFERENCE:
+The attached reference image defines the main character's appearance — face, skin tone, hair, body structure, age ONLY.
 
-# TECHNICAL SPECS: 
-Shot on Arri Alexa, 8K detail, sharp focus, volumetric lighting, masterpiece quality.
-STRICTLY NO TEXT, words, or letters in the image.
-${aspectRatio ? `Aspect Ratio: ${aspectRatio}` : ""}
-`;
+CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTION. Ignore reference pose.`;
+  }
 
-  logger.info(`📝 Final prompt (first 200 chars): ${finalPrompt.slice(0, 200)}`);
+  // ── Style section ─────────────────────────────────────────────────────────
+  const styleSection = styleUrl
+    ? `\n# STYLE REFERENCE ANCHOR:\nMatch the exact visual style, color grading, film grain, and lighting mood: ${styleUrl}.`
+    : "";
 
-  // Pre-fetch character references as base64
+  // ── Continuity instructions (natural-language constraints, not raw negatives) ─
+  const continuityInstructions = buildContinuityInstructions({
+    visualState,
+    globalNegativePrompt,
+    frameNegativePrompt,
+  });
+
+  // ── Pre-fetch character reference images as base64 (fetched ONCE, never reloaded) ──
   let inlineImages = [];
   try {
     if (sceneCharacters && sceneCharacters.length > 0) {
       for (const charId of sceneCharacters) {
-        const ref = characterReferences.find(c => c.id === charId);
-        if (ref && ref.url) {
+        const ref = characterReferences.find((c) => c.id === charId);
+        if (ref?.url) {
           const charData = await fetchImageAsBase64(ref.url);
           inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64, charId: ref.id, charName: ref.name });
+          debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url });
         }
       }
     } else if (characterReferences.length > 0 && characterReferences[0].url) {
-       const ref = characterReferences[0];
-       const charData = await fetchImageAsBase64(ref.url);
-       inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64, charId: ref.id, charName: ref.name });
+      const ref = characterReferences[0];
+      const charData = await fetchImageAsBase64(ref.url);
+      inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64, charId: ref.id, charName: ref.name });
+      debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url });
     }
   } catch (err) {
-    logger.warn(`⚠️ Could not fetch some character reference images: ${err.message}`);
+    logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not fetch character reference images: ${err.message}`);
   }
 
-  // Fallback chain: Gemini Premium -> Imagen Fast
-  const fallbackChain =
-    activeModelTier === "PREMIUM"
-      ? [MODELS.PREMIUM]
-      : [MODELS.PREMIUM, MODELS.FAST];
+  // inlineImages is now fixed for ALL retries — never reloaded, never reordered, never removed
+  const frozenInlineImages = [...inlineImages];
 
+  const globalStartMs = Date.now();
+  let currentPrompt = prompt;
+  let promptVersion = 1;
   let lastError = null;
 
-  for (const modelId of fallbackChain) {
-    const isFast = modelId === MODELS.FAST;
-    const isPro = modelId === MODELS.PREMIUM;
-    const maxRetries = 3;
+  // ── Two-tier provider loop: PRO → FLASH ──────────────────────────────────
+  const tierChain = [
+    { name: "PRO",   modelId: MODELS.PRO },
+    { name: "FLASH", modelId: MODELS.FLASH },
+  ];
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  for (const tier of tierChain) {
+    logger.info(`🔷 [GenWithGemini] ${sceneId} — Trying Tier: ${tier.name} (${tier.modelId})`);
+
+    let safetyRepairCount = 0;
+    let tierExhausted = false;
+
+    // ── Per-tier attempt loop (max 3 infrastructure retries per tier) ─────
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (onCheckCancelled) await onCheckCancelled();
+
+      // Build final prompt fresh on every attempt (includes latest repaired currentPrompt)
+      const finalPrompt = buildFinalPrompt({
+        prompt: currentPrompt,
+        commonPrompt,
+        characterTextSection,
+        styleSection,
+        continuityInstructions,
+        sceneMeta,   // context + intent + camera framing injected here
+      });
+
+      const attemptLog = {
+        tier: tier.name,
+        model: tier.modelId,
+        attemptNumber: attempt,
+        promptVersion,
+        promptSnippet: currentPrompt.slice(0, 200),
+        outcome: "pending",
+        errorType: null,
+        errorMessage: null,
+        safetyRepairApplied: false,
+        durationMs: null,
+      };
+
       try {
-        if (isFast) {
-          await throttleImagen();
-        }
+        const { imageBytes, durationMs } = await callGeminiImageModel({
+          modelId: tier.modelId,
+          finalPrompt,
+          inlineImages: frozenInlineImages,    // Always the same refs — never changed
+          aspectRatio,
+          sceneId,
+          attempt: `${tier.name}-${attempt}`,
+        });
 
-        logger.info(`📡 [${modelId}] Attempt ${attempt}/${maxRetries}`);
+        if (!imageBytes) throw new Error(`${tier.modelId} returned empty image`);
 
-        let imageBytes = null;
-        if (isPro) {
-          // Build multimodal contents: text + optional character reference images
-          const parts = [{ text: finalPrompt }];
-          for (const inlineImg of inlineImages) {
-            const charIdentifier = inlineImg.charName || inlineImg.charId;
-            if (charIdentifier) {
-              parts.push({ text: `\n[Reference Image for character: ${charIdentifier}]\n` });
-            }
-            parts.push({
-              inlineData: {
-                mimeType: inlineImg.mimeType,
-                data: inlineImg.base64,
-              },
-            });
-          }
-          if (inlineImages.length > 0) {
-            logger.info(`🖼️ ${inlineImages.length} character reference image(s) included as inline data`);
-          }
+        const filePath = path.join(tempDir, `${sceneId}.png`);
+        await fs.promises.writeFile(filePath, Buffer.from(imageBytes, "base64"));
 
-          const response = await ai.models.generateContent({
-            model: "gemini-3.1-flash-image-preview",
-            contents: [{ role: "user", parts }],
-            config: {
-              generationConfig: {
-                candidateCount: 1,
-                quality: "pro",
-              },
-              imageConfig: {
-                aspectRatio: aspectRatio,
-                imageSize: "4K",
-                responseMimeType: "image/png",
-              },
-            }
-          });
+        attemptLog.outcome = "success";
+        attemptLog.durationMs = durationMs;
+        debugReport.attempts.push(attemptLog);
+        debugReport.finalModel = tier.modelId;
+        debugReport.finalPromptVersion = `v${promptVersion}`;
+        debugReport.generatedImage = filePath;
+        debugReport.totalDurationMs = Date.now() - globalStartMs;
+        debugReport.safetyRepairs = safetyRepairCount;
+        debugReport.outcome = "success";
 
-          const part = response.candidates?.[0]?.content?.parts?.find(
-            (p) => p.inlineData,
-          );
+        _emitDebugReport(debugReport, tempDir);
+        logger.info(`✅ [GenWithGemini] ${sceneId} — Success with ${tier.name} (Prompt v${promptVersion}) → ${filePath}`);
+        return { filePath, tier: tier.name };
 
-          imageBytes = part?.inlineData?.data;
-        } else {
-          // Imagen Fast — text-only (no multimodal support), character ref is embedded in prompt text
-          const response = await ai.models.generateImages({
-            model: "imagen-4.0-fast-generate-001",
-            prompt: finalPrompt,
-            config: {
-              numberOfImages: 1,
-              aspectRatio: aspectRatio,
-              personGeneration: "allow_all",
-            },
-          });
-          imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
-        }
-
-        if (!imageBytes) {
-          throw new Error(`${modelId} returned empty image`);
-        }
-
-        const filePath = path.join(
-          tempDir,
-          `scene_${String(index).padStart(3, "0")}.png`,
-        );
-
-        await fs.promises.writeFile(
-          filePath,
-          Buffer.from(imageBytes, "base64"),
-        );
-        logger.info(`✅ Image generated successfully with ${modelId}: ${filePath}`);
-        return { filePath, activeModelTier: isPro ? "PREMIUM" : "FAST" };
       } catch (err) {
         lastError = err;
-        logger.info(
-          `❌ Image generation failed for ${modelId} (Attempt ${attempt}/${maxRetries}): ${err.message || err}`,
-        );
+        const errorType = classifyGeminiError(err);
+        attemptLog.errorType = errorType;
+        attemptLog.errorMessage = err.message;
 
-        if (attempt === maxRetries) {
-          if (isPro && fallbackChain.length > 1 && modelId === fallbackChain[0]) {
-            logger.warn(
-              `⚠️ ${modelId} failed max retries (${err.message || "Unknown Error"}). Switching to ${MODELS.FAST}`,
-            );
-            break; // Break attempt loop for Premium to move to Fast
+        logger.warn(`⚠️ [GenWithGemini] ${sceneId} — ${tier.name} Attempt ${attempt}/3 [${errorType}]: ${err.message.slice(0, 120)}`);
+
+        // ── Error-type routing ────────────────────────────────────────────
+        if (errorType === "SAFETY") {
+          if (safetyRepairCount >= MAX_SAFETY_REPAIRS) {
+            logger.error(`❌ [GenWithGemini] ${sceneId} — Safety repair limit (${MAX_SAFETY_REPAIRS}) reached. Scene generation failed.`);
+            attemptLog.outcome = "safety_repair_exhausted";
+            debugReport.attempts.push(attemptLog);
+            tierExhausted = true;
+            break;
           }
 
-          if (isFast) {
-            logger.warn(
-              `⚠️ ${modelId} failed max retries. Falling back to MidJourney.`,
-            );
+          logger.warn(`🔧 [GenWithGemini] ${sceneId} — Safety violation. Initiating prompt repair (repair #${safetyRepairCount + 1})...`);
+          attemptLog.safetyRepairApplied = true;
+
+          try {
+            const { repairedPrompt } = await repairSafetyPrompt({
+              originalPrompt: currentPrompt,
+              safetyErrorMessage: err.message,
+              sceneMeta: {
+                sceneId,
+                location: visualState?.location || sceneMeta.location,
+                environment: visualState?.architecture || sceneMeta.environment,
+                camera: sceneMeta.camera,
+                emotion: sceneMeta.emotion,
+                characters: sceneMeta.characters,
+                action: sceneMeta.action,
+                narration: sceneMeta.narration,
+                storyProgress: sceneMeta.storyProgress,
+                negativeGuidance: continuityInstructions,
+              },
+              previousScenePrompt,
+              nextScenePrompt,
+              attemptNumber: safetyRepairCount + 1,
+            });
+
+            currentPrompt = repairedPrompt;  // Only production_prompt is changed
+            promptVersion++;
+            safetyRepairCount++;
+            attemptLog.outcome = "safety_repair_applied";
+            debugReport.attempts.push(attemptLog);
+            // Don't increment `attempt` — retry this tier with repaired prompt from attempt 1
+            attempt = 0; // loop will increment to 1
+            continue;
+
+          } catch (repairErr) {
+            logger.error(`❌ [GenWithGemini] ${sceneId} — Prompt repair LLM failed: ${repairErr.message}`);
+            attemptLog.outcome = "repair_failed";
+            debugReport.attempts.push(attemptLog);
+            tierExhausted = true;
+            break;
           }
-          throw err;
-        } else {
-          logger.info(`⏳ Waiting 2 seconds before retrying...`);
+
+        } else if (errorType === "RATE_LIMIT" || errorType === "QUOTA") {
+          // Switch tiers immediately — don't waste retries on rate limit
+          logger.warn(`⏭️ [GenWithGemini] ${sceneId} — ${errorType} on ${tier.name}. Switching provider tier.`);
+          attemptLog.outcome = "tier_switch";
+          debugReport.attempts.push(attemptLog);
+          tierExhausted = true;
+          break;
+
+        } else if (errorType === "PROMPT_TOO_LONG") {
+          // Compress: truncate scene description to first 500 words
+          logger.warn(`✂️ [GenWithGemini] ${sceneId} — Prompt too long. Compressing...`);
+          currentPrompt = currentPrompt.split(/\s+/).slice(0, 500).join(" ");
+          promptVersion++;
+          attemptLog.outcome = "prompt_compressed";
+          debugReport.attempts.push(attemptLog);
           await sleep(2000);
-          if (onCheckCancelled) await onCheckCancelled(); // Check cancellation between retries
+          continue;
+
+        } else {
+          // INTERNAL / UNKNOWN → retry same tier
+          attemptLog.outcome = "retry";
+          debugReport.attempts.push(attemptLog);
+          if (attempt < 3) {
+            await sleep(2000);
+            if (onCheckCancelled) await onCheckCancelled();
+          }
         }
       }
     }
+
+    if (!tierExhausted) {
+      // All 3 attempts on this tier failed non-safety reasons
+      logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Tier ${tier.name} exhausted (non-safety). Switching to next tier.`);
+    }
   }
 
-  throw lastError;
+  // Both tiers exhausted — generation permanently failed
+  debugReport.outcome = "failed";
+  debugReport.totalDurationMs = Date.now() - globalStartMs;
+  _emitDebugReport(debugReport, tempDir);
+
+  logger.error(`❌ [GenWithGemini] ${sceneId} — All tiers exhausted. Scene generation failed permanently.`);
+  throw lastError || new Error(`Image generation failed for ${sceneId} after all tiers and repairs`);
 }
 
 /* --------------------------------------------------
-   MIDJOURNEY
+   PROMPT DEBUG REPORT EMITTER
+   Writes a per-scene JSON debug artifact to tempDir.
+   File: {tempDir}/debug_scene_XXX.json
 -------------------------------------------------- */
-
-async function generateWithMidjourney({
-  prompt,
-  index,
-  tempDir,
-  aspectRatio = "16:9",
-  characterUrl = null,
-  styleUrl = null,
-}) {
-  await ensureDir(tempDir);
-
-  if (!process.env.MIDJOURNEY_API_KEY) {
-    throw new Error("MIDJOURNEY_API_KEY not set in environment");
-  }
-
-  let finalPrompt = prompt;
-  if (characterUrl) finalPrompt += ` --cref ${characterUrl}`;
-  if (styleUrl) finalPrompt += ` --sref ${styleUrl}`;
-
-  const payload = {
-    taskType: "mj_txt2img",
-    speed: "relaxed",
-    prompt: finalPrompt,
-    fileUrls: [],
-    aspectRatio: aspectRatio,
-    version: "7",
-    variety: 10,
-    stylization: 500,
-    weirdness: 1,
-    waterMark: "",
-    enableTranslation: false,
-    callBackUrl: "",
-  };
-
-  // Start MidJourney task
-  const startRes = await fetch(`${MIDJOURNEY_API_BASE}/generate`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.MIDJOURNEY_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const rawStart = await startRes.text();
-
-  if (!startRes.ok) {
-    throw new Error(
-      `MidJourney API start failed (${startRes.status}): ${rawStart}`
-    );
-  }
-
-  let startData;
+function _emitDebugReport(report, tempDir) {
   try {
-    startData = JSON.parse(rawStart);
+    const reportPath = path.join(tempDir, `debug_${report.sceneId}.json`);
+    fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
   } catch {
-    throw new Error(`Invalid JSON from MidJourney: ${rawStart}`);
+    // Non-fatal — never block generation on debug writing
   }
-
-  const taskId = startData?.data?.taskId;
-  if (!taskId) {
-    logger.error("MidJourney start response:", startData);
-    throw new Error("No taskId returned from MidJourney");
-  }
-
-  logger.info(`🆔 MidJourney taskId: ${taskId}`);
-
-  // Polling loop
-  const maxPolls = 60;
-  let polls = 0;
-
-  while (polls < maxPolls) {
-    polls++;
-    await sleep(5000);
-    logger.info(`📡 [MidJourney] Attempt ${polls}/${maxPolls}`);
-
-    const statusRes = await fetch(
-      `${MIDJOURNEY_API_BASE}/record-info?taskId=${taskId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.MIDJOURNEY_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    const rawStatus = await statusRes.text();
-
-    if (!statusRes.ok) {
-      throw new Error(`MidJourney status check failed: ${rawStatus}`);
-    }
-
-    let statusData;
-    try {
-      statusData = JSON.parse(rawStatus);
-    } catch {
-      throw new Error(`Invalid status JSON: ${rawStatus}`);
-    }
-
-    const successFlag = statusData?.data?.successFlag;
-
-    // Success
-    if (successFlag === 1) {
-      const resultInfo = statusData.data.resultInfoJson;
-      const imageUrl = resultInfo?.resultUrls?.[0]?.resultUrl;
-      if (!imageUrl) {
-        throw new Error("MidJourney completed but no image url found");
-      }
-
-      const filePath = path.join(
-        tempDir,
-        `scene_${String(index).padStart(3, "0")}.png`
-      );
-
-      await downloadImage(imageUrl, filePath);
-      return filePath;
-    }
-
-    // Failed
-    if (successFlag === 2 || successFlag === 3) {
-      throw new Error(
-        statusData?.data?.errorMessage || "MidJourney generation failed"
-      );
-    }
-  }
-
-  throw new Error("MidJourney polling timeout");
 }
-
 
 /* --------------------------------------------------
    MULTI IMAGE ORCHESTRATOR
+   Bounded parallel generation. No image reuse. No adjacent-frame duplication.
+   Each failed scene is logged explicitly and left as null.
 -------------------------------------------------- */
-
 export async function generateMultiImages(
   prompts,
   tempDir,
@@ -426,13 +721,32 @@ export async function generateMultiImages(
   styleUrl = null,
   onCheckCancelled = null,
   onImageReady = null,
-  checkpointManager = null
+  checkpointManager = null,
 ) {
   const concurrencyLimit = config.workflow.imageConcurrency || 3;
-  logger.info(`🚀 Starting bounded parallel image generation. Total: ${prompts.length}, Concurrency: ${concurrencyLimit}`);
-  
+  logger.info(`🚀 [MultiImages] Starting bounded parallel generation — Total: ${prompts.length}, Concurrency: ${concurrencyLimit}, PrimaryModel: ${MODELS.PRO}, FallbackModel: ${MODELS.FLASH}`);
+
   const results = new Array(prompts.length).fill(null);
-  let activeModelTier = null;
+
+  // ── Visual State tracker — updated per scene to maintain environment persistence ──
+  // Each scene inherits location/lighting/weather from the previous unless the story changes them
+  let activeVisualState = {
+    location: null,
+    timeOfDay: null,
+    weather: null,
+    lighting: null,
+    architecture: null,
+    cameraStyle: null,
+    wardrobe: null,
+    characterStates: {},
+    activeCharacters: [],
+    environmentObjects: [],
+  };
+
+  // Build an ordered prompt list with prev/next context available per scene
+  const resolvedPrompts = prompts.map((p) =>
+    typeof p === "object" ? p : { prompt: p, charactersInScene: [], narration: null }
+  );
 
   async function processImage(promptObj, index) {
     if (onCheckCancelled) await onCheckCancelled();
@@ -440,9 +754,9 @@ export async function generateMultiImages(
     const sceneId = `scene_${String(index + 1).padStart(3, "0")}`;
     const expectedFilePath = path.join(tempDir, `${sceneId}.png`);
 
-    // Phase 2.5: Resume / Checkpoint logic
+    // Resume / Checkpoint logic
     if (checkpointManager && checkpointManager.isImageCompleted(sceneId) && fs.existsSync(expectedFilePath)) {
-      logger.info(`⏩ [Multi-Image ${index + 1}/${prompts.length}] Skipping generated image (Checkpoint)`);
+      logger.info(`⏩ [MultiImages] ${sceneId} — Skipping (checkpoint complete)`);
       results[index] = expectedFilePath;
       if (onImageReady) await onImageReady(expectedFilePath, index);
       return;
@@ -450,96 +764,130 @@ export async function generateMultiImages(
 
     if (checkpointManager) checkpointManager.markImageRunning(sceneId);
 
-    let safePrompt = typeof promptObj === "object" ? promptObj.prompt : promptObj;
-    const sceneCharacters = typeof promptObj === "object" ? promptObj.charactersInScene || [] : [];
-    
+    const safePrompt = promptObj.prompt || "";
+    const sceneCharacters = promptObj.charactersInScene || [];
+    const narration = promptObj.narration || null;
+    const framePackage = promptObj._framePackage || null;
+    const frameNeg = promptObj._negativePrompt || null;
+    const globalNeg = promptObj._globalNegativePrompt || null;
+
+    // ── Extract Visual State from frame package (MGE provides full location data) ─
+    let sceneVisualState = { ...activeVisualState };
+    if (framePackage) {
+      const loc = framePackage.current_location_state;
+      if (loc) {
+        sceneVisualState = {
+          ...sceneVisualState,
+          location: loc.location_name || sceneVisualState.location,
+          lighting: loc.lighting_current || sceneVisualState.lighting,
+          architecture: loc.full_standalone_description
+            ? loc.full_standalone_description.slice(0, 200)
+            : sceneVisualState.architecture,
+          activeCharacters: sceneCharacters.length > 0 ? sceneCharacters : sceneVisualState.activeCharacters,
+        };
+      }
+      if (framePackage.camera_state) {
+        sceneVisualState.cameraStyle = framePackage.camera_state.shot_size || sceneVisualState.cameraStyle;
+      }
+    }
+
+    // Build scene metadata object for repair and validation
+    const sceneMeta = {
+      sceneId,
+      location: sceneVisualState.location,
+      environment: sceneVisualState.architecture,
+      camera: sceneVisualState.cameraStyle,
+      characters: sceneCharacters,
+      action: framePackage?.frame_id?.visual_beat || null,
+      narration,
+      emotion: null,
+      storyProgress: framePackage?.frame_id?.act
+        ? `Act ${framePackage.frame_id.act}, Scene ${framePackage.frame_id.scene_number}`
+        : null,
+    };
+
+    // Previous and next scene prompts (for safety repair context)
+    const prevScenePrompt = index > 0 && resolvedPrompts[index - 1]
+      ? resolvedPrompts[index - 1].prompt
+      : null;
+    const nextScenePrompt = index < resolvedPrompts.length - 1 && resolvedPrompts[index + 1]
+      ? resolvedPrompts[index + 1].prompt
+      : null;
+
     let success = false;
     let imgResult = { imageUrl: null, error: null };
 
-    // Phase 3: Exponential Backoff Retry Loop
     try {
-      logger.info(`🎨 [Multi-Image ${index + 1}/${prompts.length}] Starting generation...`);
+      logger.info(`🎨 [MultiImages] ${sceneId} (${index + 1}/${prompts.length}) — Starting generation | Location: ${sceneVisualState.location || "unknown"} | Characters: [${sceneCharacters.join(", ")}]`);
+
       const result = await withExponentialBackoff(async () => {
-        return await generateWithImagen({
+        return await generateWithGemini({
           prompt: safePrompt,
           commonPrompt,
           index: index + 1,
           tempDir,
           aspectRatio,
-          activeModelTier,
           characterReferences,
           sceneCharacters,
           styleUrl,
+          visualState: sceneVisualState,
+          globalNegativePrompt: globalNeg,
+          frameNegativePrompt: frameNeg,
+          sceneMeta,
+          previousScenePrompt: prevScenePrompt,
+          nextScenePrompt,
           onCheckCancelled,
         });
-      }, `Image ${index + 1}`, 6, 8000);
+      }, `Image ${sceneId}`, 6, 8000);
 
-      activeModelTier = result.activeModelTier; 
-      logger.info(`✅ [Multi-Image ${index + 1}/${prompts.length}] Successfully generated: ${result.filePath}`);
+      logger.info(`✅ [MultiImages] ${sceneId} — Generated with ${result.tier}: ${result.filePath}`);
       imgResult = { imageUrl: result.filePath, error: null };
       success = true;
+
+      // Propagate visual state forward to next scene
+      activeVisualState = { ...sceneVisualState };
+
     } catch (err) {
-      logger.warn(`🔄 [Multi-Image ${index + 1}/${prompts.length}] Gemini exhausted all backoff retries. Falling back to MidJourney...`);
-      
-      const mjPrompt = commonPrompt ? `${commonPrompt} ${safePrompt}` : safePrompt;
-      try {
-        const filePath = await withExponentialBackoff(async () => {
-          return await generateWithMidjourney({
-             prompt: mjPrompt,
-             index: index + 1,
-             tempDir,
-             aspectRatio,
-             characterUrl: sceneCharacters.length > 0
-               ? characterReferences.filter(c => sceneCharacters.includes(c.id)).map(c => c.url).join(" ") || null
-               : characterReferences.length > 0 ? characterReferences.map(c => c.url).join(" ") : null,
-             styleUrl,
-          });
-        }, `MidJourney ${index + 1}`);
-        
-        logger.info(`✅ [Multi-Image ${index + 1}/${prompts.length}] MidJourney succeeded: ${filePath}`);
-        imgResult = { imageUrl: filePath, error: null };
-        success = true;
-      } catch (mjErr) {
-        logger.info(`❌ [Multi-Image ${index + 1}/${prompts.length}] MidJourney also failed: ${mjErr.message}`);
-        imgResult = { imageUrl: null, error: mjErr.message };
-      }
+      // Generation permanently failed — log explicitly. NEVER reuse any other image.
+      logger.error(`❌ [MultiImages] ${sceneId} — Permanently failed after all tiers and repairs: ${err.message}`);
+      imgResult = { imageUrl: null, error: err.message };
+      success = false;
     }
 
     if (success && checkpointManager) checkpointManager.markImageCompleted(sceneId);
     if (!success && checkpointManager) checkpointManager.markImageFailed(sceneId);
 
     results[index] = imgResult.imageUrl;
-    
-    // Phase 2: Pipeline Streaming -> Trigger the segment render immediately
+
+    // Streaming pipeline: trigger segment render as soon as image is ready
     if (success && onImageReady) {
       await onImageReady(imgResult.imageUrl, index);
     }
   }
 
-  // Bounded worker pool implementation
+  // Bounded worker pool
   const executing = new Set();
-  for (let i = 0; i < prompts.length; i++) {
-    const p = processImage(prompts[i], i);
+  for (let i = 0; i < resolvedPrompts.length; i++) {
+    const p = processImage(resolvedPrompts[i], i);
     executing.add(p);
-    
     p.finally(() => executing.delete(p));
-    
     if (executing.size >= concurrencyLimit) {
       await Promise.race(executing);
     }
   }
-
-  // Wait for any remaining tasks to finish
   await Promise.all(executing);
 
-  logger.info(`🏁 Completed multi-image generation for all ${prompts.length} images.`);
-  return results.map(r => r ? { imageUrl: r } : { imageUrl: null });
+  const succeeded = results.filter(Boolean).length;
+  const failed = results.length - succeeded;
+  logger.info(`🏁 [MultiImages] Complete — ${succeeded}/${prompts.length} generated, ${failed} failed permanently.`);
+
+  return results.map((r) => (r ? { imageUrl: r } : { imageUrl: null }));
 }
 
 /* --------------------------------------------------
    SINGLE IMAGE ORCHESTRATOR
+   Used for: style reference, cover art, character portraits, single-image media
 -------------------------------------------------- */
-
 export async function generateImage(
   prompt,
   index,
@@ -547,71 +895,34 @@ export async function generateImage(
   aspectRatio = "16:9",
   commonPrompt = null,
   characterReferences = [],
-  styleUrl = null
+  styleUrl = null,
 ) {
-  const promptObj = prompt;
-  let safePrompt = typeof promptObj === "object" ? promptObj.prompt : promptObj;
-  const sceneCharacters = typeof promptObj === "object" ? promptObj.charactersInScene || [] : [];
+  const promptObj = typeof prompt === "object" ? prompt : { prompt };
+  const safePrompt = promptObj.prompt || (typeof prompt === "string" ? prompt : "");
+  const sceneCharacters = promptObj.charactersInScene || [];
+  const frameNeg = promptObj._negativePrompt || null;
+  const globalNeg = promptObj._globalNegativePrompt || null;
 
-  let lastError = null;
-  let activeModelTier = null;
-  let resolution = "4K";
+  const sceneId = `scene_${String(index).padStart(3, "0")}`;
+  logger.info(`🎨 [SingleImage] ${sceneId} — Starting`);
 
-  // Gemini attempts
-  for (let i = 0; i < 3; i++) {
-    try {
-      logger.info(`🎨 [Single Image] Gemini Attempt ${i + 1}/3...`);
-      const result = await generateWithImagen({
-        prompt: safePrompt,
-        commonPrompt,
-        index,
-        tempDir,
-        aspectRatio,
-        activeModelTier,
-        resolution,
-        characterReferences,
-        sceneCharacters,
-        styleUrl,
-      });
-      logger.info(`✅ [Single Image] Gemini succeeded: ${result.filePath}`);
-      return { imageUrl: result.filePath, error: null };
-    } catch (err) {
-      lastError = err;
-      logger.info(`⚠️ [Single Image] Gemini Attempt ${i + 1} failed: ${err.message || err}`);
-      if (i < 2) {
-        logger.info(`🧼 Sanitizing prompt before retry...`);
-        safePrompt = await sanitizePrompt(safePrompt);
-        logger.info(`⏳ Waiting 8s before retrying Gemini...`);
-        await new Promise((res) => setTimeout(res, 8000));
-      }
-    }
+  try {
+    const result = await generateWithGemini({
+      prompt: safePrompt,
+      commonPrompt,
+      index,
+      tempDir,
+      aspectRatio,
+      characterReferences,
+      sceneCharacters,
+      styleUrl,
+      globalNegativePrompt: globalNeg,
+      frameNegativePrompt: frameNeg,
+    });
+    logger.info(`✅ [SingleImage] ${sceneId} — Succeeded: ${result.filePath}`);
+    return { imageUrl: result.filePath, error: null };
+  } catch (err) {
+    logger.error(`❌ [SingleImage] ${sceneId} — Failed: ${err.message}`);
+    return { imageUrl: null, error: err.message };
   }
-
-  logger.info("🔄 [Single Image] Gemini failed all retries. Trying MidJourney...");
-  // MidJourney fallback
-  for (let i = 0; i < 3; i++) {
-    try {
-      logger.info(`🎨 [Single Image] MidJourney Attempt ${i + 1}/3...`);
-      const filePath = await generateWithMidjourney({
-        prompt: safePrompt,
-        index,
-        tempDir,
-        aspectRatio,
-        resolution,
-        characterUrl: characterReferences.length > 0 ? characterReferences[0].url : null,
-        styleUrl,
-      });
-      logger.info(`✅ [Single Image] MidJourney succeeded: ${filePath}`);
-      return { imageUrl: filePath, error: null };
-    } catch (err) {
-      lastError = err;
-      logger.info(`⚠️ [Single Image] MidJourney Attempt ${i + 1} failed: ${err.message || err}`);
-      if (i < 2) {
-        logger.info(`🧼 Sanitizing prompt before retry...`);
-        safePrompt = await sanitizePrompt(safePrompt);
-      }
-    }
-  }
-
-  return { imageUrl: null, error: lastError?.message };
 }
