@@ -492,26 +492,54 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
   });
 
   // ── Pre-fetch character reference images as base64 (fetched ONCE, never reloaded) ──
+  // Resolution strategy (three tiers):
+  //   Tier 1 — Exact ID match: sceneCharacters IDs match characterReferences[].id
+  //   Tier 2 — Fallback all:   IDs present but none resolved (MGE char_1 vs storyMetadata ID mismatch)
+  //                             → inject ALL refs (user preference: always inject all on mismatch)
+  //   Tier 3 — No sceneChars:  no character list provided → inject ALL refs for max consistency
   let inlineImages = [];
   try {
     if (sceneCharacters && sceneCharacters.length > 0) {
-      for (const charId of sceneCharacters) {
-        const ref = characterReferences.find((c) => c.id === charId);
-        if (ref?.url) {
+      // Tier 1: attempt exact ID match for each character in scene
+      const matchedRefs = sceneCharacters
+        .map((charId) => characterReferences.find((c) => c.id === charId))
+        .filter(Boolean);
+
+      // Tier 2: if no ID matched (MGE ID vs storyMetadata ID drift), inject ALL refs
+      const refsToUse = matchedRefs.length > 0 ? matchedRefs : characterReferences;
+
+      if (matchedRefs.length === 0 && characterReferences.length > 0) {
+        logger.warn(`⚠️ [GenWithGemini] ${sceneId} — No characterReferences matched scene IDs [${sceneCharacters.join(", ")}]. Injecting all ${characterReferences.length} ref(s) as fallback.`);
+      }
+
+      for (const ref of refsToUse) {
+        if (!ref?.url) continue;
+        try {
           const charData = await fetchImageAsBase64(ref.url);
           inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64, charId: ref.id, charName: ref.name });
           debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url });
+        } catch (fetchErr) {
+          logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not fetch ref for "${ref.name || ref.id}": ${fetchErr.message}`);
         }
       }
-    } else if (characterReferences.length > 0 && characterReferences[0].url) {
-      const ref = characterReferences[0];
-      const charData = await fetchImageAsBase64(ref.url);
-      inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64, charId: ref.id, charName: ref.name });
-      debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url });
+    } else if (characterReferences.length > 0) {
+      // Tier 3: no sceneCharacters list → inject ALL refs
+      logger.info(`ℹ️ [GenWithGemini] ${sceneId} — No sceneCharacters specified. Injecting all ${characterReferences.length} character ref(s).`);
+      for (const ref of characterReferences) {
+        if (!ref?.url) continue;
+        try {
+          const charData = await fetchImageAsBase64(ref.url);
+          inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64, charId: ref.id, charName: ref.name });
+          debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url });
+        } catch (fetchErr) {
+          logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not fetch ref for "${ref.name || ref.id}": ${fetchErr.message}`);
+        }
+      }
     }
   } catch (err) {
     logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not fetch character reference images: ${err.message}`);
   }
+
 
   // inlineImages is now fixed for ALL retries — never reloaded, never reordered, never removed
   const frozenInlineImages = [...inlineImages];

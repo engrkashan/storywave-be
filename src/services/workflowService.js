@@ -17,7 +17,7 @@ import {
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { getAudioDuration } from "./audioService.js";
 import { convertToWav } from "./audioService.js";
-import { buildMasterTimeline, saveMasterTimeline } from "./timelineService.js";
+import { buildMasterTimeline, saveMasterTimeline, buildNarrationSegments } from "./timelineService.js";
 import {
   createVideo,
   createVideoWithTimeline,
@@ -403,7 +403,6 @@ async function _runWorkflow({
     let characterReferenceUrl = null;
     let styleReferenceUrl = null;
     let characterReferences = [];
-    let earlyScenePrompts = null; // Cache for later
     let uploadedMultiRefs = []; // { name, url } after Cloudinary upload
 
     if (shouldGenerateImage) {
@@ -491,36 +490,17 @@ async function _runWorkflow({
       stopMetaTimer?.();
     }
 
-    // Auto-enhance script with sound effects cues if the user enabled the toggle
+    // Auto-enhance script with sound effects cues if the user enabled the toggle.
+    // For multi_image, SFX enhancement now runs AFTER transcription so the exact
+    // Whisper narration segments drive scene boundaries (not estimated word counts).
+    // For all other media types (single_image, video, podcast), enhance the script here.
     if (soundEffects === true) {
       if (mediaType === "video") {
         logger.info("Step 2.5: Skipping sound effects because mediaType is video (SFX not needed).");
       } else if (shouldGenerateImage && mediaType === "multi_image" && !uploadedMediaUrl) {
-        logger.info("Step 2.5: Estimating audio duration to pre-generate scenes for contextual SFX...");
-        const estimatedDuration = (script.split(/\s+/).length / 2.5); // ~150 wpm
-        const dynamicCount = Math.max(5, Math.ceil(estimatedDuration / 5));
-        const count = imageCount || dynamicCount;
-
-        logger.info(`Pre-generating ${count} scenes for context-aware SFX...`);
-        const stopSfxPreTimer = perf?.start("sfx", "Pre-generate scenes for SFX");
-        earlyScenePrompts = await generateScenePrompts(
-          script,
-          count,
-          storyMetadata,
-          visualSuggestions
-        );
-        stopSfxPreTimer?.();
-
-        logger.info("Enhancing individual scenes with sound effects...");
-        const stopSfxEnhanceTimer = perf?.start("sfx", "Enhance individual scenes with SFX");
-        for (let i = 0; i < earlyScenePrompts.length; i++) {
-          const scene = earlyScenePrompts[i];
-          scene.narration = await enhanceSceneWithSoundEffects(scene.prompt, scene.narration);
-        }
-        stopSfxEnhanceTimer?.();
-
-        // Re-stitch script from the enhanced narrations
-        script = earlyScenePrompts.map(s => s.narration).join(" ");
+        logger.info("Step 2.5: SFX for multi_image will be applied after transcription (post-Step 5) for sync accuracy.");
+        // No-op here: SFX enhancement for multi_image is deferred to after Whisper transcription
+        // so scene boundaries come from actual audio timestamps, not estimated word counts.
       } else {
         logger.info(
           "Step 2.5: Enhancing script with sound-effect cues (soundEffects toggle is ON)...",
@@ -915,60 +895,112 @@ async function _runWorkflow({
       fs.writeFileSync(transcriptPath, transcriptContent);
       stopSubTimer?.();
 
-      // Master Timeline — built once, used by ALL ratios and segments
+      // Build the immutable Master Timeline FIRST — narrationSegments depend on it.
+      // Use imageCount (or dynamic count from audio duration) as the target scene count.
       const narrationDuration = await getAudioDuration(narrationWavPath);
       const { words: timelineWords } = JSON.parse(transcriptContent);
-
-      // Pre-generate scenePrompts here (outside ratio loop) so both
-      // dualPlatform ratios share the same timeline and scene count.
-      let preGeneratedScenePrompts = null;
-      if (mediaType === "multi_image" && !uploadedMediaUrl) {
-        if (earlyScenePrompts) {
-          preGeneratedScenePrompts = earlyScenePrompts;
-        } else {
-          const dynamicCount = Math.max(5, Math.ceil(narrationDuration / 5));
-          const count = imageCount || dynamicCount;
-          const stopPromptTimer = perf?.start("story", `Generate ${count} Scene Prompts`);
-          preGeneratedScenePrompts = await generateScenePrompts(
-            script,
-            count,
-            storyMetadata,
-            visualSuggestions,
-          );
-          stopPromptTimer?.();
-
-          // v6.3 Engine: extract globalNegativePrompt and FINAL_AUDIT from first scene prompt
-          const _globalNeg = preGeneratedScenePrompts?.[0]?._globalNegativePrompt || null;
-          const _finalAudit = {
-            passed: !preGeneratedScenePrompts?.some(sp => sp._negativePrompt?.includes("REJECTED")),
-            total_frames: preGeneratedScenePrompts?.length,
-          };
-          if (_globalNeg) {
-            logger.info(`[v6.3 Engine] Global Negative Prompt captured (${_globalNeg.length} chars)`);
-            try {
-              await prisma.workflow.update({
-                where: { id: workflow.id },
-                data: {
-                  metadata: {
-                    ...(workflow.metadata || {}),
-                    globalNegativePrompt: _globalNeg,
-                    finalAudit: _finalAudit,
-                  },
-                },
-              });
-            } catch (dbErr) {
-              logger.warn(`[v6.3 Engine] Failed to store audit in metadata: ${dbErr.message}`);
-            }
-          }
-        }
-      }
-
-      // Build the immutable Master Timeline
-      const targetSceneCount = preGeneratedScenePrompts?.length || imageCount || 5;
+      const targetSceneCount = imageCount || Math.max(5, Math.ceil(narrationDuration / 5));
       const masterTimeline = buildMasterTimeline(timelineWords, narrationDuration, targetSceneCount);
       const timelinePath = path.join(workflowTempDir, "timeline.json");
       saveMasterTimeline(masterTimeline, timelinePath);
       logger.info(`🗺️  Master Timeline: ${masterTimeline.actualSceneCount} scenes, ${masterTimeline.subtitleGroups.length} subtitle groups`);
+
+
+      // Pre-generate scenePrompts here (outside ratio loop) so both
+      // dualPlatform ratios share the same timeline and scene count.
+      //
+      // SYNC FIX: generateScenePrompts now runs AFTER Whisper transcription.
+      // narrationSegments maps Whisper words → per-scene text so each prompt's
+      // narration matches the exact audio slot it will be rendered over.
+      let preGeneratedScenePrompts = null;
+      let mgeToStoryIdMap = {};  // bridges MGE char_N IDs → storyMetadata char IDs
+
+      if (mediaType === "multi_image" && !uploadedMediaUrl) {
+        const dynamicCount = Math.max(5, Math.ceil(narrationDuration / 5));
+        const count = imageCount || dynamicCount;
+
+        // Build narration segments aligned to Master Timeline audio boundaries
+        const narrationSegments = buildNarrationSegments(timelineWords, masterTimeline.scenes);
+        logger.info(`🎙️  Narration segments built: ${narrationSegments.length} segments from Whisper timestamps`);
+
+        // SFX post-transcription: enhance each narration segment's text with SFX cues
+        if (soundEffects === true) {
+          logger.info("Step 5.1: Enhancing Whisper narration segments with sound-effect cues...");
+          const stopSfxTimer = perf?.start("sfx", "Enhance narration segments with SFX");
+          for (const seg of narrationSegments) {
+            if (seg.text) {
+              seg.text = await enhanceSceneWithSoundEffects("", seg.text);
+            }
+          }
+          stopSfxTimer?.();
+          // Also update the script for voiceover DB record consistency
+          script = narrationSegments.map(s => s.text).join(" ");
+        }
+
+        const stopPromptTimer = perf?.start("story", `Generate ${count} Scene Prompts (post-transcription)`);
+        const promptResult = await generateScenePrompts(
+          script,
+          count,
+          storyMetadata,
+          visualSuggestions,
+          narrationSegments,   // ← Whisper-aligned narration segments
+        );
+        stopPromptTimer?.();
+
+        preGeneratedScenePrompts = promptResult.scenePrompts;
+        const mgeCastBible = promptResult.castBible;
+
+        // ── Character ID bridge ──────────────────────────────────────────────
+        // MGE generates its own char_1/char_2 IDs. Map them to storyMetadata
+        // character IDs so portrait lookup in imageService succeeds.
+        if (mgeCastBible?.characters?.length > 0) {
+          const nameMatchFn = (a = "", b = "") => {
+            const la = a.trim().toLowerCase();
+            const lb = b.trim().toLowerCase();
+            return la && lb && (la.includes(lb) || lb.includes(la));
+          };
+          for (const mgeChar of mgeCastBible.characters) {
+            const matched = characterReferences.find((ref) => nameMatchFn(ref.name, mgeChar.name));
+            if (matched) {
+              mgeToStoryIdMap[mgeChar.id] = matched.id;
+              logger.info(`🔗 ID bridge: MGE "${mgeChar.id}" (${mgeChar.name}) → storyRef "${matched.id}"`);
+            } else {
+              logger.warn(`⚠️ ID bridge: No characterReference matched MGE character "${mgeChar.name}" (${mgeChar.id})`);
+            }
+          }
+          // Remap charactersInScene arrays using the bridge map
+          preGeneratedScenePrompts.forEach((sp) => {
+            sp.charactersInScene = (sp.charactersInScene || []).map(
+              (mgeId) => mgeToStoryIdMap[mgeId] || mgeId
+            );
+          });
+          logger.info(`🔗 Character ID bridge complete. Mapped: ${Object.keys(mgeToStoryIdMap).length}/${mgeCastBible.characters.length} characters`);
+        }
+
+        // v6.3 Engine: extract globalNegativePrompt and FINAL_AUDIT from first scene prompt
+        const _globalNeg = preGeneratedScenePrompts?.[0]?._globalNegativePrompt || null;
+        const _finalAudit = {
+          passed: !preGeneratedScenePrompts?.some(sp => sp._negativePrompt?.includes("REJECTED")),
+          total_frames: preGeneratedScenePrompts?.length,
+        };
+        if (_globalNeg) {
+          logger.info(`[v6.3 Engine] Global Negative Prompt captured (${_globalNeg.length} chars)`);
+          try {
+            await prisma.workflow.update({
+              where: { id: workflow.id },
+              data: {
+                metadata: {
+                  ...(workflow.metadata || {}),
+                  globalNegativePrompt: _globalNeg,
+                  finalAudit: _finalAudit,
+                },
+              },
+            });
+          } catch (dbErr) {
+            logger.warn(`[v6.3 Engine] Failed to store audit in metadata: ${dbErr.message}`);
+          }
+        }
+      }
 
       const videoResults = {};
 
@@ -992,10 +1024,7 @@ async function _runWorkflow({
         } else {
           // AI generation path
           let scenePrompts = [];
-          if (earlyScenePrompts) {
-            logger.info("Using pre-generated scene prompts from Step 2.5...");
-            scenePrompts = earlyScenePrompts;
-          } else if (mediaType === "single_image") {
+          if (mediaType === "single_image") {
             // Build a rich single-image prompt using story metadata when available
             const mainChar = storyMetadata?.characters?.[0];
             const mainLoc  = storyMetadata?.locations?.[0];
@@ -1014,9 +1043,9 @@ async function _runWorkflow({
               },
             ];
           } else {
-            // multi_image: use pre-generated prompts built before ratio loop
+            // multi_image: use pre-generated prompts built alongside Master Timeline
             scenePrompts = preGeneratedScenePrompts || [];
-            logger.info(`Using ${scenePrompts.length} pre-generated scene prompts from Master Timeline step`);
+            logger.info(`Using ${scenePrompts.length} Whisper-aligned scene prompts`);
           }
           logger.info("Scene Prompts:", scenePrompts);
 
@@ -1041,8 +1070,7 @@ async function _runWorkflow({
               stopStitchTimer?.();
             }
           } else if (mediaType === "multi_image") {
-            // Use pre-generated prompts (built before ratio loop alongside timeline)
-            const scenePrompts = preGeneratedScenePrompts || [];
+            // scenePrompts already set to preGeneratedScenePrompts in the block above
             const stopMultiImagesTimer = perf?.start("image", `Generate Multi Images (${scenePrompts.length} images)`);
             const checkpointManager = new CheckpointManager(workflowTempDir);
 

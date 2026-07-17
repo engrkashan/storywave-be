@@ -950,6 +950,37 @@ export async function runModule7_FrameGeneration(
 
     logger.info(`[MGE] Module 7: Generating ${sceneFrames.length} frame(s) for scene ${sceneNum}`);
 
+    // Adjacent scene summaries for continuity awareness
+    const prevScene = sceneMap[parseInt(sceneNum) - 1] || null;
+    const nextScene = sceneMap[parseInt(sceneNum) + 1] || null;
+
+    const prevSceneCtx = prevScene
+      ? JSON.stringify({
+          character_exit_states: (prevScene.character_states || []).map(cs => ({
+            character_id: cs.character_id,
+            character_name: cs.character_name,
+            exit_state: cs.exit_state,
+            current_wardrobe: cs.current_wardrobe,
+            sketch_artist_appearance: cs.sketch_artist_appearance,
+            current_condition: cs.current_condition,
+          })),
+          location_name: prevScene.current_location_state?.location_name,
+          weather_atmosphere: prevScene.weather_atmosphere_lighting,
+          scene_action_exit: prevScene.scene_action?.exit_state,
+          what_carries_forward: prevScene.scene_action?.what_carries_forward,
+        }, null, 2)
+      : "none — this is the first scene";
+
+    const nextSceneCtx = nextScene
+      ? JSON.stringify({
+          characters_present: nextScene.characters_present,
+          location_name: nextScene.current_location_state?.location_name,
+          geographic_time: nextScene.geographic_cultural_time_setting,
+          weather_atmosphere: nextScene.weather_atmosphere_lighting,
+          scene_purpose: nextScene.purpose,
+        }, null, 2)
+      : "none — this is the final scene";
+
     const prompt = `You are a film director, cinematographer, and AI image-prompt engineer.
 Generate VALIDATED_FRAME_PACKAGES for the frames assigned to this scene.
 
@@ -965,8 +996,14 @@ MATERIALIZATION RULE: A racial/ethnic/national label is NOT sufficient — alway
 CONTINUITY LEVELS:
 ${CONTINUITY_LEVELS}
 
+PREVIOUS SCENE CONTEXT (character exit states — what carries INTO this scene):
+${prevSceneCtx}
+
 CURRENT SCENE STATE PACKAGE:
 ${JSON.stringify(scene, null, 2)}
+
+NEXT SCENE CONTEXT (what will follow — do not break continuity toward it):
+${nextSceneCtx}
 
 CAST BIBLE (use for any character not in scene's character_states — match IDs):
 ${JSON.stringify(castBible, null, 2)}
@@ -1377,6 +1414,7 @@ export async function runFullMotionGraphicEngine({
   referenceTraits = null,
   visualSuggestions = null,
   storyGuidelines = null,
+  narrationSegments = null,   // Array<{sceneIndex, startSec, endSec, text}> from Whisper timestamps
 }) {
   logger.info(`[MGE] ═══ Starting Full Motion Graphic Engine v6.3 — ${imageCount} frames @ ${aspectRatio} ═══`);
 
@@ -1490,5 +1528,6 @@ export async function runFullMotionGraphicEngine({
     finalAudit: FINAL_AUDIT,
     projectSpec: PROJECT_SPEC,
     storyWorldMap: STORY_WORLD_MAP,
+    narrationSegments,   // pass through so storyService can apply timestamp-aligned narration
   };
 }

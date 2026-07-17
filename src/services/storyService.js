@@ -570,7 +570,7 @@ export async function generateStory({
  * @param {string|null} visualSuggestions — user visual style note
  * @returns {Promise<Array<{ prompt: string, charactersInScene: string[], narration: string, _framePackage: object, _negativePrompt: string, _globalNegativePrompt: string, _motionMovement: object }>>}
  */
-export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null) {
+export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null) {
   logger.info(`🎬 [v6.3 Engine] generateScenePrompts — ${count} frames requested`);
 
   try {
@@ -586,9 +586,10 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
       referenceTraits: null,
       visualSuggestions,
       storyGuidelines: storyBible?.storyGuidelines || null,
+      narrationSegments,
     });
 
-    const { scenePrompts, finalAudit } = result;
+    const { scenePrompts, finalAudit, castBible } = result;
 
     logger.info(`[v6.3 Engine] Final Audit: ${finalAudit.passed ? "✅ PASSED" : "⚠️ ISSUES"} | frames: ${scenePrompts.length}/${count} | rejected: ${finalAudit.rejected_frame_ids?.length || 0}`);
 
@@ -601,8 +602,27 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
       }
     }
 
+    // ── Overwrite narrations with Whisper-aligned text ───────────────────────
+    // If narrationSegments were provided (post-transcription path), replace the
+    // LLM-generated narration_coverage with the verbatim spoken words for that
+    // audio slot. This guarantees 1-to-1 sync between image and spoken narration.
+    if (narrationSegments && narrationSegments.length === scenePrompts.length) {
+      scenePrompts.forEach((sp, i) => {
+        if (narrationSegments[i].text) {
+          sp.narration  = narrationSegments[i].text;
+        }
+        sp._startSec = narrationSegments[i].startSec;
+        sp._endSec   = narrationSegments[i].endSec;
+      });
+      logger.info(`[v6.3 Engine] ✅ Narrations overwritten with Whisper-aligned segments (${narrationSegments.length} segments)`);
+    } else if (narrationSegments) {
+      logger.warn(`[v6.3 Engine] ⚠️ narrationSegments count (${narrationSegments.length}) ≠ scenePrompts count (${scenePrompts.length}) — using MGE narrations`);
+    }
+
     logger.info(`✅ [v6.3 Engine] Generated ${scenePrompts.length} validated standalone frame prompts`);
-    return scenePrompts;
+    // Return both scenePrompts and castBible so workflowService can bridge
+    // MGE character IDs (char_1, char_2, …) to storyMetadata character IDs.
+    return { scenePrompts, castBible: castBible || null };
 
   } catch (err) {
     logger.error(`❌ [v6.3 Engine] Full engine failed (${err.message}) — engaging enriched fallback generation`);
@@ -691,7 +711,18 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
     }
 
     logger.info(`✅ Enriched Fallback: Generated ${fallbackScenes.length} location-aware scene prompts`);
-    return fallbackScenes;
+
+    // Apply Whisper-aligned narrations to fallback scenes too
+    if (narrationSegments && narrationSegments.length === fallbackScenes.length) {
+      fallbackScenes.forEach((sp, i) => {
+        if (narrationSegments[i].text) sp.narration = narrationSegments[i].text;
+        sp._startSec = narrationSegments[i].startSec;
+        sp._endSec   = narrationSegments[i].endSec;
+      });
+      logger.info(`[v6.3 Fallback] ✅ Narrations overwritten with Whisper-aligned segments`);
+    }
+
+    return { scenePrompts: fallbackScenes, castBible: null };
   }
 }
 

@@ -91,6 +91,42 @@ export function buildSubtitleGroups(words) {
 }
 
 /* ============================================================
+   NARRATION SEGMENTS BUILDER
+   Maps Whisper words into per-scene text chunks, aligned 1-to-1
+   with the audio boundaries produced by buildSceneBoundaries.
+   Used to seed generateScenePrompts so each prompt's narration
+   maps exactly to the audio slot it will be rendered over.
+   ============================================================ */
+
+/**
+ * Given the Whisper word list and the scenes array from buildSceneBoundaries,
+ * returns one text segment per scene containing the verbatim spoken words
+ * that fall within that scene's time window.
+ *
+ * @param {Array<{word:string, start:number, end:number}>} words
+ * @param {Array<{index:number, startSec:number, endSec:number}>} scenes
+ * @returns {Array<{sceneIndex:number, startSec:number, endSec:number, text:string}>}
+ */
+export function buildNarrationSegments(words, scenes) {
+  return scenes.map((scene) => {
+    // Include a word if its midpoint falls within [startSec, endSec)
+    // Using midpoint avoids edge-words being double-counted at boundaries.
+    const segWords = words.filter((w) => {
+      const mid = (w.start + w.end) / 2;
+      return mid >= scene.startSec && mid < scene.endSec + 0.05; // 50ms tolerance at end
+    });
+
+    const text = segWords.map((w) => w.word.trim()).join(" ").trim();
+    return {
+      sceneIndex: scene.index,
+      startSec:   scene.startSec,
+      endSec:     scene.endSec,
+      text:       text || "", // empty string if no words fall in window (very short scene)
+    };
+  });
+}
+
+/* ============================================================
    SCENE BOUNDARY DETECTION
    Replaces the equal-division getSegmentRange() math.
    Boundaries come from natural speech pauses, not arithmetic.
