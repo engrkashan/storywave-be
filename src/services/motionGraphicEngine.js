@@ -784,13 +784,16 @@ function initializeVisualState(worldBible, castBible) {
   };
 }
 
-async function runSceneDirectorAI(segment, currentState, castBible, worldBible, sceneLedger, frameNumber) {
+async function runSceneDirectorAI(segment, currentState, castBible, worldBible, sceneLedger, frameNumber, correction = null) {
   logger.info(`[MGE] Scene Director evaluating frame ${frameNumber}...`);
   const prompt = `You are the Scene Director AI for a continuous cinematic sequence.
 Your task is to analyze the current narration segment and determine what changes in the visual state.
 
 CURRENT NARRATION (Audio Segment for Frame ${frameNumber}):
 "${segment.text}"
+
+DIRECTOR'S MOVIE GUIDE BEAT (Target Visual Action):
+${JSON.stringify(segment.director_beat || {}, null, 2)}
 
 PREVIOUS VISUAL STATE (What the viewer currently sees):
 ${JSON.stringify(currentState, null, 2)}
@@ -802,7 +805,7 @@ CAST BIBLE:
 ${JSON.stringify(castBible.characters.map(c => ({id: c.id, name: c.name})), null, 2)}
 WORLD BIBLE:
 ${JSON.stringify(worldBible.locations.map(l => ({id: l.id, name: l.name})), null, 2)}
-
+${correction ? `\nCORRECTION INSTRUCTION (CRITICAL - YOU FAILED PREVIOUS AUDIT):\n${correction}\n` : ""}
 Identify if there is a scene transition. Possible transitions:
 NONE, LOCATION_CHANGED, TIME_SKIP, FLASHBACK, NEW_CHARACTER, CAMERA_ONLY.
 
@@ -1004,10 +1007,96 @@ export function buildGlobalNegativePrompt(storyWorldMap, castBible) {
   return `${baseNegative}${storySpecific}. Story setting is ${worldCountry} — do not substitute with unrelated country, city, or regional aesthetic.`;
 }
 
+// ─── SEQUENTIAL VISUAL MOVIE GUIDE PIPELINE ─────────────────────────────────
+
+async function runMovieGuideGeneration(storyScript, castBible, worldBible) {
+  logger.info("[MGE] Generating Sequential Visual Movie Guide...");
+  const prompt = `You are a visionary film director creating a continuous, shot-by-shot Sequential Visual Movie Guide.
+
+FULL STORY SCRIPT:
+${storyScript}
+
+CAST BIBLE:
+${JSON.stringify(castBible.characters.map(c => ({name: c.name, description: c.sketch_artist_appearance})), null, 2)}
+
+WORLD BIBLE:
+${JSON.stringify(worldBible.locations.map(l => ({name: l.name, description: l.construction})), null, 2)}
+
+TASK:
+Write a complete sequential guide from start to finish without any breaks, jumps, or time gaps.
+- Use explicit character names (never "he", "she", "I", "they").
+- Describe exactly what is visually happening in every moment in the present tense.
+- Do NOT describe dialogue. Only describe what the camera sees.
+- Break the sequence into "visual beats".
+- Each visual beat should represent a distinct visual moment, action, or camera cut.
+
+Return STRICT valid JSON:
+{
+  "movie_guide": [
+    {
+      "beat_number": 1,
+      "characters_visible": ["Character Name 1"],
+      "location": "Location Name",
+      "action_description": "Present tense description of the action.",
+      "camera_suggestion": "medium wide shot"
+    }
+  ]
+}`;
+  const result = await callGeminiJSON(prompt, "Sequential Visual Movie Guide");
+  return result?.movie_guide || [];
+}
+
+function mergeNarrationWithGuide(narrationSegments, movieGuide) {
+  if (!narrationSegments || narrationSegments.length === 0) return [];
+  if (!movieGuide || movieGuide.length === 0) return narrationSegments.map(seg => ({ ...seg, director_beat: null }));
+
+  return narrationSegments.map((seg, index) => {
+    // Proportional mapping: map each narration segment to a guide beat
+    const beatIndex = Math.min(Math.floor((index / narrationSegments.length) * movieGuide.length), movieGuide.length - 1);
+    return {
+      ...seg,
+      director_beat: movieGuide[beatIndex] || null
+    };
+  });
+}
+
+async function runPromptAudit(scenePrompts, movieGuide) {
+  logger.info("[MGE] Running Sequential Prompt Audit...");
+  const prompt = `You are a Continuity Auditor checking generated image prompts against the Director's Movie Guide.
+
+DIRECTOR'S MOVIE GUIDE:
+${JSON.stringify(movieGuide, null, 2)}
+
+GENERATED PROMPTS (Sequential):
+${JSON.stringify(scenePrompts.map((p, i) => ({frame: i + 1, prompt: p.prompt, narration: p.narration})), null, 2)}
+
+For each frame, check:
+1. Character presence (are the right characters in the prompt?)
+2. Location alignment (does it match the guide?)
+3. Action alignment (does it capture the correct action?)
+4. No future leakage (are there elements that haven't happened yet?)
+
+Return STRICT valid JSON:
+{
+  "audit_results": [
+    {
+      "frame": 1,
+      "passed": true,
+      "issue_type": "None | Character | Location | Action | Leakage",
+      "expected": "What the guide said",
+      "got": "What the prompt actually generated",
+      "severity": "low | high"
+    }
+  ]
+}`;
+  const result = await callGeminiJSON(prompt, "Prompt Audit");
+  return result?.audit_results || [];
+}
+
 // ─── MAIN ORCHESTRATOR ────────────────────────────────────────────────────────
 
 /**
- * runFullMotionGraphicEngine — Executes all 8 modules in order.
+ * runFullMotionGraphicEngine — Executes all modules in order.
  * Returns validated frame packages mapped to the existing
  * { prompt, charactersInScene, narration } shape expected by workflowService.
  *
@@ -1076,31 +1165,30 @@ export async function runFullMotionGraphicEngine({
     imageCount
   );
 
-  // ── Module 6: Continuity Validation & Frame Allocation ────────────────────
-  const CONTINUITY_AND_FRAME_PLAN = await runModule6_ContinuityAndFrameAllocation(
-    SCENE_LEDGER,
-    imageCount,
-    aspectRatio,
-    STORY_WORLD_MAP
-  );
-
   // ── Build Global Negative Prompt ──────────────────────────────────────────
   const GLOBAL_NEGATIVE_PROMPT = buildGlobalNegativePrompt(
     STORY_WORLD_MAP,
     MATERIALIZED_CAST_BIBLE
   );
 
-  // ── Stateful Cinematic Generation Loop ────────────────────────────────────
-  logger.info(`[MGE] Starting Stateful Cinematic Generation Loop over ${narrationSegments?.length || imageCount} segments...`);
+  // ── Phase 1: Sequential Visual Movie Guide ────────────────────────────────
+  const MOVIE_GUIDE = await runMovieGuideGeneration(storyScript, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE);
+
+  // ── Phase 2: Merge Narration with Guide ───────────────────────────────────
+  let loopSegments = narrationSegments || Array.from({ length: imageCount }).map((_, i) => ({ text: `Segment ${i+1}`, sceneIndex: 1 }));
+  loopSegments = mergeNarrationWithGuide(loopSegments, MOVIE_GUIDE);
+
+  // ── Phase 3: Stateful Cinematic Generation Loop ───────────────────────────
+  logger.info(`[MGE] Starting Stateful Cinematic Generation Loop over ${loopSegments.length} segments...`);
   
   let currentState = initializeVisualState(MATERIALIZED_VISUAL_WORLD_BIBLE, MATERIALIZED_CAST_BIBLE);
   const scenePrompts = [];
   
-  // If narrationSegments is null, we fallback to a dummy array to satisfy the loop
-  const loopSegments = narrationSegments || Array.from({ length: imageCount }).map((_, i) => ({ text: `Segment ${i+1}`, sceneIndex: 1 }));
-
   for (let i = 0; i < loopSegments.length; i++) {
     const segment = loopSegments[i];
+    
+    // Save state before deltas for potential repair
+    const stateBeforeDeltas = JSON.parse(JSON.stringify(currentState));
     
     // 1. Run Scene Director AI to get the state deltas
     const deltas = await runSceneDirectorAI(
@@ -1123,11 +1211,42 @@ export async function runFullMotionGraphicEngine({
       prompt: productionPrompt,
       charactersInScene: currentState.activeCharacters || [],
       narration: segment.text || "",
-      _framePackage: { deltas, state: currentState },
+      _framePackage: { deltas, state: currentState, stateBeforeDeltas },
       _negativePrompt: "", // Frame specific negative could be added by Director later
       _globalNegativePrompt: GLOBAL_NEGATIVE_PROMPT,
       _motionMovement: null, // Default movement
     });
+  }
+
+  // ── Phase 4: Prompt Audit ─────────────────────────────────────────────────
+  const auditResults = await runPromptAudit(scenePrompts, MOVIE_GUIDE);
+  
+  // ── Phase 5: Auto-Repair ──────────────────────────────────────────────────
+  for (const res of auditResults) {
+    if (!res.passed && (res.severity === "high" || res.severity === "medium")) {
+       const idx = res.frame - 1;
+       if (idx >= 0 && idx < scenePrompts.length) {
+         logger.info(`[MGE] Repairing frame ${res.frame} due to: ${res.issue_type}`);
+         const p = scenePrompts[idx];
+         const correction = `FAILED AUDIT: expected ${res.expected}, but got ${res.got}. Fix this immediately.`;
+         
+         const newDeltas = await runSceneDirectorAI(
+            loopSegments[idx], 
+            p._framePackage.stateBeforeDeltas, 
+            MATERIALIZED_CAST_BIBLE, 
+            MATERIALIZED_VISUAL_WORLD_BIBLE, 
+            SCENE_LEDGER, 
+            res.frame, 
+            correction
+         );
+         
+         const repairedState = applyDeltas(p._framePackage.stateBeforeDeltas, newDeltas, MATERIALIZED_VISUAL_WORLD_BIBLE, MATERIALIZED_CAST_BIBLE);
+         p.prompt = runPromptWriter(repairedState, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE, aspectRatio);
+         p.charactersInScene = repairedState.activeCharacters || [];
+         p._framePackage.deltas = newDeltas;
+         p._framePackage.state = repairedState;
+       }
+    }
   }
 
   // Create a minimal dummy final audit since we deprecated Module 8
