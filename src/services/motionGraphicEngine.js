@@ -1009,40 +1009,98 @@ export function buildGlobalNegativePrompt(storyWorldMap, castBible) {
 
 // ─── SEQUENTIAL VISUAL MOVIE GUIDE PIPELINE ─────────────────────────────────
 
-async function runMovieGuideGeneration(storyScript, castBible, worldBible) {
-  logger.info("[MGE] Generating Sequential Visual Movie Guide...");
-  const prompt = `You are a visionary film director creating a continuous, shot-by-shot Sequential Visual Movie Guide.
+async function runMovieGuideGeneration(storyScript, castBible, worldBible, referenceTraits = null) {
+  logger.info("[MGE] Generating Sequential Visual Movie Guide (Production Bible level)...");
+
+  // Build reference image lock section if we have analyzed reference traits
+  let refLockSection = "";
+  if (Array.isArray(referenceTraits) && referenceTraits.length > 0) {
+    const locks = referenceTraits.map(r =>
+      `- ${r.characterName}: face=${r.face}, hair=${r.hair}, skin=${r.skin}, age=${r.age}, build=${r.build}, clothing=${r.clothing || "N/A"}`
+    ).join("\n");
+    refLockSection = `
+REFERENCE IMAGE LOCKS (HARD CANONICAL APPEARANCE — MUST BE REPRODUCED EXACTLY IN EVERY FRAME):
+${locks}
+IMPORTANT: These character appearances are LOCKED. The guide and every frame must reflect exactly these physical traits. Do not deviate.
+`;
+  }
+
+  const prompt = `You are the Chief Director of Photography creating a complete PRODUCTION BIBLE + Shot-by-Shot Sequential Visual Movie Guide.
+
+This guide will be the single source of truth for every image generated. Think of it as a Director of Photography describing the exact contents of every single shot in the film — as specific as a storyboard.
 
 FULL STORY SCRIPT:
 ${storyScript}
 
-CAST BIBLE:
-${JSON.stringify(castBible.characters.map(c => ({name: c.name, description: c.sketch_artist_appearance})), null, 2)}
+CANONICAL CAST BIBLE (use these LOCKED visual identities — do not invent):
+${JSON.stringify(castBible.characters.map(c => ({
+  name: c.name,
+  race: c.identity_culture?.race,
+  ethnicity: c.identity_culture?.ethnicity_cultural_identity,
+  age: c.sketch_artist_appearance?.age_range,
+  face: c.sketch_artist_appearance?.face_structure,
+  hair: c.sketch_artist_appearance?.hair,
+  skin: c.sketch_artist_appearance?.canonical_skin_tone,
+  base_wardrobe: c.wardrobe
+})), null, 2)}
 
-WORLD BIBLE:
-${JSON.stringify(worldBible.locations.map(l => ({name: l.name, description: l.construction})), null, 2)}
-
+CANONICAL WORLD BIBLE (use these LOCKED locations — do not invent new ones):
+${JSON.stringify(worldBible.locations.map(l => ({
+  name: l.name,
+  country: l.geographic_cultural_id?.country,
+  materials: l.construction?.wall_roof_floor_ceiling_material,
+  fixed_elements: l.fixed_elements
+})), null, 2)}
+${refLockSection}
 TASK:
-Write a complete sequential guide from start to finish without any breaks, jumps, or time gaps.
-- Use explicit character names (never "he", "she", "I", "they").
-- Describe exactly what is visually happening in every moment in the present tense.
-- Do NOT describe dialogue. Only describe what the camera sees.
-- Break the sequence into "visual beats".
-- Each visual beat should represent a distinct visual moment, action, or camera cut.
+Write a complete sequential movie guide covering the story from start to finish with no gaps, jumps, or breaks.
+Each entry is ONE visual beat: a distinct moment the camera captures.
+
+For EACH beat you MUST specify:
+1. Characters visible BY NAME (never pronouns). Include their exact appearance per the Cast Bible for each beat they appear.
+2. Location name (from World Bible). Must not be invented.
+3. Time of day (morning / afternoon / evening / night / same as previous).
+4. Lighting (natural daylight / golden hour / fluorescent office / dim candlelight etc.).
+5. Weather/atmosphere if exterior.
+6. Exact character positions (e.g., "Marcus stands to the left of the desk, Detective Chen sits facing him").
+7. Props and objects visible and their positions (e.g., "A manila folder sits open on the desk. A coffee cup is in Marcus's right hand").
+8. The specific action happening (what the camera sees, present tense).
+9. Camera suggestion (e.g., "close-up on Marcus's face", "establishing wide shot of courtroom").
+10. Wardrobe for each visible character in this beat.
+
+RULES:
+- Use explicit character names ALWAYS.
+- Describe ONLY what is visually on screen. No dialogue. No internal thoughts.
+- Be extremely precise about positions, props, and wardrobe.
+- Never skip a moment; the next beat must flow logically from the previous one.
 
 Return STRICT valid JSON:
 {
   "movie_guide": [
     {
       "beat_number": 1,
-      "characters_visible": ["Character Name 1"],
-      "location": "Location Name",
-      "action_description": "Present tense description of the action.",
-      "camera_suggestion": "medium wide shot"
+      "characters_visible": [
+        {
+          "name": "Character Name",
+          "locked_appearance": "Brief summary of locked facial/skin/hair attributes from Cast Bible",
+          "current_wardrobe": "Exact wardrobe for this beat",
+          "position": "Where they are in the frame (left, right, foreground, seated at desk, etc.)",
+          "action": "What they are doing",
+          "emotion": "Their visible emotional state"
+        }
+      ],
+      "location": "Exact location name from World Bible",
+      "time_of_day": "morning | afternoon | evening | night | same as previous",
+      "lighting": "Specific lighting description",
+      "weather_atmosphere": "Only for exteriors, or 'N/A'",
+      "props_and_objects": "Precise list of all visible props and their positions",
+      "action_description": "Present tense. What is the camera seeing? What is happening?",
+      "camera_suggestion": "Shot type and framing (e.g., medium close-up on Character X from the left)"
     }
   ]
 }`;
   const result = await callGeminiJSON(prompt, "Sequential Visual Movie Guide");
+  logger.info(`[MGE] Movie Guide generated — ${result?.movie_guide?.length || 0} beats`);
   return result?.movie_guide || [];
 }
 
@@ -1060,21 +1118,32 @@ function mergeNarrationWithGuide(narrationSegments, movieGuide) {
   });
 }
 
-async function runPromptAudit(scenePrompts, movieGuide) {
-  logger.info("[MGE] Running Sequential Prompt Audit...");
-  const prompt = `You are a Continuity Auditor checking generated image prompts against the Director's Movie Guide.
+async function runPromptAudit(scenePrompts, movieGuide, castBible) {
+  logger.info("[MGE] Running Exhaustive Sequential Prompt Audit...");
+  const prompt = `You are a Continuity Supervisor for a cinematic image sequence. Your job is to compare each generated image prompt to the Director's Movie Guide beat-by-beat and flag any deviation.
 
-DIRECTOR'S MOVIE GUIDE:
+DIRECTOR'S MOVIE GUIDE (The Production Truth):
 ${JSON.stringify(movieGuide, null, 2)}
 
 GENERATED PROMPTS (Sequential):
 ${JSON.stringify(scenePrompts.map((p, i) => ({frame: i + 1, prompt: p.prompt, narration: p.narration})), null, 2)}
 
-For each frame, check:
-1. Character presence (are the right characters in the prompt?)
-2. Location alignment (does it match the guide?)
-3. Action alignment (does it capture the correct action?)
-4. No future leakage (are there elements that haven't happened yet?)
+CAST BIBLE (Reference for locked character appearance):
+${JSON.stringify(castBible?.characters?.map(c => ({name: c.name, skin: c.sketch_artist_appearance?.canonical_skin_tone, hair: c.sketch_artist_appearance?.hair, face: c.sketch_artist_appearance?.face_structure})) || [], null, 2)}
+
+For EACH frame, check ALL of the following:
+1. CHARACTER: Are the correct characters present? Are their locked appearances (skin, hair, face, race) correctly described?
+2. LOCATION: Does the prompt reflect the correct location from the guide?
+3. ACTION: Does the prompt capture the correct action for this beat?
+4. TIME_OF_DAY: Does the prompt reflect the correct time of day?
+5. PROPS: Are key props and objects from the guide present in the prompt?
+6. WARDROBE: Is the character wardrobe correct per the guide beat?
+7. LEAKAGE: Does the prompt contain elements that haven't happened yet in the story?
+
+Severity guide:
+- "high": Wrong character identity (race/gender/hair), wrong location, future leakage.
+- "medium": Missing key prop, wrong time of day, wrong wardrobe.
+- "low": Minor camera description mismatch, minor positioning inaccuracy.
 
 Return STRICT valid JSON:
 {
@@ -1082,15 +1151,18 @@ Return STRICT valid JSON:
     {
       "frame": 1,
       "passed": true,
-      "issue_type": "None | Character | Location | Action | Leakage",
+      "issue_type": "None | Character | Location | Action | TimeOfDay | Props | Wardrobe | Leakage",
       "expected": "What the guide said",
       "got": "What the prompt actually generated",
-      "severity": "low | high"
+      "severity": "low | medium | high"
     }
   ]
 }`;
-  const result = await callGeminiJSON(prompt, "Prompt Audit");
-  return result?.audit_results || [];
+  const result = await callGeminiJSON(prompt, "Exhaustive Prompt Audit");
+  const results = result?.audit_results || [];
+  const failed = results.filter(r => !r.passed);
+  logger.info(`[MGE] Prompt Audit complete: ${results.length - failed.length}/${results.length} passed, ${failed.length} flagged`);
+  return results;
 }
 
 // ─── MAIN ORCHESTRATOR ────────────────────────────────────────────────────────
@@ -1172,7 +1244,7 @@ export async function runFullMotionGraphicEngine({
   );
 
   // ── Phase 1: Sequential Visual Movie Guide ────────────────────────────────
-  const MOVIE_GUIDE = await runMovieGuideGeneration(storyScript, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE);
+  const MOVIE_GUIDE = await runMovieGuideGeneration(storyScript, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE, referenceTraits);
 
   // ── Phase 2: Merge Narration with Guide ───────────────────────────────────
   let loopSegments = narrationSegments || Array.from({ length: imageCount }).map((_, i) => ({ text: `Segment ${i+1}`, sceneIndex: 1 }));
@@ -1219,7 +1291,7 @@ export async function runFullMotionGraphicEngine({
   }
 
   // ── Phase 4: Prompt Audit ─────────────────────────────────────────────────
-  const auditResults = await runPromptAudit(scenePrompts, MOVIE_GUIDE);
+  const auditResults = await runPromptAudit(scenePrompts, MOVIE_GUIDE, MATERIALIZED_CAST_BIBLE);
   
   // ── Phase 5: Auto-Repair ──────────────────────────────────────────────────
   for (const res of auditResults) {

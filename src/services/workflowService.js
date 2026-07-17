@@ -944,6 +944,7 @@ async function _runWorkflow({
           storyMetadata,
           visualSuggestions,
           narrationSegments,   // ← Whisper-aligned narration segments
+          referenceTraits,     // ← Pass analyzed reference image traits to MGE for character locking
         );
         stopPromptTimer?.();
 

@@ -570,7 +570,7 @@ export async function generateStory({
  * @param {string|null} visualSuggestions — user visual style note
  * @returns {Promise<Array<{ prompt: string, charactersInScene: string[], narration: string, _framePackage: object, _negativePrompt: string, _globalNegativePrompt: string, _motionMovement: object }>>}
  */
-export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null) {
+export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null, referenceTraits = null) {
   logger.info(`🎬 [v6.3 Engine] generateScenePrompts — ${count} frames requested`);
 
   try {
@@ -583,7 +583,7 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
       title: storyBible?.title || "Story",
       storyType: storyBible?.storyType || "script",
       storyBible,
-      referenceTraits: null,
+      referenceTraits,   // ← now forwarded from workflow instead of hardcoded null
       visualSuggestions,
       storyGuidelines: storyBible?.storyGuidelines || null,
       narrationSegments,
