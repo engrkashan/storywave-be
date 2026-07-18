@@ -66,6 +66,122 @@ async function callGeminiJSON(prompt, label = "LLM call") {
       if (attempt === 2) return null;
     }
   }
+
+  // ── Character guideline backfill ─────────────────────────────────────────────
+  /**
+   * Guarantees EVERY character referenced anywhere in the story (including secondary /
+   * functional characters such as "neighbor_1", "police_officer_1" that the scene graph
+   * invents but the Cast Bible may omit) has a CANONICAL, MATERIALIZED text guideline
+   * (full physical appearance + base wardrobe). Characters that already exist in the Cast
+   * Bible are left untouched. Missing characters are materialized in a SINGLE batched LLM
+   * call so they get a stable, story-derived look instead of a randomly-generated one.
+   *
+   * This is the "no reference image → synthesize a consistent character guideline" rule:
+   * the guideline is then injected into every frame the character appears in (composePrompt)
+   * and hard-locked, so the character looks identical scene-to-scene without a portrait.
+   *
+   * @param {Array} sceneGraph        - beats from generateSceneGraph (each has characters_present)
+   * @param {object} castBible        - MATERIALIZED_CAST_BIBLE (mutated in place)
+   * @param {string} storyScript      - original story for context
+   * @returns {Promise<string[]>} list of character names that were newly materialized
+   */
+  async function ensureCharacterGuidelines(sceneGraph, castBible, storyScript) {
+    const existing = new Map();
+    for (const c of (castBible.characters || [])) {
+      if (c.id) existing.set(String(c.id).toLowerCase(), c);
+      if (c.name) existing.set(String(c.name).toLowerCase(), c);
+    }
+
+    // Collect every character id/name referenced in the scene graph.
+    const referenced = new Map(); // key -> { id, name }
+    for (const beat of (sceneGraph || [])) {
+      for (const cp of (beat.characters_present || [])) {
+        const id = cp.id || cp.name;
+        const name = cp.name || cp.id;
+        if (!id && !name) continue;
+        const key = String(id || name).toLowerCase();
+        if (!referenced.has(key)) referenced.set(key, { id, name });
+      }
+    }
+
+    // Find which referenced characters are missing from the Cast Bible.
+    const missing = [];
+    for (const [key, ref] of referenced) {
+      if (!existing.has(key)) missing.push(ref);
+    }
+
+    if (missing.length === 0) {
+      logger.info(`[MGE v7] Character guidelines: all ${referenced.size} referenced characters already materialized.`);
+      return [];
+    }
+
+    logger.info(`[MGE v7] Character guidelines: ${missing.length} referenced character(s) missing from Cast Bible — synthesizing: ${missing.map(m => m.name || m.id).join(", ")}`);
+
+    const missingList = missing
+      .map((m, i) => `${i + 1}. id="${m.id || "n/a"}" name="${m.name || m.id}"`)
+      .join("\n");
+
+    const prompt = `You are a casting director and sketch artist. The story's main/recurring characters already have detailed capsules.
+  The following characters also appear in the story (often as secondary/background roles) but were not yet described in detail.
+  For EACH, synthesize a CANONICAL, FULLY MATERIALIZED physical description + base wardrobe so an image generator can render them
+  CONSISTENTLY every time they appear. Do NOT leave any field generic.
+
+  STORY:
+  ${storyScript ? storyScript.slice(0, 12000) : "(story text unavailable)"}
+
+  MISSING CHARACTERS (derive their look ONLY from how the story describes or implies them):
+  ${missingList}
+
+  Return STRICT valid JSON:
+  {
+    "characters": [
+      {
+        "id": "<the same id as provided, e.g. neighbor_1>",
+        "name": "<the same name as provided>",
+        "importance": "background_named",
+        "identity_culture": { "name": "", "story_role": "", "race": "", "ethnicity_cultural_identity": "", "nationality": "", "regional_community_identity": "" },
+        "sketch_artist_appearance": {
+          "age_range": "", "gender_presentation": "", "height": "", "body_type": "",
+          "canonical_skin_tone": "", "canonical_undertone": "", "complexion_texture_marks": "",
+          "face_structure": "", "eyes": "", "nose": "", "mouth_lips": "", "jaw_chin": "",
+          "hair": "", "facial_hair": "", "permanent_identifiers": ""
+        },
+        "base_wardrobe": {
+          "upper_garment": "", "lower_garment": "", "outerwear": "", "exact_color_family": "", "footwear": "", "accessories": ""
+        },
+        "appearance": "FULL physical description paragraph (combine sketch_artist_appearance fields)",
+        "base_clothing": "FULL clothing description paragraph (combine base_wardrobe fields)"
+      }
+    ]
+  }`;
+
+    const result = await callGeminiJSON(prompt, "Character Guideline Backfill");
+    const synthesized = (result && Array.isArray(result.characters)) ? result.characters : [];
+
+    if (synthesized.length === 0) {
+      logger.warn(`[MGE v7] Character guideline backfill returned nothing — missing characters will be text-only generic.`);
+      return [];
+    }
+
+    castBible.characters = castBible.characters || [];
+    for (const c of synthesized) {
+      if (!c || (!c.id && !c.name)) continue;
+      // Normalize to Module 3 shape: CharacterStateManager reads top-level `wardrobe`
+      // (object) for the registry, so mirror base_wardrobe there. Also keep appearance
+      // text so composePrompt's SUBJECT block has a fallback description.
+      const normalized = {
+        ...c,
+        wardrobe: c.wardrobe || c.base_wardrobe || {},
+        appearance: c.appearance || (c.sketch_artist_appearance
+          ? [c.sketch_artist_appearance.age_range, c.sketch_artist_appearance.gender_presentation, c.sketch_artist_appearance.canonical_skin_tone, c.sketch_artist_appearance.face_structure, c.sketch_artist_appearance.hair].filter(Boolean).join(". ")
+          : ""),
+      };
+      castBible.characters.push(normalized);
+    }
+
+    logger.info(`[MGE v7] Character guidelines: synthesized ${synthesized.length} new character guideline(s).`);
+    return synthesized.map(c => c.name || c.id);
+  }
 }
 
 // ─── SCHEMA DEFINITIONS (referenced in prompts) ──────────────────────────────
@@ -1626,9 +1742,15 @@ function validateSceneState(compiledState, directorDecision, charManager, worldM
 // ── Phase 6a: Reference Selector ─────────────────────────────────────────────
 /**
  * Selects which character reference images to pass to the renderer.
- * Key rule: never pass references for off-screen characters.
- * For wide shots (>2 chars or establishing), limit to 1 ref max to avoid blending.
- * For close-ups, pass only the focal subject's reference.
+ * Key rule: never pass references for off-screen characters, and never pass a ref
+ * for a character that has no portrait (functional labels like neighbor_1 /
+ * police_officer_1 are correctly excluded because they are not in characterReferences[]).
+ *
+ * FIX A: attach refs for EVERY present character who has a valid portrait, regardless
+ * of shot type. The previous shot-type caps (close-up→1, two-shot→2, wide→1) silently
+ * dropped reference images for present characters and caused identity drift. We now
+ * cap ONLY by what is actually present and has a real portrait — functional characters
+ * with no portrait remain text-only by design (they are never in characterReferences[]).
  */
 function selectReferences(compiledState, directorDecision, characterReferences) {
   if (!characterReferences || characterReferences.length === 0) return [];
@@ -1637,30 +1759,27 @@ function selectReferences(compiledState, directorDecision, characterReferences) 
     (compiledState.characters_present || []).flatMap(c => [c.id, c.name])
   );
 
-  // Filter to only refs whose character is actually in the scene
+  // Filter to only refs whose character is actually in the scene AND has a portrait.
+  // Since characterReferences[] only contains characters that received a portrait,
+  // this list is already limited to present, portraited characters — functional
+  // characters without portraits are excluded here automatically.
   const relevantRefs = characterReferences.filter(
     ref => presentCharIds.has(ref.id) || presentCharIds.has(ref.name)
   );
 
+  const presentCount = compiledState.characters_present?.length || 0;
   const shotType = directorDecision?.shot_type || "medium";
   const focalSubject = directorDecision?.focal_subject;
 
-  // Close-up or medium-close: only the focal subject's ref
-  if (shotType === "close-up" || shotType === "extreme close-up" || shotType === "medium-close") {
-    const focalRef = relevantRefs.find(r => r.name === focalSubject || r.id === focalSubject);
-    return focalRef ? [focalRef] : relevantRefs.slice(0, 1);
+  // 1-2 characters present: keep the prior correct behaviour — attach all present
+  // character refs (the focal subject is naturally included in relevantRefs).
+  if (presentCount <= 2) {
+    return relevantRefs;
   }
 
-  // Over-the-shoulder or two-shot: max 2 refs
-  if (shotType === "over-the-shoulder" || shotType === "two-shot") {
-    return relevantRefs.slice(0, 2);
-  }
-
-  // Wide/establishing: prefer no refs (rely on text) to avoid blending; allow max 1
-  if (shotType === "establishing wide" || shotType === "aerial") {
-    return relevantRefs.slice(0, 1);
-  }
-
+  // 3+ characters present: attach refs for ALL present characters who have a valid
+  // portrait, regardless of shot type (close-up, wide, establishing, two-shot, etc.).
+  // No shot-type cap — only what is actually present and portraited.
   return relevantRefs;
 }
 
@@ -1723,6 +1842,7 @@ function composePrompt(compiledState, directorDecision, aspectRatio, prevExitSta
 
   const subjectBlock = sorted.map(char => {
     const parts = [
+      `CANONICAL CHARACTER GUIDELINE (LOCKED — reproduce EXACTLY, never improvise face/hair/skin/wardrobe):`,
       `SUBJECT: ${char.name}`,
       char.race ? `${char.race} ${char.ethnicity || ""}`.trim() : null,
       char.age ? `${char.age}` : null,
@@ -1856,8 +1976,6 @@ export async function runFullMotionGraphicEngine({
 
   const GLOBAL_NEGATIVE_PROMPT = buildGlobalNegativePrompt(STORY_WORLD_MAP, MATERIALIZED_CAST_BIBLE);
 
-  // ── Initialise State Managers (Phase 1 classes) ───────────────────────────
-  const charManager = new CharacterStateManager(MATERIALIZED_CAST_BIBLE);
   const worldManager = new WorldStateManager(MATERIALIZED_VISUAL_WORLD_BIBLE);
   const objectManager = new ObjectStateManager();
   const relationshipManager = new RelationshipStateManager();
@@ -1866,6 +1984,16 @@ export async function runFullMotionGraphicEngine({
   const { graph: SCENE_GRAPH, objectRegistry, relationshipRegistry } = await generateSceneGraph(
     storyScript, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE, referenceTraits
   );
+
+  // ── Character guideline backfill ──────────────────────────────────────────
+  // Ensure EVERY character referenced in the story (incl. functional/secondary ones
+  // the Cast Bible may have omitted) has a canonical, materialized text guideline.
+  // Mutates MATERIALIZED_CAST_BIBLE.characters IN PLACE so charManager picks them up.
+  await ensureCharacterGuidelines(SCENE_GRAPH, MATERIALIZED_CAST_BIBLE, storyScript);
+
+  // ── Initialise Character State Manager AFTER guideline backfill so newly
+  //    synthesized characters are registered and flow into every frame. ───────
+  const charManager = new CharacterStateManager(MATERIALIZED_CAST_BIBLE);
 
   // Seed Object Registry from scene graph output
   for (const obj of objectRegistry) {
@@ -1943,6 +2071,15 @@ export async function runFullMotionGraphicEngine({
 
     // ── Step E: Reference Selector
     const selectedRefs = selectReferences(compiledState, directorDecision, characterReferences);
+
+    // DEBUG (FIX A): log present characters vs refs actually selected, so we can
+    // confirm every portraited present character gets a reference regardless of shot type.
+    const presentNames = (compiledState.characters_present || []).map(c => c.name || c.id);
+    logger.info(
+      `[MGE v7] Frame ${i + 1} — present(${presentNames.length}): [${presentNames.join(", ")}] | ` +
+      `selectedRefs(${selectedRefs.length}): [${selectedRefs.map(r => r.name || r.id).join(", ")}] | ` +
+      `shot: ${directorDecision?.shot_type || "medium"}`
+    );
 
     // ── Step F: Prompt Composer (pure serializer) — FIX 1: passes continuity anchor
     const finalPrompt = composePrompt(

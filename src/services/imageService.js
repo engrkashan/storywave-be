@@ -906,22 +906,39 @@ export async function generateMultiImages(
       (r) => r && typeof r === "object" && typeof r.url === "string" && r.url.length > 0
     );
 
-    // SYNC/IDENTITY FIX (B1): NEVER fall back to the entire characterReferences array
-    // when a scene has an explicit character list. Injecting ALL character portraits for
-    // a single-character close-up causes Gemini to blend multiple identities (drift).
-    // Only inject-all when there is NO scene-character list at all (legacy/backward-compat).
+    // PER-FRAME REFERENCE RESOLUTION (FIX A wins, FIX B is empty-list fallback only).
+    //
+    // Priority:
+    //   1. validSelectedRefs (from MGE selectReferences / FIX A) — ALWAYS used when non-empty.
+    //      FIX A already attaches refs for every present portraited character regardless of
+    //      shot type, so this is the authoritative list and must never be overridden.
+    //   2. FIX B fallback: if the engine returned an EMPTY selectedRefs but the scene still
+    //      lists characters and portraits exist, derive refs directly from sceneCharacters
+    //      by id/name. This recovers refs for frames where the engine omitted selectedRefs.
+    //   3. Legacy/back-compat: no scene-character list at all → inject ALL refs (unchanged).
+    //
+    // We NEVER fall back to the entire characterReferences array when a scene HAS an explicit
+    // character list (that would blend identities). Functional characters with no portrait
+    // (neighbor_1, police_officer_1) are simply absent from characterReferences[] and stay
+    // text-only by design.
     let perFrameRefs;
     if (validSelectedRefs.length > 0) {
+      // FIX A path: authoritative, do not override.
       perFrameRefs = validSelectedRefs;
     } else if (sceneCharacters.length > 0 && characterReferences.length > 0) {
-      // Derive refs strictly from this scene's own character list (exact id/name match)
+      // FIX B (empty-list fallback): derive refs strictly from this scene's own characters.
       perFrameRefs = sceneCharacters
         .map((charId) => characterReferences.find((c) => c.id === charId || c.name === charId))
         .filter(Boolean);
-      if (perFrameRefs.length === 0) {
+      if (perFrameRefs.length > 0) {
+        logger.info(
+          `🔗 [MultiImages] ${sceneId} — FIX B fallback: derived ${perFrameRefs.length} ref(s) from sceneCharacters ` +
+          `[${sceneCharacters.join(", ")}] → [${perFrameRefs.map((r) => r.name || r.id).join(", ")}].`
+        );
+      } else {
         logger.warn(
-          `⚠️ [MultiImages] ${sceneId} — No per-frame refs and scene characters [${sceneCharacters.join(", ")}] ` +
-          `matched no characterReferences. Generating WITHOUT reference images (text-only) to avoid identity blending.`
+          `⚠️ [MultiImages] ${sceneId} — No refs resolved for scene characters [${sceneCharacters.join(", ")}] ` +
+          `(none have portraits). Generating WITHOUT reference images (text-only) — functional characters are expected text-only.`
         );
       }
     } else {
