@@ -63,8 +63,13 @@ Return STRICT valid JSON:
       }
     });
 
-    // 3. Extract text smoothly using response helper if available, or fall back safely
-    const text = response.text ? response.text() : (response.candidates?.[0]?.content?.parts?.[0]?.text || "{}");
+    // 3. Extract text. NOTE: in the Gemini SDK `response.text` is a GETTER (a string),
+    //    not a function — calling response.text() throws "response.text is not a function".
+    //    Read it as a property and fall back to the raw candidate parts safely.
+    const text =
+      (typeof response.text === "string" && response.text.length > 0)
+        ? response.text
+        : (response.candidates?.[0]?.content?.parts?.find((p) => p.text)?.text || "{}");
 
     // Clean potential markdown wrappers just in case
     const cleanedJson = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
