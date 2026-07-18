@@ -316,11 +316,33 @@ function buildContinuityInstructions({ visualState, globalNegativePrompt, frameN
     lines.push(`WEATHER & ATMOSPHERE: ${visualState.weather}. The atmospheric conditions are fixed for this sequence.`);
   }
   if (visualState?.wardrobe) {
-    lines.push(`WARDROBE LOCK: Characters are dressed as follows: ${visualState.wardrobe}. Clothing does not change unless the story explicitly describes it changing.`);
+    lines.push(`WARDROBE LOCK: Characters are dressed as follows: ${visualState.wardrobe}. Clothing does not change between frames unless the story explicitly describes it changing.`);
   }
   if (visualState?.activeCharacters?.length > 0) {
     lines.push(`CAST: The only people present in this scene are: ${visualState.activeCharacters.join(", ")}. The frame contains exactly these individuals — no additional bystanders, crowds, or unnamed figures unless the scene description requires them.`);
   }
+
+  // HARD IDENTITY LOCK — ALWAYS applied (not conditional on negative prompts).
+  // This is the primary guard against face/appearance/wardrobe drift between scenes.
+  // Physical identity is immutable across the whole sequence; it may only change
+  // when the compiled scene state itself carries a different wardrobe/pose.
+  lines.push(
+    "IDENTITY LOCK (MANDATORY): Each character's race, ethnicity, skin tone, undertone, " +
+    "facial bone structure, nose shape, eye shape and color, hair texture, hair color, " +
+    "haircut, facial hair, age, and any permanent marks (scars/tattoos/birthmarks) are FIXED " +
+    "attributes. Reproduce them IDENTICALLY to how they appeared in the prior frame. " +
+    "Faces are NEVER blended, swapped, or composited with other characters' features."
+  );
+  lines.push(
+    "WARDROBE INTEGRITY (MANDATORY): Do not reassign clothing between characters, introduce " +
+    "new outfits, or alter fabric colors, cuts, or fit. A character wears the SAME garments " +
+    "frame-to-frame unless this scene's description explicitly states a change."
+  );
+  lines.push(
+    "CONTINUITY DIRECTIVE (MANDATORY): Nothing about a character's face, body, age, hair, or " +
+    "clothing may drift between frames. If the previous frame is supplied as a reference, " +
+    "the character MUST look like the exact same person wearing the exact same clothes."
+  );
 
   // Convert negative prompt strings into affirmative semantic equivalents
   const negSource = [globalNegativePrompt, frameNegativePrompt].filter(Boolean).join(", ");

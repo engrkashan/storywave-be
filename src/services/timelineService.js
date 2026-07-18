@@ -72,19 +72,34 @@ export function buildSubtitleGroups(words) {
   for (const chunk of rawChunks) {
     if (chunk.length === 0) continue;
 
+    // LOSSLESS duration handling: never clamp a group's END inward (that would
+    // truncate the display window and make the tail words blink out / get skipped
+    // in per-scene ASS rendering). Instead, if a chunk is longer than MAX_DURATION_S,
+    // SPLIT it at the midpoint word so every word keeps its true timing and nothing
+    // is dropped. Guarantee contiguity: each group uses the real first-word start
+    // and last-word end, and we never leave a gap that hides spoken words.
     let s = chunk[0].start;
     let e = chunk[chunk.length - 1].end;
+    let pieces = [chunk];
 
-    // Clamp duration
     const dur = e - s;
-    if (dur < MIN_DURATION_S) e = s + MIN_DURATION_S;
-    if (dur > MAX_DURATION_S) e = s + MAX_DURATION_S;
+    if (dur > MAX_DURATION_S) {
+      const mid = Math.floor(chunk.length / 2);
+      pieces = [chunk.slice(0, mid), chunk.slice(mid)];
+    }
 
-    groups.push({
-      start: s,
-      end:   e,
-      text:  chunk.map((w) => w.word.trim()).join(" "),
-    });
+    for (const piece of pieces) {
+      if (piece.length === 0) continue;
+      let ps = piece[0].start;
+      let pe = piece[piece.length - 1].end;
+      if (pe - ps < MIN_DURATION_S) pe = ps + MIN_DURATION_S;
+
+      groups.push({
+        start: ps,
+        end:   pe,
+        text:  piece.map((w) => w.word.trim()).join(" "),
+      });
+    }
   }
 
   return groups;
@@ -108,20 +123,38 @@ export function buildSubtitleGroups(words) {
  * @returns {Array<{sceneIndex:number, startSec:number, endSec:number, text:string}>}
  */
 export function buildNarrationSegments(words, scenes) {
-  return scenes.map((scene) => {
-    // Include a word if its midpoint falls within [startSec, endSec)
-    // Using midpoint avoids edge-words being double-counted at boundaries.
-    const segWords = words.filter((w) => {
-      const mid = (w.start + w.end) / 2;
-      return mid >= scene.startSec && mid < scene.endSec + 0.05; // 50ms tolerance at end
-    });
+  // LOSSLESS word→scene partition.
+  // Every spoken word is assigned to EXACTLY ONE scene using its START time, so no
+  // word is ever dropped or double-counted. A word belongs to the scene whose
+  // [startSec, endSec) window contains its start; boundary words (start == next
+  // scene's startSec) go to the EARLIER scene to keep the partition contiguous.
+  // This guarantees the per-scene narration text covers 100% of spoken audio and
+  // that the subtitle track (built from the same words) never misses a word.
+  const segWordsByScene = scenes.map(() => []);
+  for (const w of words) {
+    let assigned = -1;
+    for (let s = 0; s < scenes.length; s++) {
+      const sc = scenes[s];
+      if (w.start >= sc.startSec && w.start < sc.endSec) { assigned = s; break; }
+    }
+    // Boundary / past-last-window fallback: attach to the nearest prior scene.
+    if (assigned === -1) {
+      for (let s = scenes.length - 1; s >= 0; s--) {
+        if (w.start >= scenes[s].startSec) { assigned = s; break; }
+      }
+    }
+    if (assigned === -1) assigned = 0;
+    segWordsByScene[assigned].push(w);
+  }
 
+  return scenes.map((scene, si) => {
+    const segWords = segWordsByScene[si];
     const text = segWords.map((w) => w.word.trim()).join(" ").trim();
     return {
       sceneIndex: scene.index,
       startSec:   scene.startSec,
       endSec:     scene.endSec,
-      text:       text || "", // empty string if no words fall in window (very short scene)
+      text:       text || "", // empty only if genuinely no words spoken in this window
     };
   });
 }
@@ -286,9 +319,16 @@ export function buildMasterTimeline(words, totalDuration, targetSceneCount, orig
 
   const scenes         = buildSceneBoundaries(words, totalDuration, targetSceneCount);
   let subtitleGroups   = buildSubtitleGroups(words);
-  
+
+  // SYNC FIX: subtitles MUST reflect the ACTUALLY SPOKEN audio (Whisper verbatim),
+  // not the original script text. The voiceover is generated from `script`, but TTS
+  // can alter phrasing/pauses, so replacing Whisper words with the script text caused
+  // subtitles to mismatch — and occasionally drop — words vs the audio. We keep the
+  // Whisper-derived groups as the canonical subtitle source so voice, subtitle, and
+  // image stay in sync. The original script is still used downstream for narration
+  // seeding (buildNarrationSegments) where verbatim-match is less critical.
   if (originalScript && originalScript.trim().length > 0) {
-    subtitleGroups = alignScriptToSubtitleGroups(originalScript, subtitleGroups);
+    logger.info(`ℹ️ Keeping Whisper verbatim subtitle text (script alignment skipped) to guarantee voice/subtitle sync.`);
   }
 
   const timeline = {

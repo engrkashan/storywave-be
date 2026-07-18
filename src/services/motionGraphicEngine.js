@@ -1330,9 +1330,21 @@ Return STRICT valid JSON:
  * It never invents story facts. It only decides HOW to shoot what already exists.
  * Receives the pre-planned shot from the Shot Planner as a constraint.
  */
-async function runFilmDirectorAI(compiledBeat, castBible, frameIndex, totalFrames, prevCameraDecision = null, prePlannedShot = null) {
+async function runFilmDirectorAI(compiledBeat, castBible, frameIndex, totalFrames, prevCameraDecision = null, prePlannedShot = null, prevVisualMemory = null) {
   const charList = (compiledBeat.characters_present || []).map(c => c.name).join(", ") || "None";
   const actionDesc = compiledBeat.action || "Scene";
+
+  // Build a continuity payload from the previous frame's visual memory so the
+  // director is explicitly told what each character looked like (wardrobe +
+  // appearance) in the prior frame and MUST keep it unless the compiled state
+  // deliberately changes it.
+  let continuityBrief = "None (first frame)";
+  if (prevVisualMemory) {
+    const prevChars = (prevVisualMemory.characters_present || [])
+      .map(c => `${c.name}: ${[c.wardrobe, c.pose, c.emotion, c.injuries?.length ? "injuries:" + c.injuries.join(",") : null].filter(Boolean).join(", ")}`)
+      .join("; ");
+    continuityBrief = prevChars || "None";
+  }
 
   const prompt = `You are a Hollywood Film Director. A Scene Compiler has assembled the exact contents of frame ${frameIndex + 1} of ${totalFrames}.
 
@@ -1347,6 +1359,9 @@ COMPILED SCENE STATE (immutable facts for this frame):
 - Action: ${actionDesc}
 - Character positions: ${(compiledBeat.characters_present || []).map(c => `${c.name} (${c.spatial_position}, ${c.facing})`).join("; ")}
 
+PREVIOUS FRAME CHARACTER STATE (you MUST preserve these across the cut):
+${continuityBrief}
+
 PRE-PLANNED SHOT CONSTRAINT (You MUST follow this plan if provided):
 ${prePlannedShot ? JSON.stringify(prePlannedShot) : "None"}
 
@@ -1360,6 +1375,13 @@ CINEMATOGRAPHY RULES:
 - Avoid repeating the exact same shot type more than 2 frames in a row.
 - The focal subject must be one of the characters actually listed above.
 
+CHARACTER CONTINUITY RULES (NON-NEGOTIABLE):
+- Each character's FACE, BODY, AGE, HAIR, and CLOTHING (wardrobe) from the previous frame
+  MUST be reproduced identically in this frame. You may only change wardrobe/appearance if the
+  COMPILED SCENE STATE above explicitly states a different wardrobe_note, injury, or change.
+- Do NOT alter a character's outfit, hairstyle, or physical features between frames unless the
+  scene state justifies it. Continuity of identity and wardrobe is more important than novelty.
+
 Return STRICT valid JSON:
 {
   "shot_type": "establishing wide | medium | medium-close | close-up | extreme close-up | over-the-shoulder | two-shot | aerial | low-angle | high-angle",
@@ -1370,6 +1392,7 @@ Return STRICT valid JSON:
   "depth_of_field": "shallow (subject sharp, bg blurred) | deep (all sharp)",
   "emotional_emphasis": "tension | sadness | relief | fear | anger | calm | dread | hope",
   "transition_from_previous": "cut | dissolve | fade | match-cut | none",
+  "wardrobe_unchanged": true,
   "confidence": { "composition": 95, "framing": 90, "emotion": 85 }
 }`;
 
@@ -1479,6 +1502,33 @@ function runContinuityEngine(currentState, prevVisualMemory, frameIndex) {
   if (!prevVisualMemory) return { passed: true, issues: [] };
 
   const issues = [];
+
+  // 1b. Wardrobe / appearance continuity check (HIGH severity — primary guard
+  // against character drift). A character who was present in the previous frame
+  // must keep the SAME wardrobe unless the current scene state explicitly states a
+  // different wardrobe_note (a deliberate story change).
+  for (const prevChar of (prevVisualMemory.characters_present || [])) {
+    const currChar = (currentState.characters_present || []).find(c => c.id === prevChar.id || c.name === prevChar.name);
+    if (!currChar) continue; // character left the scene — OK
+    const prevWardrobe = typeof prevChar.wardrobe === "object"
+      ? [prevChar.wardrobe.upper_garment, prevChar.wardrobe.lower_garment, prevChar.wardrobe.outerwear, prevChar.wardrobe.footwear, prevChar.wardrobe.accessories].filter(Boolean).join(", ")
+      : (prevChar.wardrobe || "");
+    const currWardrobe = typeof currChar.wardrobe === "object"
+      ? [currChar.wardrobe.upper_garment, currChar.wardrobe.lower_garment, currChar.wardrobe.outerwear, currChar.wardrobe.footwear, currChar.wardrobe.accessories].filter(Boolean).join(", ")
+      : (currChar.wardrobe || "");
+    // Only flag if the previous frame had a concrete wardrobe and the current one
+    // is a DIFFERENT concrete wardrobe AND the scene did not declare a change.
+    const declaredChange = (currentState.constraints || []).some(c =>
+      /wardrobe|outfit|changes? clothes|puts on|removes? (his|her|their)/i.test(c)
+    );
+    if (prevWardrobe && currWardrobe && prevWardrobe !== currWardrobe && !declaredChange) {
+      issues.push({
+        type: "WARDROBE_DRIFT",
+        severity: "high",
+        detail: `${currChar.name} wardrobe changed without story justification: "${prevWardrobe}" → "${currWardrobe}".`,
+      });
+    }
+  }
 
   // 1. Location teleport check
   if (prevVisualMemory.location && currentState.location !== prevVisualMemory.location) {
@@ -1878,7 +1928,7 @@ export async function runFullMotionGraphicEngine({
 
     // ── Step C: Film Director AI (camera only)
     const plannedShot = shotPlan[i] || null;
-    let directorDecision = await runFilmDirectorAI(compiledState, MATERIALIZED_CAST_BIBLE, i, mappedSegments.length, prevCameraDecision, plannedShot);
+    let directorDecision = await runFilmDirectorAI(compiledState, MATERIALIZED_CAST_BIBLE, i, mappedSegments.length, prevCameraDecision, plannedShot, prevVisualMemory);
 
     // ── Step D: Validate SceneState + Director
     let validation = validateSceneState(compiledState, directorDecision, charManager, worldManager);
