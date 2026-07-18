@@ -357,16 +357,27 @@ async function callGeminiImageModel({
   modelId,
   finalPrompt,
   inlineImages,
+  prevFrameImage,     // FIX 3: { mimeType, base64 } of the immediately preceding frame, or null
   aspectRatio,
   sceneId,
   attempt,
 }) {
   const startMs = Date.now();
-  logger.info(`📡 [${modelId}] Scene ${sceneId} — Attempt ${attempt} | CharRefs: ${inlineImages.length} | PromptLen: ${finalPrompt.length} chars`);
+  logger.info(`📡 [${modelId}] Scene ${sceneId} — Attempt ${attempt} | CharRefs: ${inlineImages.length} | PrevFrame: ${prevFrameImage ? "yes" : "no"} | PromptLen: ${finalPrompt.length} chars`);
 
   // Build multimodal parts:
-  // Prompt text first, then character reference images each preceded by a label
+  // Order: prompt text → [optional] prev-frame visual anchor → character reference images
   const parts = [{ text: finalPrompt }];
+
+  // FIX 3: Previous frame image injected as a visual continuity anchor (frame > 0 only)
+  if (prevFrameImage) {
+    parts.push({
+      text: "\n[PREVIOUS FRAME — visual continuity reference]\nThe attached image shows the immediately preceding moment in this story. Continue directly from this exact visual state — same room, same lighting, and same character position unless the narration explicitly describes movement or a scene change.\n"
+    });
+    parts.push({ inlineData: { mimeType: prevFrameImage.mimeType, data: prevFrameImage.base64 } });
+  }
+
+  // Character reference images (identity lock — always after prev-frame anchor)
   for (const inlineImg of inlineImages) {
     const charIdentifier = inlineImg.charName || inlineImg.charId || "Character";
     parts.push({ text: `\n[Reference Image for character: ${charIdentifier}]\n` });
@@ -430,6 +441,7 @@ async function generateWithGemini({
   sceneMeta = {},                 // { location, characters, action, narration, emotion, camera, storyProgress }
   previousScenePrompt = null,
   nextScenePrompt = null,
+  prevFrameImagePath = null,      // FIX 3: absolute path to the previous frame's generated PNG
   onCheckCancelled = null,
 }) {
   await ensureDir(tempDir);
@@ -544,6 +556,23 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
   // inlineImages is now fixed for ALL retries — never reloaded, never reordered, never removed
   const frozenInlineImages = [...inlineImages];
 
+  // FIX 3: Load previous frame image once before the retry loop.
+  // This is also frozen across retries — the reference to the prior frame never changes.
+  let prevFrameImageData = null;
+  if (prevFrameImagePath) {
+    try {
+      const rawBytes = await fs.promises.readFile(prevFrameImagePath);
+      prevFrameImageData = {
+        mimeType: "image/png",
+        base64: rawBytes.toString("base64"),
+      };
+      logger.info(`🔗 [GenWithGemini] ${sceneId} — Previous frame loaded as visual anchor: ${prevFrameImagePath}`);
+    } catch (loadErr) {
+      // Non-fatal — generate without the visual anchor rather than crashing
+      logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not load previous frame image (${prevFrameImagePath}): ${loadErr.message}. Generating without visual anchor.`);
+    }
+  }
+
   const globalStartMs = Date.now();
   let currentPrompt = prompt;
   let promptVersion = 1;
@@ -593,6 +622,7 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
           modelId: tier.modelId,
           finalPrompt,
           inlineImages: frozenInlineImages,    // Always the same refs — never changed
+          prevFrameImage: prevFrameImageData,  // FIX 3: visual anchor from previous frame
           aspectRatio,
           sceneId,
           attempt: `${tier.name}-${attempt}`,
@@ -850,11 +880,41 @@ export async function generateMultiImages(
       ? resolvedPrompts[index + 1].prompt
       : null;
 
+    // FIX 3: Resolve the previous frame's generated image path as a visual anchor.
+    //
+    // Concurrency safety:
+    //   generateMultiImages() uses a bounded worker pool (default concurrencyLimit = 3).
+    //   At concurrency > 1, frame N+1 may start before frame N is complete, making
+    //   results[index-1] still null at this point.
+    //
+    //   Strategy: check results[index-1] synchronously RIGHT NOW.
+    //   - If it is already a string (path), the previous frame is done → inject it.
+    //   - If it is still null, the previous frame is still running in parallel → skip
+    //     the visual anchor for this scene and log a CONCURRENCY_SKIP warning.
+    //
+    //   To get strict sequential visual anchoring on EVERY frame, set
+    //   STORYWAVE_IMAGE_CONCURRENCY=1 in your env (or workflow.config.js imageConcurrency).
+    let prevFrameImagePath = null;
+    if (index > 0) {
+      const prevResult = results[index - 1];
+      if (typeof prevResult === "string" && prevResult.length > 0) {
+        prevFrameImagePath = prevResult;
+        logger.info(`🔗 [MultiImages] ${sceneId} — Previous frame confirmed complete → injecting as visual anchor: scene_${String(index).padStart(3, "0")}.png`);
+      } else {
+        // prevResult is null → still generating in parallel
+        logger.warn(
+          `⚠️ [MultiImages] ${sceneId} — CONCURRENCY_SKIP: frame ${index} (scene_${String(index).padStart(3, "0")}.png) not yet complete ` +
+          `when frame ${index + 1} started. Visual anchor skipped for this scene. ` +
+          `Set imageConcurrency=1 in workflow.config.js for strict sequential visual anchoring.`
+        );
+      }
+    }
+
     let success = false;
     let imgResult = { imageUrl: null, error: null };
 
     try {
-      logger.info(`🎨 [MultiImages] ${sceneId} (${index + 1}/${prompts.length}) — Starting generation | Location: ${sceneVisualState.location || "unknown"} | Characters: [${sceneCharacters.join(", ")}]`);
+      logger.info(`🎨 [MultiImages] ${sceneId} (${index + 1}/${prompts.length}) — Starting generation | Location: ${sceneVisualState.location || "unknown"} | Characters: [${sceneCharacters.join(", ")}] | PrevFrame: ${prevFrameImagePath ? "anchored" : "none"}`);
 
       const result = await withExponentialBackoff(async () => {
         return await generateWithGemini({
@@ -872,6 +932,7 @@ export async function generateMultiImages(
           sceneMeta,
           previousScenePrompt: prevScenePrompt,
           nextScenePrompt,
+          prevFrameImagePath,                 // FIX 3: visual anchor from previous frame
           onCheckCancelled,
         });
       }, `Image ${sceneId}`, 6, 8000);

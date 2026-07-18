@@ -1195,19 +1195,93 @@ Return STRICT valid JSON:
 
 // ── Phase 2b: Beat to Frame Mapper (A.9) ────────────────────────────────────
 /**
- * Maps narration segments to the generated beats. Interpolates states
- * and ensures each frame gets a distinct slice of the beat to prevent identical prompts.
+ * FIX 2 — Nearest-timestamp beat mapping.
+ *
+ * BEFORE: proportional index — floor((i / N) * graphLength)
+ *   Problem: pure arithmetic; a frame's narration text and its assigned beat's
+ *   action/pose could describe completely different story moments, causing the
+ *   generated image to jump ahead of what the narration is actually saying.
+ *
+ * AFTER: temporal overlap matching.
+ *   Each narration segment carries startSec / endSec from the Whisper timeline.
+ *   The scene graph beats are ordered chronologically (beat_index is their
+ *   position in story time). We derive a proportional time window for each beat
+ *   ([beat_start, beat_end) in normalised story-seconds) and then pick the beat
+ *   whose window has the maximum overlap with the segment's own audio window.
+ *
+ *   Fallback: if segments carry no timestamp data (synthetic segments have
+ *   startSec === endSec === undefined) we fall back to the original proportional
+ *   index so the pipeline degrades gracefully.
  */
 function mapSegmentsToBeats(segments, sceneGraph) {
-  return segments.map((seg, i) => {
-    const beatIdx = sceneGraph.length > 0
-      ? Math.min(Math.floor((i / segments.length) * sceneGraph.length), sceneGraph.length - 1)
-      : 0;
-    
+  if (sceneGraph.length === 0) {
+    return segments.map((seg) => ({ ...seg, graphBeat: null, beatIdx: 0 }));
+  }
+
+  // Check whether real timestamps exist on at least one segment
+  const hasTimestamps = segments.some(
+    (s) => typeof s.startSec === "number" && typeof s.endSec === "number"
+  );
+
+  if (!hasTimestamps) {
+    // ── Fallback: original proportional index mapping ─────────────────────
+    logger.info("[MGE v7] mapSegmentsToBeats: no timestamps — using proportional index fallback.");
+    return segments.map((seg, i) => {
+      const beatIdx = Math.min(
+        Math.floor((i / segments.length) * sceneGraph.length),
+        sceneGraph.length - 1
+      );
+      const beat = sceneGraph[beatIdx] ? JSON.parse(JSON.stringify(sceneGraph[beatIdx])) : null;
+      return { ...seg, graphBeat: beat, beatIdx };
+    });
+  }
+
+  // ── Derive normalised time windows for each beat ──────────────────────────
+  // The scene graph has no embedded timestamps, but its beats are ordered in
+  // story sequence. We partition the full audio duration evenly across beats
+  // to obtain a [beat_start, beat_end) window for each beat.
+  const totalDuration =
+    Math.max(...segments.map((s) => (typeof s.endSec === "number" ? s.endSec : 0)), 1);
+
+  const beatWindowSize = totalDuration / sceneGraph.length;
+  const beatWindows = sceneGraph.map((_, bi) => ({
+    start: bi * beatWindowSize,
+    end: (bi + 1) * beatWindowSize,
+  }));
+
+  const mapped = segments.map((seg, i) => {
+    const segStart = typeof seg.startSec === "number" ? seg.startSec : (i / segments.length) * totalDuration;
+    const segEnd   = typeof seg.endSec   === "number" ? seg.endSec   : ((i + 1) / segments.length) * totalDuration;
+
+    // Find the beat with the largest overlap with this segment's audio window
+    let bestBeatIdx = 0;
+    let bestOverlap = -1;
+
+    for (let bi = 0; bi < beatWindows.length; bi++) {
+      const overlapStart = Math.max(segStart, beatWindows[bi].start);
+      const overlapEnd   = Math.min(segEnd,   beatWindows[bi].end);
+      const overlap      = Math.max(0, overlapEnd - overlapStart);
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap;
+        bestBeatIdx = bi;
+      }
+    }
+
     // Deep clone the beat so modifications don't leak between frames sharing the same beat
-    const beat = sceneGraph[beatIdx] ? JSON.parse(JSON.stringify(sceneGraph[beatIdx])) : null;
-    return { ...seg, graphBeat: beat, beatIdx };
+    const beat = sceneGraph[bestBeatIdx]
+      ? JSON.parse(JSON.stringify(sceneGraph[bestBeatIdx]))
+      : null;
+
+    return { ...seg, graphBeat: beat, beatIdx: bestBeatIdx };
   });
+
+  // Log the mapping for debuggability
+  logger.info(
+    `[MGE v7] mapSegmentsToBeats (timestamp mode): ${segments.length} segments → ${sceneGraph.length} beats. ` +
+    mapped.map((m, i) => `F${i + 1}→B${m.beatIdx}`).join(", ")
+  );
+
+  return mapped;
 }
 
 // ── Phase 2c: Shot Planner (A.7) ────────────────────────────────────────────
@@ -1372,6 +1446,16 @@ function compileSceneState(graphBeat, charManager, worldManager, objectManager, 
     };
   });
 
+  // ── Derive exit_state: plain-text summary of the physical state at the END of this
+  //    frame's narrative moment. No LLM call — assembled from data already compiled above.
+  const exitStateChars = compiledCharacters.map(c => {
+    const locDesc = location ? `inside/at ${location}` : "in the scene";
+    return `${c.name} is ${c.pose}, ${c.action}, ${locDesc}`;
+  });
+  const exit_state = exitStateChars.length > 0
+    ? exitStateChars.join("; ") + `. Time of day: ${graphBeat.time_of_day || worldRuntime.time_of_day || "day"}.`
+    : `Scene at ${location}. Time: ${graphBeat.time_of_day || worldRuntime.time_of_day || "day"}.`;
+
   return {
     frame_narration: narrationText || "",
     location,
@@ -1384,7 +1468,8 @@ function compileSceneState(graphBeat, charManager, worldManager, objectManager, 
     objects_in_scene: compiledObjects,
     relationships_active: graphBeat.relationships_active || [],
     action: graphBeat.action ? `${graphBeat.action}. Narration context: "${narrationText}"` : narrationText,
-    constraints: graphBeat.constraints || []
+    constraints: graphBeat.constraints || [],
+    exit_state,
   };
 }
 
@@ -1537,9 +1622,17 @@ function selectReferences(compiledState, directorDecision, characterReferences) 
 /**
  * PURE SERIALIZER. Zero reasoning. Zero hallucination.
  * Converts a compiled SceneState + Director decision into the final image prompt string.
- * Follows a strict template: Framing → Subject → Spatial Layout → Environment → Lighting → Technical.
+ * Follows a strict template:
+ *   [Continuity anchor (frame > 0)] → Framing → Subject → Props → Environment → Lighting → Technical.
+ *
+ * @param {Object}      compiledState      - The compiled scene state for this frame.
+ * @param {Object|null} directorDecision   - Camera/composition decision from Film Director AI.
+ * @param {string}      aspectRatio        - e.g. "16:9" or "9:16".
+ * @param {string|null} prevExitState      - Plain-text exit_state from the PREVIOUS frame's
+ *                                          compiled state (null for frame 0).
+ * @param {string|null} prevNarrationText  - The narration text of the PREVIOUS frame (null for frame 0).
  */
-function composePrompt(compiledState, directorDecision, aspectRatio) {
+function composePrompt(compiledState, directorDecision, aspectRatio, prevExitState = null, prevNarrationText = null) {
   const {
     characters_present = [],
     objects_in_scene = [],
@@ -1547,7 +1640,8 @@ function composePrompt(compiledState, directorDecision, aspectRatio) {
     location_architecture,
     time_of_day,
     weather,
-    lighting
+    lighting,
+    frame_narration: narrationText,
   } = compiledState;
 
   const {
@@ -1558,6 +1652,18 @@ function composePrompt(compiledState, directorDecision, aspectRatio) {
     depth_of_field = "shallow",
     emotional_emphasis = "neutral"
   } = directorDecision || {};
+
+  // ── Block 0: Continuity anchor (omitted for frame 0)
+  //    Placed FIRST so Gemini interprets all subsequent pose/action fields
+  //    relative to the confirmed prior physical state.
+  const continuityAnchorBlock = prevExitState
+    ? [
+        `CONTINUITY_FROM_PREVIOUS_FRAME:`,
+        `"${prevExitState}"`,
+        `This frame must show the immediate next moment continuing directly from the above — same location and physical state unless the narration explicitly indicates movement or a scene change.`,
+        `Narration transition: previous = "${(prevNarrationText || "").slice(0, 120)}" → this frame = "${(narrationText || "").slice(0, 120)}".`,
+      ].join("\n")
+    : "";
 
   // ── Block 1: Shot & Framing
   const shotBlock = `${shot_type.toUpperCase()} SHOT. ${camera_height} angle. ${framing}`.trim();
@@ -1624,7 +1730,7 @@ function composePrompt(compiledState, directorDecision, aspectRatio) {
     "NO text NO watermarks NO subtitles"
   ].join(", ");
 
-  return [shotBlock, subjectBlock, objBlock, envBlock, techBlock]
+  return [continuityAnchorBlock, shotBlock, subjectBlock, objBlock, envBlock, techBlock]
     .filter(s => s.trim().length > 0)
     .join("\n\n");
 }
@@ -1743,6 +1849,8 @@ export async function runFullMotionGraphicEngine({
   const scenePrompts = [];
   let prevVisualMemory = null;
   let prevCameraDecision = null;
+  let prevExitState = null;       // FIX 1: exit_state summary carried forward from previous frame
+  let prevNarrationText = null;   // FIX 1: narration text carried forward from previous frame
   let continuityFailures = 0;
 
   for (let i = 0; i < mappedSegments.length; i++) {
@@ -1762,7 +1870,7 @@ export async function runFullMotionGraphicEngine({
       constraints: []
     };
 
-    // ── Step A: Compile SceneState
+    // ── Step A: Compile SceneState (now also derives exit_state)
     const compiledState = compileSceneState(beatToCompile, charManager, worldManager, objectManager, narrationText);
 
     // ── Step B: Continuity Check
@@ -1790,8 +1898,14 @@ export async function runFullMotionGraphicEngine({
     // ── Step E: Reference Selector
     const selectedRefs = selectReferences(compiledState, directorDecision, characterReferences);
 
-    // ── Step F: Prompt Composer (pure serializer)
-    const finalPrompt = composePrompt(compiledState, directorDecision, aspectRatio);
+    // ── Step F: Prompt Composer (pure serializer) — FIX 1: passes continuity anchor
+    const finalPrompt = composePrompt(
+      compiledState,
+      directorDecision,
+      aspectRatio,
+      i > 0 ? prevExitState : null,       // omit anchor for frame 0
+      i > 0 ? prevNarrationText : null,   // omit anchor for frame 0
+    );
 
     // ── Step G: Visual Memory Update
     const visualMemory = createVisualMemory(compiledState, directorDecision, selectedRefs, finalPrompt);
@@ -1823,6 +1937,9 @@ export async function runFullMotionGraphicEngine({
       weather: compiledState.weather
     });
 
+    // FIX 1: Store exit_state and narration from this frame for the NEXT frame's anchor
+    prevExitState = compiledState.exit_state || null;
+    prevNarrationText = narrationText || null;
     prevVisualMemory = visualMemory;
     prevCameraDecision = directorDecision;
 
@@ -1839,7 +1956,7 @@ export async function runFullMotionGraphicEngine({
       _globalNegativePrompt: GLOBAL_NEGATIVE_PROMPT,
     });
 
-    logger.info(`[MGE v7] Frame ${i + 1}/${mappedSegments.length} — shot: ${directorDecision?.shot_type}, focus: ${directorDecision?.focal_subject}, refs: ${selectedRefs.length}`);
+    logger.info(`[MGE v7] Frame ${i + 1}/${mappedSegments.length} — shot: ${directorDecision?.shot_type}, focus: ${directorDecision?.focal_subject}, refs: ${selectedRefs.length}, exit_state: "${(compiledState.exit_state || "").slice(0, 60)}..."`);
   }
 
   const FINAL_AUDIT = {
