@@ -243,6 +243,108 @@ class RelationshipStateManager {
   }
 }
 
+class WardrobeStateManager {
+  constructor(castBible) {
+    this.wardrobes = new Map();
+    if (castBible && castBible.characters) {
+      for (const char of castBible.characters) {
+        this.wardrobes.set(char.id || char.name, {
+          base: char.base_wardrobe || char.wardrobe || {},
+          current: char.base_wardrobe || char.wardrobe || {},
+          history: []
+        });
+      }
+    }
+  }
+
+  getWardrobe(id) { return this.wardrobes.get(id); }
+  updateWardrobe(id, updates, sceneIndex) {
+    if (this.wardrobes.has(id)) {
+      const w = this.wardrobes.get(id);
+      w.history.push({ fromScene: sceneIndex, change: updates });
+      w.current = { ...w.current, ...updates };
+      this.wardrobes.set(id, w);
+    }
+  }
+}
+
+class EnvironmentRegistry {
+  constructor() {
+    this.environments = new Map();
+  }
+
+  registerEnvironment(id, definition) {
+    this.environments.set(id, {
+      name: definition.name,
+      location: definition.location,
+      state: definition.state || "intact",
+      visible: definition.visible !== false
+    });
+  }
+
+  updateEnvironment(id, updates) {
+    if (this.environments.has(id)) {
+      this.environments.set(id, { ...this.environments.get(id), ...updates });
+    } else {
+      this.registerEnvironment(id, updates);
+    }
+  }
+
+  getVisibleEnvironmentsInLocation(location) {
+    const visible = [];
+    for (const [id, env] of this.environments.entries()) {
+      if (env.visible && env.location === location) {
+        visible.push(env);
+      }
+    }
+    return visible;
+  }
+}
+
+class VehicleRegistry {
+  constructor() {
+    this.vehicles = new Map();
+  }
+
+  registerVehicle(id, definition) {
+    this.vehicles.set(id, {
+      name: definition.name,
+      color: definition.color || null,
+      model: definition.model || null,
+      owner: definition.owner || null,
+      currentLocation: definition.currentLocation || null,
+      condition: definition.condition || "intact",
+      visible: definition.visible !== false
+    });
+  }
+
+  updateVehicle(id, updates) {
+    if (this.vehicles.has(id)) {
+      this.vehicles.set(id, { ...this.vehicles.get(id), ...updates });
+    } else {
+      this.registerVehicle(id, updates);
+    }
+  }
+}
+
+class TimelineRegistry {
+  constructor() {
+    this.state = {
+      currentStoryDay: 1,
+      currentStoryHour: 8,
+      timeOfDay: "morning",
+      history: []
+    };
+  }
+
+  updateTime(updates, sceneIndex) {
+    this.state.history.push({ scene: sceneIndex, time: this.state.timeOfDay, newTime: updates.timeOfDay || this.state.timeOfDay });
+    this.state = { ...this.state, ...updates };
+  }
+
+  getTime() { return this.state; }
+}
+
 // ─── MODULE 1: INPUT NORMALIZATION → PROJECT_SPEC ────────────────────────────
 
 
@@ -892,186 +994,7 @@ Return STRICT valid JSON:
   return result;
 }
 
-// ─── STATEFUL CINEMATIC ENGINE: SCENE DIRECTOR & PROMPT WRITER ───────────────
 
-function initializeVisualState(worldBible, castBible) {
-  return {
-    location: null,
-    environment: "",
-    props_and_objects: "", // newly tracked
-    lighting: "natural cinematic lighting",
-    weather: "clear",
-    timeOfDay: "daytime",
-    camera: {
-      lens: "standard 35mm",
-      angle: "eye-level",
-      shotSize: "medium wide shot",
-      movement: "static",
-      focus: "main subjects",
-      composition: "rule of thirds"
-    },
-    characterStates: {}, // map of charId -> state
-    activeCharacters: [],
-    currentSceneNumber: 0,
-    storyProgress: "Opening scene"
-  };
-}
-
-async function runSceneDirectorAI(segment, currentState, castBible, worldBible, sceneLedger, frameNumber, correction = null) {
-  logger.info(`[MGE] Scene Director evaluating frame ${frameNumber}...`);
-  const prompt = `You are the Scene Director AI for a continuous cinematic sequence.
-Your task is to analyze the current narration segment and determine what changes in the visual state.
-
-CURRENT NARRATION (Audio Segment for Frame ${frameNumber}):
-"${segment.text}"
-
-DIRECTOR'S MOVIE GUIDE BEAT (Target Visual Action):
-${JSON.stringify(segment.director_beat || {}, null, 2)}
-
-PREVIOUS VISUAL STATE (What the viewer currently sees):
-${JSON.stringify(currentState, null, 2)}
-
-SCENE LEDGER OVERVIEW (For context of the story arc only):
-${JSON.stringify(sceneLedger.scenes.map(s => ({scene: s.scene_number, purpose: s.purpose, events_covered: s.events_covered})), null, 2)}
-
-CAST BIBLE:
-${JSON.stringify(castBible.characters.map(c => ({id: c.id, name: c.name})), null, 2)}
-WORLD BIBLE:
-${JSON.stringify(worldBible.locations.map(l => ({id: l.id, name: l.name})), null, 2)}
-${correction ? `\nCORRECTION INSTRUCTION (CRITICAL - YOU FAILED PREVIOUS AUDIT):\n${correction}\n` : ""}
-Identify if there is a scene transition. Possible transitions:
-NONE, LOCATION_CHANGED, TIME_SKIP, FLASHBACK, NEW_CHARACTER, CAMERA_ONLY.
-
-Output a strict JSON state delta. Only output what changes. For characters, only list characters who are visibly active in this segment.
-{
-  "transition_type": "string",
-  "location_id": "loc_id or null if unchanged",
-  "environment_delta": {
-    "lighting": "string or null",
-    "weather": "string or null",
-    "timeOfDay": "string or null",
-    "props_and_objects": "string or null (update all visible props, furniture, and vehicles)"
-  },
-  "camera_delta": {
-    "lens": "string or null (e.g. 50mm, wide angle)",
-    "angle": "string or null (e.g. low angle, high angle)",
-    "shotSize": "string or null (e.g. close-up, wide shot)",
-    "movement": "string or null (e.g. slow pan right)",
-    "focus": "string or null",
-    "composition": "string or null"
-  },
-  "active_characters": ["char_1", "char_2"],
-  "character_deltas": [
-    {
-      "character_id": "char_1",
-      "position": "string or null (e.g. standing by the window)",
-      "lookingAt": "string or null",
-      "holding": "string or null",
-      "emotion": "string or null",
-      "pose": "string or null",
-      "movement": "string or null",
-      "wardrobe_changes": "string or null (only if clothing visibly changed from base)"
-    }
-  ],
-  "story_progress_update": "Brief summary of what is happening now in this specific frame"
-}`;
-
-  return await callGeminiJSON(prompt, `Scene Director - Frame ${frameNumber}`);
-}
-
-function applyDeltas(currentState, deltas, worldBible, castBible) {
-  const newState = JSON.parse(JSON.stringify(currentState)); // deep copy
-
-  if (deltas?.transition_type === "LOCATION_CHANGED" || deltas?.transition_type === "TIME_SKIP" || deltas?.transition_type === "FLASHBACK") {
-    newState.currentSceneNumber += 1;
-    if (deltas.location_id) {
-       const loc = worldBible.locations.find(l => l.id === deltas.location_id);
-       newState.location = loc || newState.location;
-    }
-  } else if (!newState.location && worldBible.locations?.length > 0) {
-    // Initial fallback
-    newState.location = worldBible.locations[0];
-  }
-
-  if (deltas?.environment_delta) {
-    if (deltas.environment_delta.lighting) newState.lighting = deltas.environment_delta.lighting;
-    if (deltas.environment_delta.weather) newState.weather = deltas.environment_delta.weather;
-    if (deltas.environment_delta.timeOfDay) newState.timeOfDay = deltas.environment_delta.timeOfDay;
-    if (deltas.environment_delta.props_and_objects) newState.props_and_objects = deltas.environment_delta.props_and_objects;
-  }
-
-  if (deltas?.camera_delta) {
-    Object.keys(deltas.camera_delta).forEach(k => {
-      if (deltas.camera_delta[k]) newState.camera[k] = deltas.camera_delta[k];
-    });
-  }
-
-  if (deltas?.active_characters) {
-    newState.activeCharacters = deltas.active_characters;
-  }
-  
-  (deltas?.character_deltas || []).forEach(cd => {
-    if (!newState.characterStates[cd.character_id]) {
-      const char = castBible.characters.find(c => c.id === cd.character_id);
-      newState.characterStates[cd.character_id] = {
-         base_wardrobe: char?.base_wardrobe || {},
-         position: "standing", lookingAt: "forward", holding: "nothing", emotion: "neutral", pose: "neutral", movement: "still"
-      };
-    }
-    const cState = newState.characterStates[cd.character_id];
-    if (cd.position) cState.position = cd.position;
-    if (cd.lookingAt) cState.lookingAt = cd.lookingAt;
-    if (cd.holding) cState.holding = cd.holding;
-    if (cd.emotion) cState.emotion = cd.emotion;
-    if (cd.pose) cState.pose = cd.pose;
-    if (cd.movement) cState.movement = cd.movement;
-    if (cd.wardrobe_changes) cState.wardrobe_changes = cd.wardrobe_changes;
-  });
-
-  if (deltas?.story_progress_update) newState.storyProgress = deltas.story_progress_update;
-
-  return newState;
-}
-
-function runPromptWriter(state, castBible, worldBible, aspectRatio) {
-  let prompt = "";
-  
-  // 1. Camera & Framing
-  prompt += `Cinematic ${state.camera.shotSize}, ${state.camera.angle} angle, ${state.camera.lens} lens. Composition: ${state.camera.composition}. Focus: ${state.camera.focus}. Aspect Ratio: ${aspectRatio}. `;
-  
-  // 2. Location & Environment
-  if (state.location) {
-     const loc = state.location;
-     prompt += `Location: ${loc.geographic_cultural_id?.name || loc.name}. ${loc.construction?.wall_roof_floor_ceiling_material || ""}. ${loc.surface_condition || ""}. ${loc.fixed_elements || ""}. `;
-  }
-  if (state.props_and_objects) {
-     prompt += `Key objects/props present: ${state.props_and_objects}. `;
-  }
-  prompt += `Lighting: ${state.lighting}. Weather: ${state.weather}. Time of day: ${state.timeOfDay}. `;
-
-  // 3. Characters & Action
-  if (state.activeCharacters?.length > 0) {
-    prompt += `Subjects in frame: `;
-    state.activeCharacters.forEach(id => {
-       const char = castBible.characters.find(c => c.id === id);
-       const cs = state.characterStates[id];
-       if (char && cs) {
-          prompt += `[${char.name}]: ${char.identity_culture?.race || ""} ${char.identity_culture?.ethnicity_cultural_identity || ""}, ${char.sketch_artist_appearance?.age_range || ""}. ${char.sketch_artist_appearance?.face_structure || ""}, ${char.sketch_artist_appearance?.hair || ""}. `;
-          const upper = cs.base_wardrobe?.upper_garment || "";
-          const lower = cs.base_wardrobe?.lower_garment || "";
-          prompt += `Wearing ${upper} and ${lower}, ${cs.wardrobe_changes || ""}. `;
-          prompt += `Action: ${cs.pose}, ${cs.movement}. Position: ${cs.position}. Looking at ${cs.lookingAt}. Holding ${cs.holding}. Emotion: ${cs.emotion}. `;
-       }
-    });
-  } else {
-    prompt += `Establishing shot, no prominent characters. `;
-  }
-
-  // 4. Global Style
-  prompt += `Style: ${worldBible.visual_style_record?.cinematic_treatment || "high-end film still"}, ${worldBible.visual_style_record?.lighting_philosophy || "volumetric cinematic lighting"}.`;
-
-  return prompt.trim();
-}
 
 // ─── GLOBAL NEGATIVE PROMPT BUILDER ──────────────────────────────────────────
 
@@ -1162,7 +1085,7 @@ export function buildGlobalNegativePrompt(storyWorldMap, castBible) {
  * Reads the full story + Cast/World Bibles and emits a structural Scene Graph.
  * NO camera. NO prompt language. Pure visual facts only.
  */
-async function generateSceneGraph(storyScript, castBible, worldBible, referenceTraits = null) {
+export async function generateSceneGraph(storyScript, castBible, worldBible, referenceTraits = null) {
   logger.info("[MGE v7] Phase 2 — Generating Scene Graph...");
 
   let refLock = "";
@@ -1270,12 +1193,74 @@ Return STRICT valid JSON:
   return { graph, objectRegistry, relationshipRegistry };
 }
 
+// ── Phase 2b: Beat to Frame Mapper (A.9) ────────────────────────────────────
+/**
+ * Maps narration segments to the generated beats. Interpolates states
+ * and ensures each frame gets a distinct slice of the beat to prevent identical prompts.
+ */
+function mapSegmentsToBeats(segments, sceneGraph) {
+  return segments.map((seg, i) => {
+    const beatIdx = sceneGraph.length > 0
+      ? Math.min(Math.floor((i / segments.length) * sceneGraph.length), sceneGraph.length - 1)
+      : 0;
+    
+    // Deep clone the beat so modifications don't leak between frames sharing the same beat
+    const beat = sceneGraph[beatIdx] ? JSON.parse(JSON.stringify(sceneGraph[beatIdx])) : null;
+    return { ...seg, graphBeat: beat, beatIdx };
+  });
+}
+
+// ── Phase 2c: Shot Planner (A.7) ────────────────────────────────────────────
+/**
+ * Generates a cohesive shot plan for the entire sequence in one call.
+ * Enforces shot diversity, the 180-degree rule, and logical frame progression.
+ */
+async function generateShotPlan(mappedSegments) {
+  logger.info("[MGE v7] Phase 2c — Generating Shot Plan...");
+  
+  const frameDetails = mappedSegments.map((s, i) => 
+    `Frame ${i + 1} | Beat Location: ${s.graphBeat?.location || 'Unknown'} | Action: ${s.graphBeat?.action || ''} | Narration: ${s.text}`
+  ).join("\n");
+
+  const prompt = `You are a Hollywood Director of Photography planning the shots for a ${mappedSegments.length}-frame sequence.
+  
+For each frame, you will decide the shot type, focal subject, framing, and camera movement.
+
+RULES:
+- Enforce the 180° rule: keep characters on their established sides of the screen.
+- Screen direction must be maintained.
+- Shot diversity: NEVER use the same shot type (e.g., 'medium') more than 2 frames in a row.
+- Frame progression: Start wide to establish, move to medium/close-up for dialogue or action.
+
+FRAME DETAILS:
+${frameDetails}
+
+Return STRICT valid JSON:
+{
+  "shot_plan": [
+    {
+      "frame_index": 0,
+      "shot_type": "establishing wide | medium | medium-close | close-up | extreme close-up | over-the-shoulder | two-shot | aerial | low-angle | high-angle",
+      "focal_subject": "character name or 'environment'",
+      "framing": "brief composition description",
+      "camera_movement": "static | slow push-in | slow pull-out | pan left | pan right | tilt up | tilt down"
+    }
+  ]
+}`;
+
+  const result = await callGeminiJSON(prompt, "Shot Plan Generation");
+  const plan = result?.shot_plan || [];
+  logger.info(`[MGE v7] Shot Plan: ${plan.length} shots planned.`);
+  return plan;
+}
+
 // ── Phase 3: Film Director AI (Camera & Composition Only) ─────────────────────
 /**
  * Receives a fully compiled SceneState and emits ONLY cinematic decisions.
  * It never invents story facts. It only decides HOW to shoot what already exists.
+ * Receives the pre-planned shot from the Shot Planner as a constraint.
  */
-async function runFilmDirectorAI(compiledBeat, castBible, frameIndex, totalFrames, prevCameraDecision = null) {
+async function runFilmDirectorAI(compiledBeat, castBible, frameIndex, totalFrames, prevCameraDecision = null, prePlannedShot = null) {
   const charList = (compiledBeat.characters_present || []).map(c => c.name).join(", ") || "None";
   const actionDesc = compiledBeat.action || "Scene";
 
@@ -1291,6 +1276,9 @@ COMPILED SCENE STATE (immutable facts for this frame):
 - Characters present: ${charList}
 - Action: ${actionDesc}
 - Character positions: ${(compiledBeat.characters_present || []).map(c => `${c.name} (${c.spatial_position}, ${c.facing})`).join("; ")}
+
+PRE-PLANNED SHOT CONSTRAINT (You MUST follow this plan if provided):
+${prePlannedShot ? JSON.stringify(prePlannedShot) : "None"}
 
 PREVIOUS CAMERA (for continuity): ${prevCameraDecision ? JSON.stringify(prevCameraDecision) : "None (first frame)"}
 
@@ -1395,7 +1383,7 @@ function compileSceneState(graphBeat, charManager, worldManager, objectManager, 
     characters_present: compiledCharacters,
     objects_in_scene: compiledObjects,
     relationships_active: graphBeat.relationships_active || [],
-    action: graphBeat.action || "",
+    action: graphBeat.action ? `${graphBeat.action}. Narration context: "${narrationText}"` : narrationText,
     constraints: graphBeat.constraints || []
   };
 }
@@ -1589,7 +1577,7 @@ function composePrompt(compiledState, directorDecision, aspectRatio) {
       char.skin ? `skin: ${char.skin}` : null,
       char.hair ? `hair: ${char.hair}` : null,
       char.face ? `face: ${char.face}` : null,
-      char.wardrobe ? `wearing: ${char.wardrobe}` : null,
+      char.wardrobe && typeof char.wardrobe === "object" ? `wearing: ${[char.wardrobe.upper_garment, char.wardrobe.lower_garment, char.wardrobe.outerwear, char.wardrobe.footwear, char.wardrobe.accessories].filter(Boolean).join(", ")}` : char.wardrobe ? `wearing: ${char.wardrobe}` : null,
       char.injuries?.length ? `injuries: ${char.injuries.join(", ")}` : null,
       char.inventory?.length ? `holding in hand: ${char.inventory.join(", ")}` : null,
       `POSE: ${char.pose}`,
@@ -1692,26 +1680,27 @@ export async function runFullMotionGraphicEngine({
   storyGuidelines = null,
   narrationSegments = null,
   characterReferences = [],    // [{ id, name, url }] from workflowService
+  preGeneratedBibles = null    // { PROJECT_SPEC, STORY_WORLD_MAP, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE }
 }) {
   logger.info(`[MGE v7] ═══ Deterministic Cinematic Runtime — ${imageCount} frames @ ${aspectRatio} ═══`);
 
   // ── Modules 1–5 (unchanged: produce bibles) ──────────────────────────────
-  const PROJECT_SPEC = await runModule1_InputNormalization({
+  const PROJECT_SPEC = preGeneratedBibles?.PROJECT_SPEC || await runModule1_InputNormalization({
     title, sourceType: storyType || "script", storyScript, imageCount,
     aspectRatio, visualSuggestions, storyGuidelines,
   });
 
-  const STORY_WORLD_MAP = await runModule2_StoryWorldAnalysis(storyScript, PROJECT_SPEC);
+  const STORY_WORLD_MAP = preGeneratedBibles?.STORY_WORLD_MAP || await runModule2_StoryWorldAnalysis(storyScript, PROJECT_SPEC);
 
   const castContextHint = storyBible?.characters?.length
     ? `\n\nPREVIOUSLY EXTRACTED CHARACTER LIST:\n${JSON.stringify(storyBible.characters.map(c => ({ name: c.name, appearance: c.appearance })), null, 2)}`
     : "";
 
-  const MATERIALIZED_CAST_BIBLE = await runModule3_MaterializedCastBible(
+  const MATERIALIZED_CAST_BIBLE = preGeneratedBibles?.MATERIALIZED_CAST_BIBLE || await runModule3_MaterializedCastBible(
     { ...STORY_WORLD_MAP, _cast_hint: castContextHint }, referenceTraits
   );
 
-  const MATERIALIZED_VISUAL_WORLD_BIBLE = await runModule4_VisualWorldBible(STORY_WORLD_MAP, PROJECT_SPEC);
+  const MATERIALIZED_VISUAL_WORLD_BIBLE = preGeneratedBibles?.MATERIALIZED_VISUAL_WORLD_BIBLE || await runModule4_VisualWorldBible(STORY_WORLD_MAP, PROJECT_SPEC);
 
   const GLOBAL_NEGATIVE_PROMPT = buildGlobalNegativePrompt(STORY_WORLD_MAP, MATERIALIZED_CAST_BIBLE);
 
@@ -1741,13 +1730,12 @@ export async function runFullMotionGraphicEngine({
     sceneIndex: i, text: `Segment ${i + 1}`, startSec: i * 5, endSec: (i + 1) * 5
   }));
 
-  // Proportional mapping: narration segment → nearest graph beat
-  const mappedSegments = segments.map((seg, i) => {
-    const beatIdx = SCENE_GRAPH.length > 0
-      ? Math.min(Math.floor((i / segments.length) * SCENE_GRAPH.length), SCENE_GRAPH.length - 1)
-      : 0;
-    return { ...seg, graphBeat: SCENE_GRAPH[beatIdx] || null };
-  });
+  // A.9: Use sliding window Beat-to-Frame mapping
+  const mappedSegments = mapSegmentsToBeats(segments, SCENE_GRAPH);
+
+  // A.7: Generate Shot Plan for the sequence
+  const shotPlan = await generateShotPlan(mappedSegments);
+
 
   // ── Phase 3 Loop: Compile → Direct → Check → Validate → Select → Compose ──
   logger.info(`[MGE v7] Starting frame loop: ${mappedSegments.length} frames...`);
@@ -1785,7 +1773,8 @@ export async function runFullMotionGraphicEngine({
     }
 
     // ── Step C: Film Director AI (camera only)
-    let directorDecision = await runFilmDirectorAI(compiledState, MATERIALIZED_CAST_BIBLE, i, mappedSegments.length, prevCameraDecision);
+    const plannedShot = shotPlan[i] || null;
+    let directorDecision = await runFilmDirectorAI(compiledState, MATERIALIZED_CAST_BIBLE, i, mappedSegments.length, prevCameraDecision, plannedShot);
 
     // ── Step D: Validate SceneState + Director
     let validation = validateSceneState(compiledState, directorDecision, charManager, worldManager);
@@ -1875,160 +1864,4 @@ export async function runFullMotionGraphicEngine({
 }
 
 
-async function runMovieGuideGeneration(storyScript, castBible, worldBible, referenceTraits = null) {
-  logger.info("[MGE] Generating Sequential Visual Movie Guide (Production Bible level)...");
-
-  // Build reference image lock section if we have analyzed reference traits
-  let refLockSection = "";
-  if (Array.isArray(referenceTraits) && referenceTraits.length > 0) {
-    const locks = referenceTraits.map(r =>
-      `- ${r.characterName}: face=${r.face}, hair=${r.hair}, skin=${r.skin}, ethnicity=${r.ethnicity || "N/A"}, age=${r.age}, build=${r.build}, clothing=${r.clothing || "N/A"}`
-    ).join("\n");
-    refLockSection = `
-REFERENCE IMAGE LOCKS (HARD CANONICAL APPEARANCE — MUST BE REPRODUCED EXACTLY IN EVERY FRAME):
-${locks}
-IMPORTANT: These character appearances are LOCKED. The guide and every frame must reflect exactly these physical traits. Do not deviate.
-`;
-  }
-
-  const prompt = `You are the Chief Director of Photography creating a complete PRODUCTION BIBLE + Shot-by-Shot Sequential Visual Movie Guide.
-
-This guide will be the single source of truth for every image generated. Think of it as a Director of Photography describing the exact contents of every single shot in the film — as specific as a storyboard.
-
-FULL STORY SCRIPT:
-${storyScript}
-
-CANONICAL CAST BIBLE (use these LOCKED visual identities — do not invent):
-${JSON.stringify(castBible.characters.map(c => ({
-  name: c.name,
-  race: c.identity_culture?.race,
-  ethnicity: c.identity_culture?.ethnicity_cultural_identity,
-  age: c.sketch_artist_appearance?.age_range,
-  face: c.sketch_artist_appearance?.face_structure,
-  hair: c.sketch_artist_appearance?.hair,
-  skin: c.sketch_artist_appearance?.canonical_skin_tone,
-  base_wardrobe: c.wardrobe
-})), null, 2)}
-
-CANONICAL WORLD BIBLE (use these LOCKED locations — do not invent new ones):
-${JSON.stringify(worldBible.locations.map(l => ({
-  name: l.name,
-  country: l.geographic_cultural_id?.country,
-  materials: l.construction?.wall_roof_floor_ceiling_material,
-  fixed_elements: l.fixed_elements
-})), null, 2)}
-${refLockSection}
-TASK:
-Write a complete sequential movie guide covering the story from start to finish with no gaps, jumps, or breaks.
-Each entry is ONE visual beat: a distinct moment the camera captures.
-
-For EACH beat you MUST specify:
-1. Characters visible BY NAME (never pronouns). Include their exact appearance per the Cast Bible for each beat they appear.
-2. Location name (from World Bible). Must not be invented.
-3. Time of day (morning / afternoon / evening / night / same as previous).
-4. Lighting (natural daylight / golden hour / fluorescent office / dim candlelight etc.).
-5. Weather/atmosphere if exterior.
-6. Exact character positions (e.g., "Marcus stands to the left of the desk, Detective Chen sits facing him").
-7. Props and objects visible and their positions (e.g., "A manila folder sits open on the desk. A coffee cup is in Marcus's right hand").
-8. The specific action happening (what the camera sees, present tense).
-9. Camera suggestion (e.g., "close-up on Marcus's face", "establishing wide shot of courtroom").
-10. Wardrobe for each visible character in this beat.
-
-RULES:
-- Use explicit character names ALWAYS.
-- Describe ONLY what is visually on screen. No dialogue. No internal thoughts.
-- Be extremely precise about positions, props, and wardrobe.
-- EVERY SINGLE OBJECT mentioned in the story (e.g., rooms, home, corridor, car, clock, weapons, tech) MUST be explicitly listed in the 'props_and_objects' field for the beat it appears in.
-- Never skip a moment; the next beat must flow logically from the previous one.
-
-Return STRICT valid JSON:
-{
-  "movie_guide": [
-    {
-      "beat_number": 1,
-      "characters_visible": [
-        {
-          "name": "Character Name",
-          "locked_appearance": "Brief summary of locked facial/skin/hair attributes from Cast Bible",
-          "current_wardrobe": "Exact wardrobe for this beat",
-          "position": "Where they are in the frame (left, right, foreground, seated at desk, etc.)",
-          "action": "What they are doing",
-          "emotion": "Their visible emotional state"
-        }
-      ],
-      "location": "Exact location name from World Bible",
-      "time_of_day": "morning | afternoon | evening | night | same as previous",
-      "lighting": "Specific lighting description",
-      "weather_atmosphere": "Only for exteriors, or 'N/A'",
-      "props_and_objects": "Precise list of all visible props and their positions",
-      "action_description": "Present tense. What is the camera seeing? What is happening?",
-      "camera_suggestion": "Shot type and framing (e.g., medium close-up on Character X from the left)"
-    }
-  ]
-}`;
-  const result = await callGeminiJSON(prompt, "Sequential Visual Movie Guide");
-  logger.info(`[MGE] Movie Guide generated — ${result?.movie_guide?.length || 0} beats`);
-  return result?.movie_guide || [];
-}
-
-function mergeNarrationWithGuide(narrationSegments, movieGuide) {
-  if (!narrationSegments || narrationSegments.length === 0) return [];
-  if (!movieGuide || movieGuide.length === 0) return narrationSegments.map(seg => ({ ...seg, director_beat: null }));
-
-  return narrationSegments.map((seg, index) => {
-    // Proportional mapping: map each narration segment to a guide beat
-    const beatIndex = Math.min(Math.floor((index / narrationSegments.length) * movieGuide.length), movieGuide.length - 1);
-    return {
-      ...seg,
-      director_beat: movieGuide[beatIndex] || null
-    };
-  });
-}
-
-async function runPromptAudit(scenePrompts, movieGuide, castBible) {
-  logger.info("[MGE] Running Exhaustive Sequential Prompt Audit...");
-  const prompt = `You are a Continuity Supervisor for a cinematic image sequence. Your job is to compare each generated image prompt to the Director's Movie Guide beat-by-beat and flag any deviation.
-
-DIRECTOR'S MOVIE GUIDE (The Production Truth):
-${JSON.stringify(movieGuide, null, 2)}
-
-GENERATED PROMPTS (Sequential):
-${JSON.stringify(scenePrompts.map((p, i) => ({frame: i + 1, prompt: p.prompt, narration: p.narration})), null, 2)}
-
-CAST BIBLE (Reference for locked character appearance):
-${JSON.stringify(castBible?.characters?.map(c => ({name: c.name, skin: c.sketch_artist_appearance?.canonical_skin_tone, hair: c.sketch_artist_appearance?.hair, face: c.sketch_artist_appearance?.face_structure})) || [], null, 2)}
-
-For EACH frame, check ALL of the following:
-1. CHARACTER: Are the correct characters present? Are their locked appearances (skin, hair, face, race) correctly described?
-2. LOCATION: Does the prompt reflect the correct location from the guide?
-3. ACTION: Does the prompt capture the correct action for this beat?
-4. TIME_OF_DAY: Does the prompt reflect the correct time of day?
-5. PROPS: Are key props and objects from the guide present in the prompt?
-6. WARDROBE: Is the character wardrobe correct per the guide beat?
-7. LEAKAGE: Does the prompt contain elements that haven't happened yet in the story?
-
-Severity guide:
-- "high": Wrong character identity (race/gender/hair), wrong location, future leakage.
-- "medium": Missing key prop, wrong time of day, wrong wardrobe.
-- "low": Minor camera description mismatch, minor positioning inaccuracy.
-
-Return STRICT valid JSON:
-{
-  "audit_results": [
-    {
-      "frame": 1,
-      "passed": true,
-      "issue_type": "None | Character | Location | Action | TimeOfDay | Props | Wardrobe | Leakage",
-      "expected": "What the guide said",
-      "got": "What the prompt actually generated",
-      "severity": "low | medium | high"
-    }
-  ]
-}`;
-  const result = await callGeminiJSON(prompt, "Exhaustive Prompt Audit");
-  const results = result?.audit_results || [];
-  const failed = results.filter(r => !r.passed);
-  logger.info(`[MGE] Prompt Audit complete: ${results.length - failed.length}/${results.length} passed, ${failed.length} flagged`);
-  return results;
-}
 

@@ -7,6 +7,7 @@ import { createLogger } from "../utils/logger.js";
 import { config } from "../config/workflow.config.js";
 import { enqueueRender, enqueueSegmentRender } from "../utils/renderQueue.js";
 import { getPerfSession } from "../utils/perfLogger.js";
+import { buildSubtitleGroups } from "./timelineService.js";
 
 const logger = createLogger("VideoService");
 
@@ -33,7 +34,7 @@ export async function createVideoWithTimeline(imageUrl, audioPath, outputPath, m
   // Pass timeline object and null for sceneIndex (use all subtitles)
   convertTranscriptToAss(masterTimeline, assPath, aspectRatio, null);
 
-  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\\\:");
   const audioDuration = audioDurationParam || await getAudioDuration(audioPath);
 
   if (!audioDuration || isNaN(audioDuration)) {
@@ -138,7 +139,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, transcriptPat
   const assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
   convertTranscriptToAss(transcriptPath, assPath, aspectRatio);
 
-  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\\\:");
   const audioDuration = await getAudioDuration(audioPath);
 
   if (!audioDuration || isNaN(audioDuration)) {
@@ -295,86 +296,9 @@ export function convertTranscriptToAss(transcriptSourceOrPath, assPath, aspectRa
 }
 
 function parseJsonToAss(words, posX, posY, startTime, duration) {
-  let dialogueLines = "";
-  let chunks = [];
-  let currentChunk = [];
-  
-  const maxWordsPerChunk = 3;
-  const maxPauseGap = 0.35; // seconds
-  const minDuration = 0.15; // 150ms
-  const maxDuration = 2.5; // seconds
-
-  const conjunctions = new Set(['and', 'but', 'or']);
-  const prepositions = new Set(['to', 'of', 'in', 'at', 'for', 'with', 'into', 'onto', 'from']);
-  const articles = new Set(['the', 'a', 'an']);
-
-  for (let i = 0; i < words.length; i++) {
-    const wordObj = words[i];
-    const text = wordObj.word.trim();
-    const cleanText = text.replace(/[.,!?;:]/g, '').toLowerCase();
-    
-    currentChunk.push(wordObj);
-    
-    const nextWordObj = (i + 1 < words.length) ? words[i + 1] : null;
-    const nextCleanText = nextWordObj ? nextWordObj.word.trim().replace(/[.,!?;:]/g, '').toLowerCase() : "";
-    
-    let shouldBreak = false;
-    
-    if (currentChunk.length >= maxWordsPerChunk) {
-      shouldBreak = true;
-    } else if (nextWordObj) {
-      // 1. Timing-gap awareness
-      if (nextWordObj.start - wordObj.end > maxPauseGap) {
-        shouldBreak = true;
-      }
-      // 2. Phrase boundaries (break before the next word if it starts a new phrase)
-      else if (/[.?!]$/.test(text)) {
-        shouldBreak = true; // Break on sentence ends
-      } else if (/[,;:]$/.test(text)) {
-        shouldBreak = true; // Break on commas/pauses
-      } else if (currentChunk.length >= 2) {
-        if (conjunctions.has(nextCleanText) || prepositions.has(nextCleanText) || articles.has(nextCleanText)) {
-          shouldBreak = true;
-        }
-      }
-    } else {
-      shouldBreak = true; // Last word
-    }
-    
-    if (shouldBreak) {
-      chunks.push([...currentChunk]);
-      currentChunk = [];
-    }
-  }
-
-  for (const chunk of chunks) {
-    if (chunk.length === 0) continue;
-    let s = chunk[0].start;
-    let e = chunk[chunk.length - 1].end;
-    
-    // Duration clamping
-    let chunkDuration = e - s;
-    if (chunkDuration < minDuration) {
-      e = s + minDuration;
-      chunkDuration = minDuration;
-    }
-    if (chunkDuration > maxDuration) {
-      e = s + maxDuration;
-      chunkDuration = maxDuration;
-    }
-
-    if (duration !== null) {
-      const endTime = startTime + duration;
-      if (e <= startTime || s >= endTime) continue;
-      s = Math.max(0, s - startTime);
-      e = Math.min(duration, e - startTime);
-    }
-
-    const chunkText = chunk.map(w => w.word.trim()).join(" ");
-    dialogueLines += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${chunkText}\n`;
-  }
-  
-  return dialogueLines;
+  const groups = buildSubtitleGroups(words);
+  const durationSec = duration !== null ? duration : Infinity;
+  return _assDialoguesFromTimeline(groups, { startSec: startTime, endSec: startTime + durationSec }, posX, posY);
 }
 /**
  * Build ASS dialogue lines from pre-computed timeline subtitle groups.

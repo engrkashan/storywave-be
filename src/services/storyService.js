@@ -588,6 +588,7 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
       storyGuidelines: storyBible?.storyGuidelines || null,
       narrationSegments,
       characterReferences,   // ← [{ id, name, url }] for per-frame Reference Selector
+      preGeneratedBibles: storyBible?._preGeneratedBibles || null, // pass cached bibles from step 2.1
     });
 
     const { scenePrompts, finalAudit, castBible } = result;

@@ -800,9 +800,12 @@ export async function generateMultiImages(
     const globalNeg = promptObj._globalNegativePrompt || null;
     // v7 MGE: use per-frame Reference Selector output when available.
     // Falls back to global characterReferences for backward compatibility.
-    const perFrameRefs = promptObj.selectedRefs && promptObj.selectedRefs.length > 0
-      ? promptObj.selectedRefs
-      : characterReferences;
+    // D.1: Validate selectedRefs — must be a non-empty array of objects with a url field.
+    const rawSelectedRefs = Array.isArray(promptObj.selectedRefs) ? promptObj.selectedRefs : [];
+    const validSelectedRefs = rawSelectedRefs.filter(
+      (r) => r && typeof r === "object" && typeof r.url === "string" && r.url.length > 0
+    );
+    const perFrameRefs = validSelectedRefs.length > 0 ? validSelectedRefs : characterReferences;
 
     // ── Extract Visual State from frame package (MGE provides full location data) ─
     let sceneVisualState = { ...activeVisualState };

@@ -33,6 +33,13 @@ import {
   generateCommonVisualPrompt,
   analyzeReferenceImage,
 } from "./promptService.js";
+import {
+  runModule1_InputNormalization,
+  runModule2_StoryWorldAnalysis,
+  runModule3_MaterializedCastBible,
+  runModule4_VisualWorldBible,
+  generateSceneGraph
+} from "./motionGraphicEngine.js";
 import { createLogger, loggingStorage } from "../utils/logger.js";
 
 const logger = createLogger("WorkflowService");
@@ -481,7 +488,26 @@ async function _runWorkflow({
       
       referenceTraits = localRefTraits.length > 0 ? localRefTraits : null;
 
-      storyMetadata = await extractStoryMetadata(script, referenceTraits);
+      const PROJECT_SPEC = await runModule1_InputNormalization({
+        title, sourceType: storyType || "script", storyScript: script, imageCount,
+        aspectRatio, visualSuggestions
+      });
+      const STORY_WORLD_MAP = await runModule2_StoryWorldAnalysis(script, PROJECT_SPEC);
+      const MATERIALIZED_CAST_BIBLE = await runModule3_MaterializedCastBible(STORY_WORLD_MAP, referenceTraits);
+      const MATERIALIZED_VISUAL_WORLD_BIBLE = await runModule4_VisualWorldBible(STORY_WORLD_MAP, PROJECT_SPEC);
+
+      const { graph: SCENE_GRAPH } = await generateSceneGraph(script, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE, referenceTraits);
+      
+      storyMetadata = {
+        characters: MATERIALIZED_CAST_BIBLE.characters || [],
+        locations: MATERIALIZED_VISUAL_WORLD_BIBLE.locations || [],
+        synopsis: STORY_WORLD_MAP.core_synopsis || "",
+        artStyle: STORY_WORLD_MAP.visual_style_record?.art_style || "",
+        colorPalette: STORY_WORLD_MAP.visual_style_record?.color_palette || [],
+        cinematicSpecs: STORY_WORLD_MAP.visual_style_record?.cinematic_treatment || "",
+        _preGeneratedBibles: { PROJECT_SPEC, STORY_WORLD_MAP, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE },
+        targetSceneCount: SCENE_GRAPH.length
+      };
       masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
       commonPrompt = generateCommonVisualPrompt(storyMetadata);
 
@@ -539,43 +565,6 @@ async function _runWorkflow({
         logger.info(
           "Skipping Style Reference generation since character reference is provided.",
         );
-      } else {
-        // 2.2 Generate Style Reference Image (MANDATORY for consistency if no character provided)
-        logger.info(
-          "Step 2.1.5: Generating Style Reference Image (Visual Baseline)...",
-        );
-        try {
-          const styleRefDir = path.join(workflowTempDir, "style_ref");
-          fs.mkdirSync(styleRefDir, { recursive: true });
-          // Generate a master cinematic shot to serve as style reference
-          const stopStyleRefTimer = perf?.start("image", "Generate Style Reference Image");
-          const styleRefResult = await generateImage(
-            masterPrompts.cinematic,
-            0,
-            styleRefDir,
-            aspectRatio,
-            commonPrompt,
-          );
-          stopStyleRefTimer?.();
-          if (styleRefResult.imageUrl) {
-            // Upload to Cloudinary to get a permanent URL for Midjourney
-            const stopStyleUploadTimer = perf?.start("upload", "Upload Style Ref Image to Cloudinary");
-            const upload = await cloudinary.uploader.upload(
-              styleRefResult.imageUrl,
-              {
-                folder: "style-references",
-                resource_type: "image",
-                public_id: `style-ref-${workflow.id}-${Date.now()}`,
-                overwrite: true,
-              },
-            );
-            stopStyleUploadTimer?.();
-            styleReferenceUrl = upload.secure_url;
-            logger.info(`✅ Style Reference URL: ${styleReferenceUrl}`);
-          }
-        } catch (err) {
-          logger.error(`⚠️ Style reference generation failed: ${err.message}`);
-        }
       }
 
       // 2.2 Generate Cover Art if coverArtPrompt is provided
@@ -900,7 +889,7 @@ async function _runWorkflow({
       // Use imageCount (or dynamic count from audio duration) as the target scene count.
       const narrationDuration = await getAudioDuration(narrationWavPath);
       const { words: timelineWords } = JSON.parse(transcriptContent);
-      const targetSceneCount = imageCount || Math.max(5, Math.ceil(narrationDuration / 5));
+      const targetSceneCount = storyMetadata?.targetSceneCount || imageCount || Math.max(5, Math.ceil(narrationDuration / 5));
       // script variable holds the original text at this point. 
       const masterTimeline = buildMasterTimeline(timelineWords, narrationDuration, targetSceneCount, script);
       const timelinePath = path.join(workflowTempDir, "timeline.json");
@@ -919,7 +908,7 @@ async function _runWorkflow({
 
       if (mediaType === "multi_image" && !uploadedMediaUrl) {
         const dynamicCount = Math.max(5, Math.ceil(narrationDuration / 5));
-        const count = imageCount || dynamicCount;
+        const count = storyMetadata?.targetSceneCount || imageCount || dynamicCount;
 
         // Build narration segments aligned to Master Timeline audio boundaries
         const narrationSegments = buildNarrationSegments(timelineWords, masterTimeline.scenes);
@@ -1110,7 +1099,7 @@ async function _runWorkflow({
                 // Pass masterTimeline + sceneIndex → zero-drift subtitle generation
                 const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
                 convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, i);
-                const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+                const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\\\:");
 
                 checkpointManager.markRenderRunning(sceneId);
                 try {
@@ -1172,7 +1161,7 @@ async function _runWorkflow({
                       const { startTime, duration } = getSegmentRange(i);
                       const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
                       convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, i);
-                      const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+                      const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\\\:");
 
                       try {
                         await renderMediaSegment(imageResult.imageUrl, segmentPath, duration, width, height, escapedSegmentAssPath);
