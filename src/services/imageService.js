@@ -798,6 +798,11 @@ export async function generateMultiImages(
     const framePackage = promptObj._framePackage || null;
     const frameNeg = promptObj._negativePrompt || null;
     const globalNeg = promptObj._globalNegativePrompt || null;
+    // v7 MGE: use per-frame Reference Selector output when available.
+    // Falls back to global characterReferences for backward compatibility.
+    const perFrameRefs = promptObj.selectedRefs && promptObj.selectedRefs.length > 0
+      ? promptObj.selectedRefs
+      : characterReferences;
 
     // ── Extract Visual State from frame package (MGE provides full location data) ─
     let sceneVisualState = { ...activeVisualState };
@@ -855,7 +860,7 @@ export async function generateMultiImages(
           index: index + 1,
           tempDir,
           aspectRatio,
-          characterReferences,
+          characterReferences: perFrameRefs,  // v7: per-frame selected refs only
           sceneCharacters,
           styleUrl,
           visualState: sceneVisualState,

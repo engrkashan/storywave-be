@@ -570,7 +570,7 @@ export async function generateStory({
  * @param {string|null} visualSuggestions — user visual style note
  * @returns {Promise<Array<{ prompt: string, charactersInScene: string[], narration: string, _framePackage: object, _negativePrompt: string, _globalNegativePrompt: string, _motionMovement: object }>>}
  */
-export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null, referenceTraits = null) {
+export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null, referenceTraits = null, characterReferences = []) {
   logger.info(`🎬 [v6.3 Engine] generateScenePrompts — ${count} frames requested`);
 
   try {
@@ -587,6 +587,7 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
       visualSuggestions,
       storyGuidelines: storyBible?.storyGuidelines || null,
       narrationSegments,
+      characterReferences,   // ← [{ id, name, url }] for per-frame Reference Selector
     });
 
     const { scenePrompts, finalAudit, castBible } = result;
