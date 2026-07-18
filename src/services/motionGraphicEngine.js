@@ -1236,43 +1236,39 @@ function mapSegmentsToBeats(segments, sceneGraph) {
     });
   }
 
-  // ── Derive normalised time windows for each beat ──────────────────────────
-  // The scene graph has no embedded timestamps, but its beats are ordered in
-  // story sequence. We partition the full audio duration evenly across beats
-  // to obtain a [beat_start, beat_end) window for each beat.
-  const totalDuration =
-    Math.max(...segments.map((s) => (typeof s.endSec === "number" ? s.endSec : 0)), 1);
-
-  const beatWindowSize = totalDuration / sceneGraph.length;
-  const beatWindows = sceneGraph.map((_, bi) => ({
-    start: bi * beatWindowSize,
-    end: (bi + 1) * beatWindowSize,
-  }));
+  // ── Map each segment to a beat by STORY-SEQUENCE ORDINAL, not synthetic time.
+  //
+  // Root cause of SYMPTOM A: the old code derived a fake [beat_start, beat_end)
+  // window by evenly partitioning the audio duration (totalDuration / sceneGraph.length)
+  // and assigned each segment the beat whose synthetic window overlapped most.
+  // Because scene-graph beats are STORY beats (not time-anchored) and the spoken
+  // narration does not advance beat-by-beat at a constant rate, that even partition
+  // routinely assigned a segment a beat describing a LATER story moment than the
+  // one its audio window is actually narrating — so the rendered image depicted
+  // content the voice reached seconds later.
+  //
+  // FIX: both `segments` and `sceneGraph` are already in the same story order.
+  // Map by ordinal position in that sequence. When the counts differ, distribute
+  // beats across segments proportionally by INDEX (not by synthetic timestamps),
+  // which keeps frame i anchored to the i-th story beat instead of to a guessed
+  // time slice. Segments already carry their real startSec/endSec from the Master
+  // Timeline and are placed at those times by the renderer — only the *content*
+  // beat needs to be the correct story beat.
 
   const mapped = segments.map((seg, i) => {
-    const segStart = typeof seg.startSec === "number" ? seg.startSec : (i / segments.length) * totalDuration;
-    const segEnd   = typeof seg.endSec   === "number" ? seg.endSec   : ((i + 1) / segments.length) * totalDuration;
-
-    // Find the beat with the largest overlap with this segment's audio window
-    let bestBeatIdx = 0;
-    let bestOverlap = -1;
-
-    for (let bi = 0; bi < beatWindows.length; bi++) {
-      const overlapStart = Math.max(segStart, beatWindows[bi].start);
-      const overlapEnd   = Math.min(segEnd,   beatWindows[bi].end);
-      const overlap      = Math.max(0, overlapEnd - overlapStart);
-      if (overlap > bestOverlap) {
-        bestOverlap = overlap;
-        bestBeatIdx = bi;
-      }
-    }
+    const beatIdx = sceneGraph.length === segments.length
+      ? i
+      : Math.min(
+          sceneGraph.length - 1,
+          Math.floor((i / Math.max(1, segments.length)) * sceneGraph.length)
+        );
 
     // Deep clone the beat so modifications don't leak between frames sharing the same beat
-    const beat = sceneGraph[bestBeatIdx]
-      ? JSON.parse(JSON.stringify(sceneGraph[bestBeatIdx]))
+    const beat = sceneGraph[beatIdx]
+      ? JSON.parse(JSON.stringify(sceneGraph[beatIdx]))
       : null;
 
-    return { ...seg, graphBeat: beat, beatIdx: bestBeatIdx };
+    return { ...seg, graphBeat: beat, beatIdx };
   });
 
   // Log the mapping for debuggability

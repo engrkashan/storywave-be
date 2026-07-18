@@ -565,13 +565,22 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
   // Subtitle filter — applied in the segment pass so the merge only needs copy
   const subFilter = escapedAssPath ? `,subtitles='${escapedAssPath}'` : "";
 
+  // SYNC FIX (A2): trim every segment to EXACTLY `duration` seconds so that the
+  // sum of rendered segment durations equals the audio duration with no
+  // accumulation of frame-rounding error. zoompan uses d=ceil(duration*FPS)
+  // which can emit one extra frame; the trim+setpts forces the output length to
+  // the requested duration so concatSegments (concat demuxer) lands precisely on
+  // the audio timeline instead of drifting toward the tail of the video.
+  const exactDuration = Number(duration).toFixed(3);
+  const trimFilter = `,trim=duration=${exactDuration},setpts=PTS-STARTPTS`;
+
   let args;
   if (isVideo) {
     args = [
       "-y", "-loglevel", "error",
       "-threads", String(config.workflow.ffmpegThreads),
       "-i", itemPath,
-      "-vf", `${commonScale},fps=30${subFilter}`,
+      "-vf", `${commonScale},fps=30${trimFilter}${subFilter}`,
       "-t", String(duration),
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
       outputPath
@@ -591,13 +600,14 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
 
     // zoompan receives the upscaled image, animates it, and outputs back at 1080p (s=widthxheight)
     const zoomFilter = `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}`;
-    const filter = `${upScaleFilter},${zoomFilter},fps=30${subFilter}`;
+    const filter = `${upScaleFilter},${zoomFilter},fps=30${trimFilter}${subFilter}`;
 
     args = [
       "-y", "-loglevel", "error",
       "-threads", String(config.workflow.ffmpegThreads),
       "-i", itemPath,
       "-vf", filter,
+      "-t", String(duration),
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
       outputPath
     ];
@@ -691,6 +701,22 @@ export async function concatSegments(segmentFiles, audioPath, outputPath, audioD
       });
     });
     logger.info(`✅ Final video assembled: ${outputPath}`);
+
+    // SYNC VERIFY (A2): confirm the stitched video duration matches the audio
+    // timeline. With exact-duration segment trimming in renderMediaSegment, the
+    // concat of all segments should land on audioDuration. A mismatch here means
+    // residual frame-rounding drift was NOT fully eliminated.
+    try {
+      const finalDur = await getAudioDuration(outputPath);
+      const delta = Math.abs((finalDur || 0) - (audioDuration || 0));
+      if (delta > 0.1) {
+        logger.warn(`⚠️ [SyncVerify] Final video duration ${finalDur?.toFixed(3)}s vs audio ${audioDuration?.toFixed(3)}s (Δ=${delta.toFixed(3)}s) over ${segmentFiles.length} segments.`);
+      } else {
+        logger.info(`✅ [SyncVerify] Final video duration ${finalDur?.toFixed(3)}s matches audio ${audioDuration?.toFixed(3)}s across ${segmentFiles.length} segments.`);
+      }
+    } catch (probeErr) {
+      logger.warn(`⚠️ [SyncVerify] Could not probe final duration: ${probeErr.message}`);
+    }
   } catch (err) {
     logger.error("FFmpeg Merge Error:", err.message);
     throw new Error("🎥 Multi-media video creation failed (merge pass).");

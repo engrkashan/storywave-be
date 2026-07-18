@@ -443,6 +443,7 @@ async function generateWithGemini({
   nextScenePrompt = null,
   prevFrameImagePath = null,      // FIX 3: absolute path to the previous frame's generated PNG
   onCheckCancelled = null,
+  stickyTierRef = null,           // B5: optional { tier: "PRO"|"FLASH" } shared across a batch
 }) {
   await ensureDir(tempDir);
 
@@ -513,15 +514,25 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
   try {
     if (sceneCharacters && sceneCharacters.length > 0) {
       // Tier 1: attempt exact ID match for each character in scene
-      const matchedRefs = sceneCharacters
+      let matchedRefs = sceneCharacters
         .map((charId) => characterReferences.find((c) => c.id === charId))
         .filter(Boolean);
 
-      // Tier 2: if no ID matched (MGE ID vs storyMetadata ID drift), inject ALL refs
-      const refsToUse = matchedRefs.length > 0 ? matchedRefs : characterReferences;
+      // Tier 1b: if exact-id failed, also try exact name match (guards against
+      // MGE char_N vs storyMetadata id drift without escalating to inject-all).
+      if (matchedRefs.length === 0) {
+        matchedRefs = sceneCharacters
+          .map((charId) => characterReferences.find((c) => c.name === charId))
+          .filter(Boolean);
+      }
+
+      // IDENTITY FIX (B1/B2): only inject the refs that actually belong to this
+      // scene's characters. If none matched, generate WITHOUT references (text-only)
+      // rather than dumping every character portrait in (which blends identities).
+      const refsToUse = matchedRefs;
 
       if (matchedRefs.length === 0 && characterReferences.length > 0) {
-        logger.warn(`⚠️ [GenWithGemini] ${sceneId} — No characterReferences matched scene IDs [${sceneCharacters.join(", ")}]. Injecting all ${characterReferences.length} ref(s) as fallback.`);
+        logger.warn(`⚠️ [GenWithGemini] ${sceneId} — No characterReferences matched scene IDs [${sceneCharacters.join(", ")}]. Generating WITHOUT reference images (text-only) to avoid identity blending.`);
       }
 
       for (const ref of refsToUse) {
@@ -579,10 +590,16 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
   let lastError = null;
 
   // ── Two-tier provider loop: PRO → FLASH ──────────────────────────────────
-  const tierChain = [
+  // B5: if a stickyTierRef was already downgraded to FLASH for this batch, start
+  // directly at FLASH so the whole batch is rendered by one consistent model.
+  let tierChain = [
     { name: "PRO",   modelId: MODELS.PRO },
     { name: "FLASH", modelId: MODELS.FLASH },
   ];
+  if (stickyTierRef && stickyTierRef.tier === "FLASH") {
+    tierChain = [{ name: "FLASH", modelId: MODELS.FLASH }];
+    logger.info(`🔷 [GenWithGemini] ${sceneId} — Batch already on FLASH tier (sticky). Skipping PRO.`);
+  }
 
   for (const tier of tierChain) {
     logger.info(`🔷 [GenWithGemini] ${sceneId} — Trying Tier: ${tier.name} (${tier.modelId})`);
@@ -689,7 +706,26 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
               attemptNumber: safetyRepairCount + 1,
             });
 
-            currentPrompt = repairedPrompt;  // Only production_prompt is changed
+            // IDENTITY FIX (B3): the repair LLM rewrites the production prompt freely and
+            // may drop the inline Level-1 identity detail (face/hair/skin) that composePrompt
+            // embedded. If the repaired text no longer names this scene's characters, re-append
+            // the immutable character-likeness block so the regenerated face/wardrobe can't drift.
+            let repairedPromptFinal = repairedPrompt;
+            const sceneCharNames = (sceneCharacters || [])
+              .map((id) => {
+                const ref = characterReferences.find((c) => c.id === id || c.name === id);
+                return ref?.name || (typeof id === "string" ? id : null);
+              })
+              .filter(Boolean);
+            const missingNames = sceneCharNames.filter(
+              (nm) => !repairedPrompt.toLowerCase().includes(nm.trim().toLowerCase())
+            );
+            if (missingNames.length > 0 && characterTextSection) {
+              repairedPromptFinal = `${repairedPrompt}\n\n${characterTextSection}`;
+              logger.warn(`🔧 [PromptRepair] ${sceneId} — Re-appending identity block (missing: ${missingNames.join(", ")}).`);
+            }
+
+            currentPrompt = repairedPromptFinal;  // Only production_prompt is changed
             promptVersion++;
             safetyRepairCount++;
             attemptLog.outcome = "safety_repair_applied";
@@ -711,6 +747,12 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
           logger.warn(`⏭️ [GenWithGemini] ${sceneId} — ${errorType} on ${tier.name}. Switching provider tier.`);
           attemptLog.outcome = "tier_switch";
           debugReport.attempts.push(attemptLog);
+          // B5: downgrade the whole batch to FLASH so subsequent scenes stay consistent.
+          if (stickyTierRef) {
+            stickyTierRef.tier = "FLASH";
+            stickyTierRef.reason = `${errorType} on ${tier.name}`;
+            logger.warn(`🔷 [GenWithGemini] ${sceneId} — Batch downgraded to FLASH (sticky) due to ${errorType}. All remaining scenes will use FLASH.`);
+          }
           tierExhausted = true;
           break;
 
@@ -784,6 +826,13 @@ export async function generateMultiImages(
   const concurrencyLimit = config.workflow.imageConcurrency || 3;
   logger.info(`🚀 [MultiImages] Starting bounded parallel generation — Total: ${prompts.length}, Concurrency: ${concurrencyLimit}, PrimaryModel: ${MODELS.PRO}, FallbackModel: ${MODELS.FLASH}`);
 
+  // IDENTITY FIX (B5): keep the image model CONSISTENT across the whole batch.
+  // If a quota/rate-limit forces a fallback to FLASH for one scene, every subsequent
+  // scene in this workflow must use FLASH too — mixing PRO and FLASH mid-batch causes
+  // visible identity/style drift between scenes. This mutable ref is shared by all
+  // scenes in this generateMultiImages call; once set to "FLASH" it stays.
+  const stickyTierRef = { tier: "PRO", reason: null };
+
   const results = new Array(prompts.length).fill(null);
 
   // ── Visual State tracker — updated per scene to maintain environment persistence ──
@@ -829,13 +878,34 @@ export async function generateMultiImages(
     const frameNeg = promptObj._negativePrompt || null;
     const globalNeg = promptObj._globalNegativePrompt || null;
     // v7 MGE: use per-frame Reference Selector output when available.
-    // Falls back to global characterReferences for backward compatibility.
     // D.1: Validate selectedRefs — must be a non-empty array of objects with a url field.
     const rawSelectedRefs = Array.isArray(promptObj.selectedRefs) ? promptObj.selectedRefs : [];
     const validSelectedRefs = rawSelectedRefs.filter(
       (r) => r && typeof r === "object" && typeof r.url === "string" && r.url.length > 0
     );
-    const perFrameRefs = validSelectedRefs.length > 0 ? validSelectedRefs : characterReferences;
+
+    // SYNC/IDENTITY FIX (B1): NEVER fall back to the entire characterReferences array
+    // when a scene has an explicit character list. Injecting ALL character portraits for
+    // a single-character close-up causes Gemini to blend multiple identities (drift).
+    // Only inject-all when there is NO scene-character list at all (legacy/backward-compat).
+    let perFrameRefs;
+    if (validSelectedRefs.length > 0) {
+      perFrameRefs = validSelectedRefs;
+    } else if (sceneCharacters.length > 0 && characterReferences.length > 0) {
+      // Derive refs strictly from this scene's own character list (exact id/name match)
+      perFrameRefs = sceneCharacters
+        .map((charId) => characterReferences.find((c) => c.id === charId || c.name === charId))
+        .filter(Boolean);
+      if (perFrameRefs.length === 0) {
+        logger.warn(
+          `⚠️ [MultiImages] ${sceneId} — No per-frame refs and scene characters [${sceneCharacters.join(", ")}] ` +
+          `matched no characterReferences. Generating WITHOUT reference images (text-only) to avoid identity blending.`
+        );
+      }
+    } else {
+      // No scene character list at all — legacy/backward-compat: inject ALL refs.
+      perFrameRefs = characterReferences;
+    }
 
     // ── Extract Visual State from frame package (MGE provides full location data) ─
     let sceneVisualState = { ...activeVisualState };
@@ -880,32 +950,35 @@ export async function generateMultiImages(
       ? resolvedPrompts[index + 1].prompt
       : null;
 
-    // FIX 3: Resolve the previous frame's generated image path as a visual anchor.
+    // FIX 3 (B4 fix): Resolve the previous frame's generated image path as a visual anchor.
     //
     // Concurrency safety:
     //   generateMultiImages() uses a bounded worker pool (default concurrencyLimit = 3).
     //   At concurrency > 1, frame N+1 may start before frame N is complete, making
     //   results[index-1] still null at this point.
     //
-    //   Strategy: check results[index-1] synchronously RIGHT NOW.
-    //   - If it is already a string (path), the previous frame is done → inject it.
-    //   - If it is still null, the previous frame is still running in parallel → skip
-    //     the visual anchor for this scene and log a CONCURRENCY_SKIP warning.
+    //   Strategy (improved): prefer the in-memory result, but ALSO check the expected
+    //   on-disk filename (scene_NNN.png) that generateWithGemini writes on success. Because
+    //   image generation is serialized per index (processImage(i) awaits its own generation
+    //   before resolving), a prior frame's file frequently exists on disk even though the
+    //   in-memory results[] slot hasn't been published yet. This restores the visual anchor
+    //   under concurrency (no identity drift) WITHOUT forcing imageConcurrency=1.
     //
-    //   To get strict sequential visual anchoring on EVERY frame, set
-    //   STORYWAVE_IMAGE_CONCURRENCY=1 in your env (or workflow.config.js imageConcurrency).
+    //   Only skip the anchor if neither the in-memory result NOR the on-disk file exists.
     let prevFrameImagePath = null;
     if (index > 0) {
       const prevResult = results[index - 1];
+      const expectedPrevFile = path.join(tempDir, `scene_${String(index).padStart(3, "0")}.png`);
       if (typeof prevResult === "string" && prevResult.length > 0) {
         prevFrameImagePath = prevResult;
         logger.info(`🔗 [MultiImages] ${sceneId} — Previous frame confirmed complete → injecting as visual anchor: scene_${String(index).padStart(3, "0")}.png`);
+      } else if (fs.existsSync(expectedPrevFile)) {
+        prevFrameImagePath = expectedPrevFile;
+        logger.info(`🔗 [MultiImages] ${sceneId} — Previous frame found on disk (parallel) → injecting as visual anchor: scene_${String(index).padStart(3, "0")}.png`);
       } else {
-        // prevResult is null → still generating in parallel
         logger.warn(
-          `⚠️ [MultiImages] ${sceneId} — CONCURRENCY_SKIP: frame ${index} (scene_${String(index).padStart(3, "0")}.png) not yet complete ` +
-          `when frame ${index + 1} started. Visual anchor skipped for this scene. ` +
-          `Set imageConcurrency=1 in workflow.config.js for strict sequential visual anchoring.`
+          `⚠️ [MultiImages] ${sceneId} — CONCURRENCY_SKIP: frame ${index} (scene_${String(index).padStart(3, "0")}.png) not yet available ` +
+          `when frame ${index + 1} started. Visual anchor skipped for this scene.`
         );
       }
     }
@@ -934,6 +1007,7 @@ export async function generateMultiImages(
           nextScenePrompt,
           prevFrameImagePath,                 // FIX 3: visual anchor from previous frame
           onCheckCancelled,
+          stickyTierRef,                      // B5: keep model consistent across the batch
         });
       }, `Image ${sceneId}`, 6, 8000);
 

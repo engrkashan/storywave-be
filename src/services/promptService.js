@@ -19,9 +19,13 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 export async function analyzeReferenceImage(imageUrl) {
   try {
     logger.info(`Analyzing reference image: ${imageUrl}`);
+
+    // 1. Fetch the image and convert to Base64 safely
     const res = await fetch(imageUrl);
-    const buffer = await res.arrayBuffer();
-    const base64 = Buffer.from(buffer).toString("base64");
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+
+    const arrayBuffer = await res.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
     const mimeType = res.headers.get("content-type") || "image/jpeg";
 
     const prompt = `Analyze this character reference image. Extract canonical physical traits to be used in a Story Bible.
@@ -37,14 +41,20 @@ Return STRICT valid JSON:
   "clothing": "current clothing (if clearly visible and relevant)"
 }`;
 
+    // 2. Call the Gemini SDK with structured parts
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3-flash-preview", // Note: fallback to 'gemini-2.5-flash' if preview isn't live in your project
       contents: [
         {
           role: "user",
           parts: [
             { text: prompt },
-            { inlineData: { data: base64, mimeType } }
+            {
+              inlineData: {
+                data: base64,
+                mimeType: mimeType.split(";")[0] // Strip charsets or extras if present
+              }
+            }
           ]
         }
       ],
@@ -53,9 +63,13 @@ Return STRICT valid JSON:
       }
     });
 
-    const raw = response.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    const text = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    return JSON.parse(text);
+    // 3. Extract text smoothly using response helper if available, or fall back safely
+    const text = response.text ? response.text() : (response.candidates?.[0]?.content?.parts?.[0]?.text || "{}");
+
+    // Clean potential markdown wrappers just in case
+    const cleanedJson = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+
+    return JSON.parse(cleanedJson);
   } catch (err) {
     logger.error("❌ Failed to analyze reference image:", err);
     return null;

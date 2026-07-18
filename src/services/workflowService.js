@@ -958,14 +958,26 @@ async function _runWorkflow({
               mgeToStoryIdMap[mgeChar.id] = matched.id;
               logger.info(`🔗 ID bridge: MGE "${mgeChar.id}" (${mgeChar.name}) → storyRef "${matched.id}"`);
             } else {
-              logger.warn(`⚠️ ID bridge: No characterReference matched MGE character "${mgeChar.name}" (${mgeChar.id})`);
+              // IDENTITY FIX (B2): do NOT leave an unmapped MGE id in charactersInScene.
+              // An unmapped id (e.g. "char_1") reaches imageService, fails the exact-id
+              // match, and used to trigger the inject-ALL fallback (identity blending).
+              // Map it to the MGE character NAME as a last resort so downstream matching
+              // can still resolve by name; the scene's name will be used for ref lookup.
+              mgeToStoryIdMap[mgeChar.id] = mgeChar.name;
+              logger.warn(`⚠️ ID bridge: No characterReference matched MGE character "${mgeChar.name}" (${mgeChar.id}) — falling back to name "${mgeChar.name}" for ref lookup.`);
             }
           }
           // Remap charactersInScene arrays using the bridge map
           preGeneratedScenePrompts.forEach((sp) => {
-            sp.charactersInScene = (sp.charactersInScene || []).map(
-              (mgeId) => mgeToStoryIdMap[mgeId] || mgeId
-            );
+            sp.charactersInScene = (sp.charactersInScene || [])
+              .map((mgeId) => mgeToStoryIdMap[mgeId] || mgeId)
+              // Drop any id that still resolves to an MGE-style id with no ref
+              // (imageService now treats missing-name matches as text-only, no blending)
+              .filter((id) => {
+                const stillMgeId = /^char_\d+$/i.test(String(id)) && !characterReferences.some((r) => r.id === id);
+                if (stillMgeId) logger.warn(`⚠️ Dropping unmappable character id "${id}" from scene to avoid inject-all.`);
+                return !stillMgeId;
+              });
           });
           logger.info(`🔗 Character ID bridge complete. Mapped: ${Object.keys(mgeToStoryIdMap).length}/${mgeCastBible.characters.length} characters`);
         }
