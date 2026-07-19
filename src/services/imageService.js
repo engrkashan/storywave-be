@@ -765,7 +765,18 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
           }
 
         } else if (errorType === "RATE_LIMIT" || errorType === "QUOTA") {
-          // Switch tiers immediately — don't waste retries on rate limit
+          // On the PRIMARY (Tier-1 PRO) model, retry up to 3 times with a 2s gap
+          // before giving up on this tier — a transient quota/rate-limit should not
+          // immediately downgrade the whole batch to FLASH (which would cause drift).
+          if (tier.name === "PRO" && attempt < 3) {
+            logger.warn(`⏳ [GenWithGemini] ${sceneId} — ${errorType} on PRO (Tier-1). Retry ${attempt}/3 after 2s gap before falling back to FLASH.`);
+            attemptLog.outcome = "retry";
+            debugReport.attempts.push(attemptLog);
+            await sleep(2000);
+            if (onCheckCancelled) await onCheckCancelled();
+            continue;
+          }
+          // Either not PRO, or PRO retries exhausted → switch tiers.
           logger.warn(`⏭️ [GenWithGemini] ${sceneId} — ${errorType} on ${tier.name}. Switching provider tier.`);
           attemptLog.outcome = "tier_switch";
           debugReport.attempts.push(attemptLog);

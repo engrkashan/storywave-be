@@ -184,6 +184,118 @@ async function callGeminiJSON(prompt, label = "LLM call") {
   }
 }
 
+// ── Object guideline backfill ───────────────────────────────────────────────
+/**
+ * Objects (rooms, house, car, street, etc.) NEVER get a reference image —
+ * the pipeline has no object-portrait upload path. So each object's look must be
+ * a CANONICAL, STORY-DERIVED text guideline, synthesized ONCE from the
+ * whole story and then LOCKED consistently on every frame it appears in.
+ *
+ * This mirrors ensureCharacterGuidelines but for objects: it collects every
+ * object id referenced in the scene graph + per-beat objects_in_scene, finds
+ * which lack a concrete description, and synthesizes a stable canonical
+ * description for each via ONE batched LLM call. The result is registered
+ * in ObjectStateManager and injected as a hard OBJECT LOCK in composePrompt,
+ * so the same car / house / street renders identically scene-to-scene.
+ *
+ * @param {Array}  sceneGraph     - beats from generateSceneGraph
+ * @param {object} objectRegistry - { id, name, description, ... } from scene graph
+ * @param {string} storyScript    - original story for context
+ * @returns {Promise<string[]>} object names that were newly materialized
+ */
+async function ensureObjectGuidelines(sceneGraph, objectRegistry, storyScript) {
+  // Collect every object id/name referenced anywhere in the story.
+  const referenced = new Map(); // key -> { id, name }
+  const addRef = (id, name) => {
+    const k = String(id || name || "").toLowerCase();
+    if (!k) return;
+    if (!referenced.has(k)) referenced.set(k, { id, name });
+  };
+  for (const beat of (sceneGraph || [])) {
+    for (const o of (beat.objects_in_scene || [])) addRef(o.id, o.name);
+  }
+  for (const o of (objectRegistry || [])) addRef(o.id, o.name);
+
+  if (referenced.size === 0) {
+    logger.info(`[MGE v7] Object guidelines: no objects referenced in story.`);
+    return [];
+  }
+
+  // Which already have a concrete description?
+  const hasDesc = (o) => !!(o && (o.description || o.full_description || o.visual_description));
+  const existing = new Map();
+  for (const o of (objectRegistry || [])) {
+    if (hasDesc(o)) existing.set(String(o.id || o.name || "").toLowerCase(), o);
+  }
+
+  const missing = [];
+  for (const [key, ref] of referenced) {
+    if (!existing.has(key)) missing.push(ref);
+  }
+
+  if (missing.length === 0) {
+    logger.info(`[MGE v7] Object guidelines: all ${referenced.size} referenced objects already have a description.`);
+    return [];
+  }
+
+  logger.info(`[MGE v7] Object guidelines: ${missing.length} object(s) missing description — synthesizing: ${missing.map(m => m.name || m.id).join(", ")}`);
+
+  const missingList = missing
+    .map((m, i) => `${i + 1}. id="${m.id || "n/a"}" name="${m.name || m.id}"`)
+    .join("\n");
+
+  const prompt = `You are a production designer. The story's locations and characters already have detailed specs.
+The following OBJECTS also appear in the story (vehicles, rooms, buildings, streets, furniture, weapons, phones, etc.) but lack a concrete visual description.
+For EACH, synthesize a CANONICAL, FULLY MATERIALIZED visual description from how the story describes or implies the object, so an image generator renders it CONSISTENTLY every time it appears.
+A car must look like the SAME car in scene 3 and scene 9. A house the SAME house. Never leave a field generic.
+
+STORY:
+${storyScript ? storyScript.slice(0, 12000) : "(story text unavailable)"}
+
+MISSING OBJECTS:
+${missingList}
+
+Return STRICT valid JSON:
+{
+  "objects": [
+    {
+      "id": "<same id as provided, e.g. obj_car_1>",
+      "name": "<same name as provided>",
+      "description": "FULL production-design description: make/model/type if a vehicle, architectural style/materials/color/signage if a building/street, material/color/condition if furniture/object. Include size, color, wear, distinguishing marks so it is unmistakably recognizable and reproducible.",
+      "category": "vehicle | building | street | furniture | weapon | device | other"
+    }
+  ]
+}`;
+
+  const result = await callGeminiJSON(prompt, "Object Guideline Backfill");
+  const synthesized = (result && Array.isArray(result.objects)) ? result.objects : [];
+
+  if (synthesized.length === 0) {
+    logger.warn(`[MGE v7] Object guideline backfill returned nothing — missing objects stay generic text.`);
+    return [];
+  }
+
+  // Merge synthesized descriptions back into the object registry (mutate in place).
+  const byKey = new Map();
+  for (const o of (objectRegistry || [])) byKey.set(String(o.id || o.name || "").toLowerCase(), o);
+  for (const o of synthesized) {
+    if (!o || (!o.id && !o.name)) continue;
+    const key = String(o.id || o.name).toLowerCase();
+    const target = byKey.get(key) || { id: o.id, name: o.name };
+    target.id = o.id || target.id;
+    target.name = o.name || target.name;
+    target.description = o.description || target.description || "";
+    target.category = o.category || target.category || "other";
+    byKey.set(key, target);
+  }
+  // Write the merged set back so the caller picks it up.
+  objectRegistry.length = 0;
+  for (const o of byKey.values()) objectRegistry.push(o);
+
+  logger.info(`[MGE v7] Object guidelines: synthesized ${synthesized.length} new object description(s).`);
+  return synthesized.map(o => o.name || o.id);
+}
+
 // ─── SCHEMA DEFINITIONS (referenced in prompts) ──────────────────────────────
 
 export const SCHEMA_A_FIELDS = `
@@ -1577,7 +1689,8 @@ function compileSceneState(graphBeat, charManager, worldManager, objectManager, 
       location_in_scene: obj.location_in_scene || managed.location,
       state: obj.state || managed.state || "normal",
       held: obj.held,
-      owner: obj.owner || managed.owner
+      owner: obj.owner || managed.owner,
+      description: managed.description || obj.description || null
     };
   });
 
@@ -1861,11 +1974,14 @@ function composePrompt(compiledState, directorDecision, aspectRatio, prevExitSta
     return parts.join(". ");
   }).join("\n\n");
 
-  // ── Block 3: Objects / Props
+  // ── Block 3: Objects / Props (LOCKED canonical description)
+  // Objects NEVER get a reference image. Each object's look is a canonical,
+  // story-derived description synthesized ONCE (ensureObjectGuidelines) and must be
+  // reproduced IDENTICALLY on every frame — same car, same house, same street.
   const objBlock = objects_in_scene.length > 0
-    ? "PROPS: " + objects_in_scene.map(o =>
-      `${o.name} [${o.location_in_scene || "in scene"}${o.owner ? ", held by " + o.owner : ""}${o.state !== "normal" ? ", " + o.state : ""}]`
-    ).join("; ")
+    ? "PROPS (OBJECT LOCK — reproduce EXACTLY, never improvise): " + objects_in_scene.map(o =>
+        `${o.name} [${o.location_in_scene || "in scene"}${o.owner ? ", held by " + o.owner : ""}${o.state !== "normal" ? ", " + o.state : ""}] → ${(o.description || "(no canonical description)")}`
+      ).join("; ")
     : "";
 
   // ── Block 4: Environment
@@ -1999,6 +2115,12 @@ export async function runFullMotionGraphicEngine({
   for (const obj of objectRegistry) {
     objectManager.registerObject(obj.id, { ...obj, location: null });
   }
+
+  // ── Object guideline backfill ───────────────────────────────────
+  // Objects (rooms, house, car, street, etc.) NEVER get a reference image.
+  // Synthesize a canonical, story-derived description for every referenced object
+  // and lock it consistently on every frame it appears in (no ref upload path).
+  await ensureObjectGuidelines(SCENE_GRAPH, objectRegistry, storyScript);
 
   // Seed Relationship Registry
   for (const rel of relationshipRegistry) {
