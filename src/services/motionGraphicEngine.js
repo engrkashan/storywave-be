@@ -66,6 +66,7 @@ async function callGeminiJSON(prompt, label = "LLM call") {
       if (attempt === 2) return null;
     }
   }
+}
 
   // ── Character guideline backfill ─────────────────────────────────────────────
   /**
@@ -182,8 +183,6 @@ async function callGeminiJSON(prompt, label = "LLM call") {
     logger.info(`[MGE v7] Character guidelines: synthesized ${synthesized.length} new character guideline(s).`);
     return synthesized.map(c => c.name || c.id);
   }
-}
-
 // ── Object guideline backfill ───────────────────────────────────────────────
 /**
  * Objects (rooms, house, car, street, etc.) NEVER get a reference image —
