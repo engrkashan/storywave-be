@@ -1111,7 +1111,7 @@ async function _runWorkflow({
                 // Pass masterTimeline + sceneIndex → zero-drift subtitle generation
                 const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
                 convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, i);
-                const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\\\:");
+                const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
                 checkpointManager.markRenderRunning(sceneId);
                 try {
@@ -1173,7 +1173,7 @@ async function _runWorkflow({
                       const { startTime, duration } = getSegmentRange(i);
                       const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
                       convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, i);
-                      const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\\\:");
+                      const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
                       try {
                         await renderMediaSegment(imageResult.imageUrl, segmentPath, duration, width, height, escapedSegmentAssPath);

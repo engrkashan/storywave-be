@@ -34,7 +34,7 @@ export async function createVideoWithTimeline(imageUrl, audioPath, outputPath, m
   // Pass timeline object and null for sceneIndex (use all subtitles)
   convertTranscriptToAss(masterTimeline, assPath, aspectRatio, null);
 
-  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\\\:");
+  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
   const audioDuration = audioDurationParam || await getAudioDuration(audioPath);
 
   if (!audioDuration || isNaN(audioDuration)) {
@@ -139,7 +139,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, transcriptPat
   const assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
   convertTranscriptToAss(transcriptPath, assPath, aspectRatio);
 
-  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\\\:");
+  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
   const audioDuration = await getAudioDuration(audioPath);
 
   if (!audioDuration || isNaN(audioDuration)) {
