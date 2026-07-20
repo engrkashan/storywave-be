@@ -68,61 +68,61 @@ async function callGeminiJSON(prompt, label = "LLM call") {
   }
 }
 
-  // ── Character guideline backfill ─────────────────────────────────────────────
-  /**
-   * Guarantees EVERY character referenced anywhere in the story (including secondary /
-   * functional characters such as "neighbor_1", "police_officer_1" that the scene graph
-   * invents but the Cast Bible may omit) has a CANONICAL, MATERIALIZED text guideline
-   * (full physical appearance + base wardrobe). Characters that already exist in the Cast
-   * Bible are left untouched. Missing characters are materialized in a SINGLE batched LLM
-   * call so they get a stable, story-derived look instead of a randomly-generated one.
-   *
-   * This is the "no reference image → synthesize a consistent character guideline" rule:
-   * the guideline is then injected into every frame the character appears in (composePrompt)
-   * and hard-locked, so the character looks identical scene-to-scene without a portrait.
-   *
-   * @param {Array} sceneGraph        - beats from generateSceneGraph (each has characters_present)
-   * @param {object} castBible        - MATERIALIZED_CAST_BIBLE (mutated in place)
-   * @param {string} storyScript      - original story for context
-   * @returns {Promise<string[]>} list of character names that were newly materialized
-   */
-  async function ensureCharacterGuidelines(sceneGraph, castBible, storyScript) {
-    const existing = new Map();
-    for (const c of (castBible.characters || [])) {
-      if (c.id) existing.set(String(c.id).toLowerCase(), c);
-      if (c.name) existing.set(String(c.name).toLowerCase(), c);
+// ── Character guideline backfill ─────────────────────────────────────────────
+/**
+ * Guarantees EVERY character referenced anywhere in the story (including secondary /
+ * functional characters such as "neighbor_1", "police_officer_1" that the scene graph
+ * invents but the Cast Bible may omit) has a CANONICAL, MATERIALIZED text guideline
+ * (full physical appearance + base wardrobe). Characters that already exist in the Cast
+ * Bible are left untouched. Missing characters are materialized in a SINGLE batched LLM
+ * call so they get a stable, story-derived look instead of a randomly-generated one.
+ *
+ * This is the "no reference image → synthesize a consistent character guideline" rule:
+ * the guideline is then injected into every frame the character appears in (composePrompt)
+ * and hard-locked, so the character looks identical scene-to-scene without a portrait.
+ *
+ * @param {Array} sceneGraph        - beats from generateSceneGraph (each has characters_present)
+ * @param {object} castBible        - MATERIALIZED_CAST_BIBLE (mutated in place)
+ * @param {string} storyScript      - original story for context
+ * @returns {Promise<string[]>} list of character names that were newly materialized
+ */
+async function ensureCharacterGuidelines(sceneGraph, castBible, storyScript) {
+  const existing = new Map();
+  for (const c of (castBible.characters || [])) {
+    if (c.id) existing.set(String(c.id).toLowerCase(), c);
+    if (c.name) existing.set(String(c.name).toLowerCase(), c);
+  }
+
+  // Collect every character id/name referenced in the scene graph.
+  const referenced = new Map(); // key -> { id, name }
+  for (const beat of (sceneGraph || [])) {
+    for (const cp of (beat.characters_present || [])) {
+      const id = cp.id || cp.name;
+      const name = cp.name || cp.id;
+      if (!id && !name) continue;
+      const key = String(id || name).toLowerCase();
+      if (!referenced.has(key)) referenced.set(key, { id, name });
     }
+  }
 
-    // Collect every character id/name referenced in the scene graph.
-    const referenced = new Map(); // key -> { id, name }
-    for (const beat of (sceneGraph || [])) {
-      for (const cp of (beat.characters_present || [])) {
-        const id = cp.id || cp.name;
-        const name = cp.name || cp.id;
-        if (!id && !name) continue;
-        const key = String(id || name).toLowerCase();
-        if (!referenced.has(key)) referenced.set(key, { id, name });
-      }
-    }
+  // Find which referenced characters are missing from the Cast Bible.
+  const missing = [];
+  for (const [key, ref] of referenced) {
+    if (!existing.has(key)) missing.push(ref);
+  }
 
-    // Find which referenced characters are missing from the Cast Bible.
-    const missing = [];
-    for (const [key, ref] of referenced) {
-      if (!existing.has(key)) missing.push(ref);
-    }
+  if (missing.length === 0) {
+    logger.info(`[MGE v7] Character guidelines: all ${referenced.size} referenced characters already materialized.`);
+    return [];
+  }
 
-    if (missing.length === 0) {
-      logger.info(`[MGE v7] Character guidelines: all ${referenced.size} referenced characters already materialized.`);
-      return [];
-    }
+  logger.info(`[MGE v7] Character guidelines: ${missing.length} referenced character(s) missing from Cast Bible — synthesizing: ${missing.map(m => m.name || m.id).join(", ")}`);
 
-    logger.info(`[MGE v7] Character guidelines: ${missing.length} referenced character(s) missing from Cast Bible — synthesizing: ${missing.map(m => m.name || m.id).join(", ")}`);
+  const missingList = missing
+    .map((m, i) => `${i + 1}. id="${m.id || "n/a"}" name="${m.name || m.id}"`)
+    .join("\n");
 
-    const missingList = missing
-      .map((m, i) => `${i + 1}. id="${m.id || "n/a"}" name="${m.name || m.id}"`)
-      .join("\n");
-
-    const prompt = `You are a casting director and sketch artist. The story's main/recurring characters already have detailed capsules.
+  const prompt = `You are a casting director and sketch artist. The story's main/recurring characters already have detailed capsules.
   The following characters also appear in the story (often as secondary/background roles) but were not yet described in detail.
   For EACH, synthesize a CANONICAL, FULLY MATERIALIZED physical description + base wardrobe so an image generator can render them
   CONSISTENTLY every time they appear. Do NOT leave any field generic.
@@ -156,33 +156,33 @@ async function callGeminiJSON(prompt, label = "LLM call") {
     ]
   }`;
 
-    const result = await callGeminiJSON(prompt, "Character Guideline Backfill");
-    const synthesized = (result && Array.isArray(result.characters)) ? result.characters : [];
+  const result = await callGeminiJSON(prompt, "Character Guideline Backfill");
+  const synthesized = (result && Array.isArray(result.characters)) ? result.characters : [];
 
-    if (synthesized.length === 0) {
-      logger.warn(`[MGE v7] Character guideline backfill returned nothing — missing characters will be text-only generic.`);
-      return [];
-    }
-
-    castBible.characters = castBible.characters || [];
-    for (const c of synthesized) {
-      if (!c || (!c.id && !c.name)) continue;
-      // Normalize to Module 3 shape: CharacterStateManager reads top-level `wardrobe`
-      // (object) for the registry, so mirror base_wardrobe there. Also keep appearance
-      // text so composePrompt's SUBJECT block has a fallback description.
-      const normalized = {
-        ...c,
-        wardrobe: c.wardrobe || c.base_wardrobe || {},
-        appearance: c.appearance || (c.sketch_artist_appearance
-          ? [c.sketch_artist_appearance.age_range, c.sketch_artist_appearance.gender_presentation, c.sketch_artist_appearance.canonical_skin_tone, c.sketch_artist_appearance.face_structure, c.sketch_artist_appearance.hair].filter(Boolean).join(". ")
-          : ""),
-      };
-      castBible.characters.push(normalized);
-    }
-
-    logger.info(`[MGE v7] Character guidelines: synthesized ${synthesized.length} new character guideline(s).`);
-    return synthesized.map(c => c.name || c.id);
+  if (synthesized.length === 0) {
+    logger.warn(`[MGE v7] Character guideline backfill returned nothing — missing characters will be text-only generic.`);
+    return [];
   }
+
+  castBible.characters = castBible.characters || [];
+  for (const c of synthesized) {
+    if (!c || (!c.id && !c.name)) continue;
+    // Normalize to Module 3 shape: CharacterStateManager reads top-level `wardrobe`
+    // (object) for the registry, so mirror base_wardrobe there. Also keep appearance
+    // text so composePrompt's SUBJECT block has a fallback description.
+    const normalized = {
+      ...c,
+      wardrobe: c.wardrobe || c.base_wardrobe || {},
+      appearance: c.appearance || (c.sketch_artist_appearance
+        ? [c.sketch_artist_appearance.age_range, c.sketch_artist_appearance.gender_presentation, c.sketch_artist_appearance.canonical_skin_tone, c.sketch_artist_appearance.face_structure, c.sketch_artist_appearance.hair].filter(Boolean).join(". ")
+        : ""),
+    };
+    castBible.characters.push(normalized);
+  }
+
+  logger.info(`[MGE v7] Character guidelines: synthesized ${synthesized.length} new character guideline(s).`);
+  return synthesized.map(c => c.name || c.id);
+}
 // ── Object guideline backfill ───────────────────────────────────────────────
 /**
  * Objects (rooms, house, car, street, etc.) NEVER get a reference image —
@@ -345,7 +345,7 @@ class CharacterStateManager {
   constructor(castBible) {
     this.registry = new Map(); // Identity (immutable)
     this.runtime = new Map();  // State (mutable)
-    
+
     // Initialize from Cast Bible
     if (castBible && castBible.characters) {
       for (const char of castBible.characters) {
@@ -359,7 +359,7 @@ class CharacterStateManager {
           skin: char.sketch_artist_appearance?.canonical_skin_tone,
           base_wardrobe: char.wardrobe
         });
-        
+
         // Default runtime state
         this.runtime.set(char.id || char.name, {
           pose: "standing neutral",
@@ -397,7 +397,7 @@ class WorldStateManager {
           materials: loc.construction?.wall_roof_floor_ceiling_material,
           fixed_elements: loc.fixed_elements
         });
-        
+
         this.runtime.set(loc.name, {
           doors_open: [],
           lights_on: true,
@@ -422,7 +422,7 @@ class ObjectStateManager {
   constructor() {
     this.objects = new Map();
   }
-  
+
   registerObject(id, definition) {
     this.objects.set(id, {
       name: definition.name,
@@ -442,7 +442,7 @@ class ObjectStateManager {
       this.registerObject(id, updates); // Auto-register if new
     }
   }
-  
+
   getVisibleObjectsInLocation(location) {
     const visible = [];
     for (const [id, obj] of this.objects.entries()) {
@@ -1312,7 +1312,7 @@ export function buildGlobalNegativePrompt(storyWorldMap, castBible) {
  * Reads the full story + Cast/World Bibles and emits a structural Scene Graph.
  * NO camera. NO prompt language. Pure visual facts only.
  */
-export async function generateSceneGraph(storyScript, castBible, worldBible, referenceTraits = null) {
+export async function generateSceneGraph(storyScript, castBible, worldBible, referenceTraits = null, narrationSegments = null) {
   logger.info("[MGE v7] Phase 2 — Generating Scene Graph...");
 
   let refLock = "";
@@ -1323,31 +1323,44 @@ export async function generateSceneGraph(storyScript, castBible, worldBible, ref
       ).join("\n");
   }
 
+  let segmentsContext = "";
+  if (narrationSegments && narrationSegments.length > 0) {
+    segmentsContext = `NARRATION SEGMENTS (TIMESTAMPS):
+You MUST generate EXACTLY ${narrationSegments.length} beats, one for each segment in the list below. 
+The visual facts (action, characters present) for each beat MUST represent exactly the text spoken in that segment.
+
+${narrationSegments.map((seg, i) => `Segment ${i}: "${seg.text}"`).join("\n")}`;
+  } else {
+    segmentsContext = `FULL STORY SCRIPT:
+${storyScript}
+
+Generate beats that cover the entire story visually.`;
+  }
+
   const prompt = `You are a Story Analyst building a Scene Graph for a cinematic image engine.
 
 Your ONLY job is to extract factual, structural information from the story — NOT to write camera angles, prompts, or artistic language.
 
-FULL STORY SCRIPT:
-${storyScript}
+${segmentsContext}
 
 CANONICAL CAST BIBLE:
 ${JSON.stringify(castBible.characters.map(c => ({
-  id: c.id || c.name,
-  name: c.name,
-  race: c.identity_culture?.race,
-  ethnicity: c.identity_culture?.ethnicity_cultural_identity,
-  age: c.sketch_artist_appearance?.age_range,
-  skin: c.sketch_artist_appearance?.canonical_skin_tone,
-  hair: c.sketch_artist_appearance?.hair,
-  base_wardrobe: c.wardrobe
-})), null, 2)}
+    id: c.id || c.name,
+    name: c.name,
+    race: c.identity_culture?.race,
+    ethnicity: c.identity_culture?.ethnicity_cultural_identity,
+    age: c.sketch_artist_appearance?.age_range,
+    skin: c.sketch_artist_appearance?.canonical_skin_tone,
+    hair: c.sketch_artist_appearance?.hair,
+    base_wardrobe: c.wardrobe
+  })), null, 2)}
 
 CANONICAL WORLD BIBLE:
 ${JSON.stringify(worldBible.locations.map(l => ({
-  name: l.name,
-  materials: l.construction?.wall_roof_floor_ceiling_material,
-  fixed_elements: l.fixed_elements
-})), null, 2)}
+    name: l.name,
+    materials: l.construction?.wall_roof_floor_ceiling_material,
+    fixed_elements: l.fixed_elements
+  })), null, 2)}
 
 ${refLock}
 
@@ -1414,6 +1427,14 @@ Return STRICT valid JSON:
 
   const result = await callGeminiJSON(prompt, "Scene Graph Generation");
   const graph = result?.scene_graph || [];
+
+  // Ensure we output exactly narrationSegments.length beats if requested
+  if (narrationSegments && narrationSegments.length > 0) {
+    if (graph.length !== narrationSegments.length) {
+      logger.warn(`[MGE v7] Scene Graph count mismatch: got ${graph.length}, expected ${narrationSegments.length}. LLM failed to follow count instruction.`);
+    }
+  }
+
   const objectRegistry = result?.object_registry || [];
   const relationshipRegistry = result?.relationship_registry || [];
   logger.info(`[MGE v7] Scene Graph: ${graph.length} beats, ${objectRegistry.length} objects, ${relationshipRegistry.length} relationships`);
@@ -1422,89 +1443,17 @@ Return STRICT valid JSON:
 
 // ── Phase 2b: Beat to Frame Mapper (A.9) ────────────────────────────────────
 /**
- * FIX 2 — Nearest-timestamp beat mapping.
- *
- * BEFORE: proportional index — floor((i / N) * graphLength)
- *   Problem: pure arithmetic; a frame's narration text and its assigned beat's
- *   action/pose could describe completely different story moments, causing the
- *   generated image to jump ahead of what the narration is actually saying.
- *
- * AFTER: temporal overlap matching.
- *   Each narration segment carries startSec / endSec from the Whisper timeline.
- *   The scene graph beats are ordered chronologically (beat_index is their
- *   position in story time). We derive a proportional time window for each beat
- *   ([beat_start, beat_end) in normalised story-seconds) and then pick the beat
- *   whose window has the maximum overlap with the segment's own audio window.
- *
- *   Fallback: if segments carry no timestamp data (synthetic segments have
- *   startSec === endSec === undefined) we fall back to the original proportional
- *   index so the pipeline degrades gracefully.
+ * Maps segments to beats exactly 1:1.
  */
+//  *   index so the pipeline degrades gracefully.
+
 function mapSegmentsToBeats(segments, sceneGraph) {
-  if (sceneGraph.length === 0) {
-    return segments.map((seg) => ({ ...seg, graphBeat: null, beatIdx: 0 }));
-  }
-
-  // Check whether real timestamps exist on at least one segment
-  const hasTimestamps = segments.some(
-    (s) => typeof s.startSec === "number" && typeof s.endSec === "number"
-  );
-
-  if (!hasTimestamps) {
-    // ── Fallback: original proportional index mapping ─────────────────────
-    logger.info("[MGE v7] mapSegmentsToBeats: no timestamps — using proportional index fallback.");
-    return segments.map((seg, i) => {
-      const beatIdx = Math.min(
-        Math.floor((i / segments.length) * sceneGraph.length),
-        sceneGraph.length - 1
-      );
-      const beat = sceneGraph[beatIdx] ? JSON.parse(JSON.stringify(sceneGraph[beatIdx])) : null;
-      return { ...seg, graphBeat: beat, beatIdx };
-    });
-  }
-
-  // ── Map each segment to a beat by STORY-SEQUENCE ORDINAL, not synthetic time.
-  //
-  // Root cause of SYMPTOM A: the old code derived a fake [beat_start, beat_end)
-  // window by evenly partitioning the audio duration (totalDuration / sceneGraph.length)
-  // and assigned each segment the beat whose synthetic window overlapped most.
-  // Because scene-graph beats are STORY beats (not time-anchored) and the spoken
-  // narration does not advance beat-by-beat at a constant rate, that even partition
-  // routinely assigned a segment a beat describing a LATER story moment than the
-  // one its audio window is actually narrating — so the rendered image depicted
-  // content the voice reached seconds later.
-  //
-  // FIX: both `segments` and `sceneGraph` are already in the same story order.
-  // Map by ordinal position in that sequence. When the counts differ, distribute
-  // beats across segments proportionally by INDEX (not by synthetic timestamps),
-  // which keeps frame i anchored to the i-th story beat instead of to a guessed
-  // time slice. Segments already carry their real startSec/endSec from the Master
-  // Timeline and are placed at those times by the renderer — only the *content*
-  // beat needs to be the correct story beat.
-
-  const mapped = segments.map((seg, i) => {
-    const beatIdx = sceneGraph.length === segments.length
-      ? i
-      : Math.min(
-          sceneGraph.length - 1,
-          Math.floor((i / Math.max(1, segments.length)) * sceneGraph.length)
-        );
-
-    // Deep clone the beat so modifications don't leak between frames sharing the same beat
-    const beat = sceneGraph[beatIdx]
-      ? JSON.parse(JSON.stringify(sceneGraph[beatIdx]))
-      : null;
-
+  return segments.map((seg, i) => {
+    // 1:1 mapping exactly as generated
+    const beatIdx = Math.min(i, sceneGraph.length - 1);
+    const beat = sceneGraph[beatIdx] ? JSON.parse(JSON.stringify(sceneGraph[beatIdx])) : null;
     return { ...seg, graphBeat: beat, beatIdx };
   });
-
-  // Log the mapping for debuggability
-  logger.info(
-    `[MGE v7] mapSegmentsToBeats (timestamp mode): ${segments.length} segments → ${sceneGraph.length} beats. ` +
-    mapped.map((m, i) => `F${i + 1}→B${m.beatIdx}`).join(", ")
-  );
-
-  return mapped;
 }
 
 // ── Phase 2c: Shot Planner (A.7) ────────────────────────────────────────────
@@ -1514,8 +1463,8 @@ function mapSegmentsToBeats(segments, sceneGraph) {
  */
 async function generateShotPlan(mappedSegments) {
   logger.info("[MGE v7] Phase 2c — Generating Shot Plan...");
-  
-  const frameDetails = mappedSegments.map((s, i) => 
+
+  const frameDetails = mappedSegments.map((s, i) =>
     `Frame ${i + 1} | Beat Location: ${s.graphBeat?.location || 'Unknown'} | Action: ${s.graphBeat?.action || ''} | Narration: ${s.text}`
   ).join("\n");
 
@@ -1935,11 +1884,11 @@ function composePrompt(compiledState, directorDecision, aspectRatio, prevExitSta
   //    relative to the confirmed prior physical state.
   const continuityAnchorBlock = prevExitState
     ? [
-        `CONTINUITY_FROM_PREVIOUS_FRAME:`,
-        `"${prevExitState}"`,
-        `This frame must show the immediate next moment continuing directly from the above — same location and physical state unless the narration explicitly indicates movement or a scene change.`,
-        `Narration transition: previous = "${(prevNarrationText || "").slice(0, 120)}" → this frame = "${(narrationText || "").slice(0, 120)}".`,
-      ].join("\n")
+      `CONTINUITY_FROM_PREVIOUS_FRAME:`,
+      `"${prevExitState}"`,
+      `This frame must show the immediate next moment continuing directly from the above — same location and physical state unless the narration explicitly indicates movement or a scene change.`,
+      `Narration transition: previous = "${(prevNarrationText || "").slice(0, 120)}" → this frame = "${(narrationText || "").slice(0, 120)}".`,
+    ].join("\n")
     : "";
 
   // ── Block 1: Shot & Framing
@@ -1979,8 +1928,8 @@ function composePrompt(compiledState, directorDecision, aspectRatio, prevExitSta
   // reproduced IDENTICALLY on every frame — same car, same house, same street.
   const objBlock = objects_in_scene.length > 0
     ? "PROPS (OBJECT LOCK — reproduce EXACTLY, never improvise): " + objects_in_scene.map(o =>
-        `${o.name} [${o.location_in_scene || "in scene"}${o.owner ? ", held by " + o.owner : ""}${o.state !== "normal" ? ", " + o.state : ""}] → ${(o.description || "(no canonical description)")}`
-      ).join("; ")
+      `${o.name} [${o.location_in_scene || "in scene"}${o.owner ? ", held by " + o.owner : ""}${o.state !== "normal" ? ", " + o.state : ""}] → ${(o.description || "(no canonical description)")}`
+    ).join("; ")
     : "";
 
   // ── Block 4: Environment
@@ -2096,8 +2045,12 @@ export async function runFullMotionGraphicEngine({
   const relationshipManager = new RelationshipStateManager();
 
   // ── Phase 2: Scene Graph ──────────────────────────────────────────────────
+  const segments = narrationSegments || Array.from({ length: imageCount }, (_, i) => ({
+    sceneIndex: i, text: `Segment ${i + 1}`, startSec: i * 5, endSec: (i + 1) * 5
+  }));
+
   const { graph: SCENE_GRAPH, objectRegistry, relationshipRegistry } = await generateSceneGraph(
-    storyScript, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE, referenceTraits
+    storyScript, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE, referenceTraits, segments
   );
 
   // ── Character guideline backfill ──────────────────────────────────────────
@@ -2126,12 +2079,7 @@ export async function runFullMotionGraphicEngine({
     relationshipManager.setRelationship(rel.char_a, rel.char_b, rel.dynamic);
   }
 
-  // ── Map narration segments → scene graph beats ────────────────────────────
-  const segments = narrationSegments || Array.from({ length: imageCount }, (_, i) => ({
-    sceneIndex: i, text: `Segment ${i + 1}`, startSec: i * 5, endSec: (i + 1) * 5
-  }));
-
-  // A.9: Use sliding window Beat-to-Frame mapping
+  // A.9: Use 1:1 Beat-to-Frame mapping
   const mappedSegments = mapSegmentsToBeats(segments, SCENE_GRAPH);
 
   // A.7: Generate Shot Plan for the sequence

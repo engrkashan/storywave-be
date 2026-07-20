@@ -186,76 +186,24 @@ export function buildSceneBoundaries(words, totalDuration, targetSceneCount) {
     return [{ index: 0, startSec: 0, endSec: totalDuration, durationSec: totalDuration }];
   }
 
-  // 1. Collect candidate pause points
-  const pauses = [];
-  for (let i = 0; i < words.length - 1; i++) {
-    const gap = words[i + 1].start - words[i].end;
-    if (gap > 0.1) pauses.push({ time: words[i].end, gap });
-  }
-
-  // 2. Find best pause for each ideal cut
+  // Strictly divide the audio length by the target scene count
+  const scenes = [];
   const sceneDuration = totalDuration / targetSceneCount;
-  const searchWindow  = sceneDuration * 0.5;
-  const cuts          = new Set();
 
-  for (let k = 1; k < targetSceneCount; k++) {
-    const idealTime = sceneDuration * k;
+  for (let k = 0; k < targetSceneCount; k++) {
+    const isLast = k === targetSceneCount - 1;
+    const start = k * sceneDuration;
+    const end = isLast ? totalDuration : (k + 1) * sceneDuration;
 
-    let best      = null;
-    let bestScore = -Infinity;
-
-    for (const pause of pauses) {
-      const dist = Math.abs(pause.time - idealTime);
-      if (dist > searchWindow) continue;
-      const score = pause.gap * 2 - dist;
-      if (score > bestScore) { bestScore = score; best = pause; }
-    }
-
-    // Round to 3dp to avoid float collision in the Set
-    const cutTime = best
-      ? Math.round(best.time  * 1000) / 1000
-      : Math.round(idealTime  * 1000) / 1000;
-    cuts.add(cutTime);
+    scenes.push({
+      index: k,
+      startSec: start,
+      endSec: end,
+      durationSec: end - start,
+    });
   }
 
-  // 3. Sort
-  const sortedCuts = [...cuts].sort((a, b) => a - b);
-
-  // 4. Build scene objects
-  let scenes = [];
-  let start  = 0;
-  for (const cut of sortedCuts) {
-    if (cut > start + 0.1 && cut < totalDuration - 0.1) {
-      scenes.push({
-        index:       scenes.length,
-        startSec:    start,
-        endSec:      cut,
-        durationSec: cut - start,
-      });
-      start = cut;
-    }
-  }
-  scenes.push({
-    index:       scenes.length,
-    startSec:    start,
-    endSec:      totalDuration,
-    durationSec: totalDuration - start,
-  });
-
-  // 5. Clamp to targetSceneCount ± 3
-  const MARGIN   = 3;
-  const minCount = Math.max(1, targetSceneCount - MARGIN);
-  const maxCount = targetSceneCount + MARGIN;
-
-  if (scenes.length > maxCount) {
-    logger.warn(`Scene count ${scenes.length} exceeds max (${maxCount}). Merging smallest scenes.`);
-    scenes = _mergeToCount(scenes, maxCount);
-  } else if (scenes.length < minCount) {
-    logger.warn(`Scene count ${scenes.length} below min (${minCount}). Bisecting longest scenes.`);
-    scenes = _splitToCount(scenes, minCount);
-  }
-
-  logger.info(`📐 Master Timeline: ${scenes.length} scenes from speech (target ${targetSceneCount} ±${MARGIN})`);
+  logger.info(`📐 Master Timeline: ${scenes.length} strictly divided scenes (target ${targetSceneCount})`);
   return scenes;
 }
 
