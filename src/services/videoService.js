@@ -13,7 +13,7 @@ const logger = createLogger("VideoService");
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-const ZOOM_CYCLE_SECONDS = 12; // Total time for one full In-Out pulse (6s in, 6s out)
+const ZOOM_CYCLE_SECONDS = 20; // Total time for one full In-Out pulse (6s in, 6s out)
 const MAX_ZOOM_LEVEL = 1.2;   // Maximum zoom factor
 const FPS = 30;               // Standard frame rate
 
@@ -245,34 +245,34 @@ export async function createVideo(imageUrl, audioPath, outputPath, transcriptPat
  *   Preserved for backward compatibility.
  */
 export function convertTranscriptToAss(transcriptSourceOrPath, assPath, aspectRatio = "16:9", sceneIndexOrStartTime = null, durationLegacy = null) {
-  const perf     = getPerfSession();
+  const perf = getPerfSession();
   const stopTimer = perf?.start("subtitle", "Transcript to ASS Conversion", { assPath });
 
   const isVertical = aspectRatio === "9:16";
-  const resX       = isVertical ? 1080 : 1920;
-  const resY       = isVertical ? 1920 : 1080;
-  const fontSize   = isVertical ? 80 : 130;
-  const posX       = resX / 2;
-  const posY       = isVertical ? 1400 : 900;
+  const resX = isVertical ? 1080 : 1920;
+  const resY = isVertical ? 1920 : 1080;
+  const fontSize = isVertical ? 80 : 130;
+  const posX = resX / 2;
+  const posY = isVertical ? 1400 : 900;
 
   const header = `[Script Info]\nTitle: Cinematic Shorts Subs\nScriptType: v4.00+\nPlayResX: ${resX}\nPlayResY: ${resY}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n\n; ---- GOLD GRADIENT FILL WITH BRIGHT STROKE & GLOW ----\nStyle: GoldGlow,Bebas Neue Bold,${fontSize},&H0000B8E6&,&H0000BFFF&,&H00FFFFFF&,&H64000000&,1,0,0,0,100,100,2,0,1,12,5,3,2,60,60,120,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
 
   // ── NEW PATH: Timeline object ─────────────────────────────────────────────
   if (transcriptSourceOrPath && typeof transcriptSourceOrPath === "object" && transcriptSourceOrPath.subtitleGroups) {
-    const timeline   = transcriptSourceOrPath;
-    const scene      = sceneIndexOrStartTime !== null ? timeline.scenes[sceneIndexOrStartTime] : null;
-    const dialogues  = _assDialoguesFromTimeline(timeline.subtitleGroups, scene, posX, posY);
+    const timeline = transcriptSourceOrPath;
+    const scene = sceneIndexOrStartTime !== null ? timeline.scenes[sceneIndexOrStartTime] : null;
+    const dialogues = _assDialoguesFromTimeline(timeline.subtitleGroups, scene, posX, posY);
     fs.writeFileSync(assPath, header + dialogues);
     stopTimer?.();
     return;
   }
 
   // ── LEGACY PATH: File path string ────────────────────────────────────────
-  const transcriptPath   = transcriptSourceOrPath;
-  const startTime        = typeof sceneIndexOrStartTime === "number" && sceneIndexOrStartTime % 1 !== 0
+  const transcriptPath = transcriptSourceOrPath;
+  const startTime = typeof sceneIndexOrStartTime === "number" && sceneIndexOrStartTime % 1 !== 0
     ? sceneIndexOrStartTime   // float → it's a legacy startTime
     : 0;
-  const duration         = durationLegacy;
+  const duration = durationLegacy;
 
   try {
     const content = fs.readFileSync(transcriptPath, "utf8");
@@ -314,7 +314,7 @@ function parseJsonToAss(words, posX, posY, startTime, duration) {
 function _assDialoguesFromTimeline(groups, scene, posX, posY) {
   let dialogues = "";
   const startSec = scene ? scene.startSec : 0;
-  const endSec   = scene ? scene.endSec   : Infinity;
+  const endSec = scene ? scene.endSec : Infinity;
 
   for (const g of groups) {
     // Include group if it overlaps the scene window
@@ -383,9 +383,9 @@ function parseSrtTime(timeStr) {
 }
 
 function secToAssTime(sec) {
-  const h  = Math.floor(sec / 3600);
-  const m  = Math.floor((sec % 3600) / 60);
-  const s  = Math.floor(sec % 60);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
   // Math.round (not Math.floor) for accurate centisecond representation
   const cs = Math.round((sec - Math.floor(sec)) * 100);
   // Guard against rounding up to 100cs
