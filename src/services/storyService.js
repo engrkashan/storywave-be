@@ -549,183 +549,125 @@ export async function generateStory({
   };
 }
 
-/**
- * generateScenePrompts — Universal Story-to-Motion-Graphic Image Workflow v6.3
- *
- * Converts a finished script into validated standalone image prompts using the
- * 8-module gated production engine. Runs ALL modules in order before generating
- * any frame — Full-Story-First rule enforced.
- *
- * FUNCTION SIGNATURE IS UNCHANGED — drop-in replacement for the legacy version.
- * Returns the same { prompt, charactersInScene, narration }[] shape.
- *
- * Core Execution Rule: run modules 1→8 in order. Each module receives validated
- * inputs, performs one task, audits required fields, repairs failures, and passes
- * forward only validated data. Never generates frames before story, cast, world,
- * scenes, continuity, and frame allocation are complete.
- *
- * @param {string} storyScript — the complete story/script text
- * @param {number} count — exact number of images (Non-negotiable: Exact Count rule)
- * @param {object|null} storyBible — pre-built metadata from extractStoryMetadata (Schema A/B)
- * @param {string|null} visualSuggestions — user visual style note
- * @returns {Promise<Array<{ prompt: string, charactersInScene: string[], narration: string, _framePackage: object, _negativePrompt: string, _globalNegativePrompt: string, _motionMovement: object }>>}
- */
-export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null, referenceTraits = null, characterReferences = []) {
-  logger.info(`🎬 [v6.3 Engine] generateScenePrompts — ${count} frames requested`);
+async function generatePromptForChunk({
+  chunkText,
+  chunkIndex,
+  storyBible,
+  visualSuggestions,
+  prevVisualContext,
+  characterReferences
+}) {
+  const charactersStr = storyBible?.characters?.map(c => `- ${c.name} (ID: ${c.id}): ${c.appearance} | ${c.clothing || c.base_clothing || ""}`).join('\n') || "None";
+  const locationsStr = storyBible?.locations?.map(l => `- ${l.name}: ${l.description}`).join('\n') || "None";
+  const artStyle = storyBible?.artStyle || "Cinematic photorealistic film still, 8K detail, hyper-realistic, volumetric lighting.";
+  
+  const prompt = `You are a cinematic production designer and prompt engineer.
+Your task is to analyze the following voiceover chunk (which is part of a sequence) and generate a highly detailed cinematic visual prompt for an image generator (like Midjourney or Stable Diffusion).
+
+GLOBAL MOVIE GUIDE:
+Characters:
+${charactersStr}
+
+Locations:
+${locationsStr}
+
+Visual Style & Suggestions: 
+${artStyle}
+${visualSuggestions || ""}
+
+PREVIOUS SCENE CONTEXT:
+${prevVisualContext || "This is the first scene."}
+
+CURRENT VOICEOVER CHUNK (Beat ${chunkIndex + 1}):
+"${chunkText}"
+
+Based on this voiceover chunk, identify the active location, the characters present, and the core action. Then write a detailed cinematic visual prompt.
+Do NOT include text or words in the image prompt.
+
+Return STRICT valid JSON:
+{
+  "active_location": "Name of the location",
+  "characters_present": ["ID of characters present"],
+  "core_action": "Brief description of the action",
+  "visual_prompt": "Detailed visual prompt here... (include character appearances, location details, and art style)",
+  "visual_context_for_next_scene": "Brief summary of the visual state at the end of this scene to maintain continuity"
+}`;
 
   try {
-    const { runFullMotionGraphicEngine } = await import("./motionGraphicEngine.js");
-
-    const result = await runFullMotionGraphicEngine({
-      storyScript,
-      imageCount: count,
-      aspectRatio: "16:9",
-      title: storyBible?.title || "Story",
-      storyType: storyBible?.storyType || "script",
-      storyBible,
-      referenceTraits,   // ← now forwarded from workflow instead of hardcoded null
-      visualSuggestions,
-      storyGuidelines: storyBible?.storyGuidelines || null,
-      narrationSegments,
-      characterReferences,   // ← [{ id, name, url }] for per-frame Reference Selector
-      preGeneratedBibles: storyBible?._preGeneratedBibles || null, // pass cached bibles from step 2.1
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini", // Use gpt-4o-mini or gpt-4o for JSON tasks
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.4,
+      response_format: { type: "json_object" },
     });
-
-    const { scenePrompts, finalAudit, castBible } = result;
-
-    logger.info(`[v6.3 Engine] Final Audit: ${finalAudit.passed ? "✅ PASSED" : "⚠️ ISSUES"} | frames: ${scenePrompts.length}/${count} | rejected: ${finalAudit.rejected_frame_ids?.length || 0}`);
-
-    if (!finalAudit.exact_count_check) {
-      logger.warn(`[v6.3 Engine] ⚠️ Exact count mismatch — got ${scenePrompts.length}, expected ${count}. Adjusting...`);
-      while (scenePrompts.length > count) scenePrompts.pop();
-      while (scenePrompts.length < count) {
-        const last = scenePrompts[scenePrompts.length - 1];
-        scenePrompts.push({ ...last, narration: last.narration + " (continued)" });
-      }
-    }
-
-    // ── Overwrite narrations with Whisper-aligned text ───────────────────────
-    // If narrationSegments were provided (post-transcription path), replace the
-    // LLM-generated narration_coverage with the verbatim spoken words for that
-    // audio slot. This guarantees 1-to-1 sync between image and spoken narration.
-    if (narrationSegments && narrationSegments.length === scenePrompts.length) {
-      scenePrompts.forEach((sp, i) => {
-        if (narrationSegments[i].text) {
-          sp.narration  = narrationSegments[i].text;
-        }
-        sp._startSec = narrationSegments[i].startSec;
-        sp._endSec   = narrationSegments[i].endSec;
-      });
-      logger.info(`[v6.3 Engine] ✅ Narrations overwritten with Whisper-aligned segments (${narrationSegments.length} segments)`);
-    } else if (narrationSegments) {
-      logger.warn(`[v6.3 Engine] ⚠️ narrationSegments count (${narrationSegments.length}) ≠ scenePrompts count (${scenePrompts.length}) — using MGE narrations`);
-    }
-
-    logger.info(`✅ [v6.3 Engine] Generated ${scenePrompts.length} validated standalone frame prompts`);
-    // Return both scenePrompts and castBible so workflowService can bridge
-    // MGE character IDs (char_1, char_2, …) to storyMetadata character IDs.
-    return { scenePrompts, castBible: castBible || null };
-
+    
+    const parsed = JSON.parse(res.choices[0].message.content.trim());
+    return {
+      prompt: parsed.visual_prompt,
+      charactersInScene: parsed.characters_present || [],
+      visualContext: parsed.visual_context_for_next_scene
+    };
   } catch (err) {
-    logger.error(`❌ [v6.3 Engine] Full engine failed (${err.message}) — engaging enriched fallback generation`);
-
-    const words = storyScript.split(/\s+/).filter(Boolean);
-    const chunkSize = Math.ceil(words.length / count);
-    const fallbackScenes = [];
-
-    // Build character description map for quick lookup
-    const charDescMap = {};
-    if (storyBible?.characters?.length > 0) {
-      for (const c of storyBible.characters) {
-        charDescMap[c.id] = { name: c.name, appearance: c.appearance || "", clothing: c.base_clothing || "" };
-      }
-    }
-
-    // Build location keyword → description map so each chunk can detect its active location
-    const locationRecords = storyBible?.locations || [];
-
-    /**
-     * Detect the most likely active location for a chunk of text.
-     * Scores each location by how many times its name (or keywords from its description)
-     * appear in the chunk text. Falls back to the first location if nothing matches.
-     */
-    function detectActiveLocation(chunkText) {
-      if (!locationRecords.length) return null;
-      const lower = chunkText.toLowerCase();
-      let best = locationRecords[0];
-      let bestScore = 0;
-      for (const loc of locationRecords) {
-        const keywords = [
-          loc.name,
-          ...(loc.description || "").split(/[\s,;.]+/).filter(w => w.length > 4),
-        ].filter(Boolean).map(k => k.toLowerCase());
-        const score = keywords.reduce((s, kw) => s + (lower.includes(kw) ? 1 : 0), 0);
-        if (score > bestScore) { bestScore = score; best = loc; }
-      }
-      return best;
-    }
-
-    for (let i = 0; i < count; i++) {
-      const chunk = words.slice(i * chunkSize, (i + 1) * chunkSize).join(" ");
-
-      // Detect active location for this chunk
-      const activeLoc = detectActiveLocation(chunk);
-      const locationSection = activeLoc
-        ? `LOCATION: ${activeLoc.name}. ${activeLoc.description || ""}`.slice(0, 400)
-        : "";
-
-      // Identify characters mentioned in this chunk
-      const chunkLower = chunk.toLowerCase();
-      const mentionedChars = storyBible?.characters?.filter(c =>
-        c.name && chunkLower.includes(c.name.toLowerCase())
-      ) || storyBible?.characters || [];
-
-      const characterSection = mentionedChars.length > 0
-        ? `CHARACTERS PRESENT: ${mentionedChars.map(c =>
-            `${c.name} (${c.appearance || "as described in story"}${c.base_clothing ? ", wearing: " + c.base_clothing : ""})`
-          ).join("; ")}.`
-        : "";
-
-      // Extract the most action-rich sentence from the chunk (not just the first)
-      const sentences = chunk.match(/[^.!?]+[.!?]/g) || [chunk.slice(0, 200)];
-      const actionSentence = sentences.reduce((best, s) =>
-        s.split(/\s+/).length > best.split(/\s+/).length ? s : best
-      , sentences[0] || chunk.slice(0, 200)).trim();
-
-      const prompt = [
-        locationSection,
-        characterSection,
-        `ACTION: ${actionSentence}`,
-        visualSuggestions || "",
-        "Cinematic photorealistic film still, 8K detail, hyper-realistic, sharp focus, volumetric lighting.",
-        `Maintain consistent ${activeLoc ? activeLoc.name + " environment" : "environment"}. Do not switch locations. STRICTLY NO TEXT in the image.`,
-      ].filter(Boolean).join(" ").trim();
-
-      fallbackScenes.push({
-        prompt,
-        charactersInScene: mentionedChars.map(c => c.id).filter(Boolean),
-        narration: chunk,
-        _negativePrompt: "",
-        _globalNegativePrompt: "",
-        _motionMovement: null,
-        _framePackage: null,
-      });
-    }
-
-    logger.info(`✅ Enriched Fallback: Generated ${fallbackScenes.length} location-aware scene prompts`);
-
-    // Apply Whisper-aligned narrations to fallback scenes too
-    if (narrationSegments && narrationSegments.length === fallbackScenes.length) {
-      fallbackScenes.forEach((sp, i) => {
-        if (narrationSegments[i].text) sp.narration = narrationSegments[i].text;
-        sp._startSec = narrationSegments[i].startSec;
-        sp._endSec   = narrationSegments[i].endSec;
-      });
-      logger.info(`[v6.3 Fallback] ✅ Narrations overwritten with Whisper-aligned segments`);
-    }
-
-    return { scenePrompts: fallbackScenes, castBible: null };
+    logger.error("Error generating chunk prompt:", err);
+    return {
+      prompt: `${artStyle} ${visualSuggestions || ""} Scene for voiceover: ${chunkText}`,
+      charactersInScene: [],
+      visualContext: ""
+    };
   }
+}
+
+/**
+ * generateScenePrompts — Chunk-based LLM generation
+ *
+ * Converts exact Whisper voiceover chunks into standalone image prompts
+ * analyzing each chunk individually using the global movie guide.
+ */
+export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null, referenceTraits = null, characterReferences = []) {
+  logger.info(`🎬 [Chunk-based Engine] generateScenePrompts — ${count} frames requested`);
+
+  let segments = narrationSegments;
+  if (!segments || segments.length === 0) {
+     const words = storyScript.split(/\s+/).filter(Boolean);
+     const chunkSize = Math.ceil(words.length / count);
+     segments = Array.from({ length: count }, (_, i) => ({
+       sceneIndex: i,
+       startSec: i * 5,
+       endSec: (i + 1) * 5,
+       text: words.slice(i * chunkSize, (i + 1) * chunkSize).join(" ")
+     }));
+  }
+
+  const scenePrompts = [];
+  let prevVisualContext = null;
+
+  for (let i = 0; i < segments.length; i++) {
+    const chunk = segments[i];
+    logger.info(`🧠 Generating prompt for chunk ${i+1}/${segments.length}`);
+    
+    const promptData = await generatePromptForChunk({
+       chunkText: chunk.text,
+       chunkIndex: i,
+       storyBible,
+       visualSuggestions,
+       prevVisualContext,
+       characterReferences,
+    });
+    
+    scenePrompts.push({
+      prompt: promptData.prompt,
+      charactersInScene: promptData.charactersInScene || [],
+      narration: chunk.text,
+      _startSec: chunk.startSec,
+      _endSec: chunk.endSec,
+      _negativePrompt: "",
+      _globalNegativePrompt: storyBible?.globalNegativePrompt || ""
+    });
+    
+    prevVisualContext = promptData.visualContext;
+  }
+  
+  return { scenePrompts, castBible: storyBible?._preGeneratedBibles?.MATERIALIZED_CAST_BIBLE || null };
 }
 
 async function summarizeText(text) {

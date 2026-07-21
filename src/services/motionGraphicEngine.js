@@ -1107,7 +1107,7 @@ ${JSON.stringify(worldBible, null, 2)}
 STORY WORLD MAP:
 ${JSON.stringify(storyWorldMap, null, 2)}
 
-Divide the story into approximately ${Math.max(Math.ceil(imageCount / 2), 3)} scenes. Each scene will receive one or more frames in Module 6.
+Divide the story into exactly ${imageCount} scenes. Each scene will receive exactly one frame in Module 6.
 
 Return STRICT valid JSON:
 {
@@ -1324,7 +1324,9 @@ export async function generateSceneGraph(storyScript, castBible, worldBible, ref
   }
 
   let segmentsContext = "";
-  if (narrationSegments && narrationSegments.length > 0) {
+  const isPlaceholderSegments = narrationSegments && narrationSegments.length > 0 && narrationSegments[0].text === "Segment 1";
+
+  if (narrationSegments && narrationSegments.length > 0 && !isPlaceholderSegments) {
     segmentsContext = `NARRATION SEGMENTS (TIMESTAMPS):
 You MUST generate EXACTLY ${narrationSegments.length} beats, one for each segment in the list below. 
 The visual facts (action, characters present) for each beat MUST represent exactly the text spoken in that segment.
@@ -1334,7 +1336,9 @@ ${narrationSegments.map((seg, i) => `Segment ${i}: "${seg.text}"`).join("\n")}`;
     segmentsContext = `FULL STORY SCRIPT:
 ${storyScript}
 
-Generate beats that cover the entire story visually.`;
+You MUST divide the story into EXACTLY ${narrationSegments ? narrationSegments.length : 5} chunks.
+Generate exactly one beat for each chunk.
+IMPORTANT: You MUST include a new field "chunk_text" in each beat containing the exact sentences from the story script that the beat covers.`;
   }
 
   const prompt = `You are a Story Analyst building a Scene Graph for a cinematic image engine.
@@ -1382,6 +1386,7 @@ Return STRICT valid JSON:
   "scene_graph": [
     {
       "beat_index": 0,
+      "chunk_text": "the exact sentence(s) from the story script this beat covers (only if FULL STORY SCRIPT was provided, otherwise null)",
       "location": "Location name from World Bible",
       "time_of_day": "morning | afternoon | evening | night",
       "weather": "clear | rainy | foggy | etc. (exterior only, else null)",
@@ -1452,7 +1457,13 @@ function mapSegmentsToBeats(segments, sceneGraph) {
     // 1:1 mapping exactly as generated
     const beatIdx = Math.min(i, sceneGraph.length - 1);
     const beat = sceneGraph[beatIdx] ? JSON.parse(JSON.stringify(sceneGraph[beatIdx])) : null;
-    return { ...seg, graphBeat: beat, beatIdx };
+    
+    let text = seg.text;
+    if (text.startsWith("Segment ") && beat && beat.chunk_text) {
+      text = beat.chunk_text;
+    }
+    
+    return { ...seg, text, graphBeat: beat, beatIdx };
   });
 }
 
