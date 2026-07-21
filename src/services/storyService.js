@@ -555,16 +555,20 @@ async function generatePromptForChunk({
   storyBible,
   visualSuggestions,
   prevVisualContext,
+  prevChunkText,
+  prevCharactersInScene,
   characterReferences
 }) {
   const charactersStr = storyBible?.characters?.map(c => `- ${c.name} (ID: ${c.id}): ${c.appearance} | ${c.clothing || c.base_clothing || ""}`).join('\n') || "None";
   const locationsStr = storyBible?.locations?.map(l => `- ${l.name}: ${l.description}`).join('\n') || "None";
   const artStyle = storyBible?.artStyle || "Cinematic photorealistic film still, 8K detail, hyper-realistic, volumetric lighting.";
+  const synopsis = storyBible?.synopsis ? `STORY SYNOPSIS:\n${storyBible.synopsis}\n` : "";
   
   const prompt = `You are a cinematic production designer and prompt engineer.
 Your task is to analyze the following voiceover chunk (which is part of a sequence) and generate a highly detailed cinematic visual prompt for an image generator (like Midjourney or Stable Diffusion).
 
 GLOBAL MOVIE GUIDE:
+${synopsis}
 Characters:
 ${charactersStr}
 
@@ -575,14 +579,19 @@ Visual Style & Suggestions:
 ${artStyle}
 ${visualSuggestions || ""}
 
-PREVIOUS SCENE CONTEXT:
-${prevVisualContext || "This is the first scene."}
+PREVIOUS SCENE CONTEXT (For Continuity):
+Narration: "${prevChunkText || "None"}"
+Characters Present: ${prevCharactersInScene?.length > 0 ? prevCharactersInScene.join(", ") : "None"}
+Visual State: ${prevVisualContext || "This is the first scene."}
 
 CURRENT VOICEOVER CHUNK (Beat ${chunkIndex + 1}):
 "${chunkText}"
 
-Based on this voiceover chunk, identify the active location, the characters present, and the core action. Then write a detailed cinematic visual prompt.
-Do NOT include text or words in the image prompt.
+CRITICAL INSTRUCTIONS FOR CONTINUITY & SCENE CHANGES:
+1. PRONOUN RESOLUTION: Pronouns (e.g., "he", "she") often refer to characters from the PREVIOUS SCENE CONTEXT.
+2. SCENE/CHARACTER CHANGES: The story is dynamic. If the current voiceover chunk introduces a new character, shifts the focus, or implies a scene change, YOU MUST understand this from the script flow. Do NOT blindly reuse characters from the previous scene if the narrative has moved on to someone else or somewhere else. Use your intelligence to deduce who is actually in the current scene.
+3. Identify the active location, the characters present, and the core action. Then write a detailed cinematic visual prompt.
+4. Do NOT include text or words in the image prompt.
 
 Return STRICT valid JSON:
 {
@@ -595,9 +604,9 @@ Return STRICT valid JSON:
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // Use gpt-4o-mini or gpt-4o for JSON tasks
+      model: "gpt-5", // Upgraded to gpt-5 as requested for advanced contextual understanding
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.4,
+      temperature: 0.3, 
       response_format: { type: "json_object" },
     });
     
@@ -640,6 +649,8 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
 
   const scenePrompts = [];
   let prevVisualContext = null;
+  let prevChunkText = null;
+  let prevCharactersInScene = [];
 
   for (let i = 0; i < segments.length; i++) {
     const chunk = segments[i];
@@ -651,6 +662,8 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
        storyBible,
        visualSuggestions,
        prevVisualContext,
+       prevChunkText,
+       prevCharactersInScene,
        characterReferences,
     });
     
@@ -665,6 +678,8 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
     });
     
     prevVisualContext = promptData.visualContext;
+    prevChunkText = chunk.text;
+    prevCharactersInScene = promptData.charactersInScene || [];
   }
   
   return { scenePrompts, castBible: storyBible?._preGeneratedBibles?.MATERIALIZED_CAST_BIBLE || null };
