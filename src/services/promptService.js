@@ -28,7 +28,8 @@ export async function analyzeReferenceImage(imageUrl) {
     const base64 = Buffer.from(arrayBuffer).toString("base64");
     const mimeType = res.headers.get("content-type") || "image/jpeg";
 
-    const prompt = `Analyze this character reference image. Extract canonical physical traits to be used in a Story Bible.
+    const prompt = `Analyze this character reference image. Extract canonical physical facial and body traits to be used in a Story Bible.
+NOTE: Do NOT extract wardrobe/clothing from the reference image, as wardrobe will be derived strictly from the story script. Focus ONLY on facial and physical features.
 Return STRICT valid JSON:
 {
   "face": "detailed facial structure and features",
@@ -37,8 +38,7 @@ Return STRICT valid JSON:
   "ethnicity": "perceived ethnicity or cultural background",
   "age": "approximate age",
   "build": "body type and proportions",
-  "expression": "default expression or vibe",
-  "clothing": "current clothing (if clearly visible and relevant)"
+  "expression": "default expression or vibe"
 }`;
 
     // 2. Call the Gemini SDK with structured parts

@@ -756,7 +756,7 @@ export async function runModule3_MaterializedCastBible(storyWorldMap, referenceT
   let refContext = "";
   if (referenceTraits) {
     refContext = `
-REFERENCE IMAGE TRAITS (lock these exactly to the main character's capsule):
+REFERENCE IMAGE TRAITS (lock these FACIAL and PHYSICAL traits to the character, BUT derive their wardrobe strictly from the story world and script below, NOT from any clothing in the reference image):
 ${JSON.stringify(referenceTraits, null, 2)}
 `;
   }

@@ -30,7 +30,7 @@ export const config = {
       // Text model used exclusively for intelligent safety prompt repair
       repairModel: process.env.GEMINI_REPAIR_MODEL || "gemini-2.5-flash",
       // OpenAI model used as fallback for prompt repair when Gemini repair model is unavailable
-      openaiRepairModel: process.env.OPENAI_REPAIR_MODEL || "gpt-5",
+      openaiRepairModel: process.env.OPENAI_REPAIR_MODEL || "gpt-5.6",
     },
   },
 };

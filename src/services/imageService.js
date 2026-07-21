@@ -200,7 +200,7 @@ INSTRUCTION: Rewrite ONLY the unsafe wording in the original prompt. Return { "r
       throw new Error(`Prompt repair failed: Gemini unavailable and OPENAI_API_KEY not set. Original error: ${geminiRepairErr.message}`);
     }
 
-    const openaiModel = process.env.OPENAI_REPAIR_MODEL || config.ai.image.openaiRepairModel || "gpt-5";
+    const openaiModel = process.env.OPENAI_REPAIR_MODEL || config.ai.image.openaiRepairModel || "gpt-5.6";
     logger.info(`🔧 [PromptRepair/OpenAI] Scene ${sceneMeta.sceneId} — Using ${openaiModel}`);
 
     const openaiResponse = await openai.chat.completions.create({
@@ -210,7 +210,7 @@ INSTRUCTION: Rewrite ONLY the unsafe wording in the original prompt. Return { "r
         { role: "system", content: systemInstruction },
         { role: "user", content: userMessage },
       ],
-      temperature: 1,
+
       max_tokens: 2048,
     });
 
@@ -540,11 +540,26 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
         .map((charId) => characterReferences.find((c) => c.id === charId))
         .filter(Boolean);
 
-      // Tier 1b: if exact-id failed, also try exact name match (guards against
-      // MGE char_N vs storyMetadata id drift without escalating to inject-all).
+      // Tier 1b: exact name match
       if (matchedRefs.length === 0) {
         matchedRefs = sceneCharacters
           .map((charId) => characterReferences.find((c) => c.name === charId))
+          .filter(Boolean);
+      }
+
+      // Tier 1c: Normalized fuzzy match (guards against case/spaces/underscore differences)
+      if (matchedRefs.length === 0) {
+        const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        matchedRefs = sceneCharacters
+          .map((charId) => {
+            const target = norm(charId);
+            if (!target) return null;
+            return characterReferences.find((c) => {
+              const cId = norm(c.id);
+              const cName = norm(c.name);
+              return cId === target || cName === target || (target.length > 3 && (cId.includes(target) || cName.includes(target) || target.includes(cName)));
+            });
+          })
           .filter(Boolean);
       }
 

@@ -907,7 +907,7 @@ async function _runWorkflow({
 
       if (mediaType === "multi_image" && !uploadedMediaUrl) {
         const dynamicCount = Math.max(5, Math.ceil(narrationDuration / 5));
-        const count = storyMetadata?.targetSceneCount || imageCount || dynamicCount;
+        const count = imageCount || dynamicCount;
 
         // Build narration segments aligned to Master Timeline audio boundaries
         const narrationSegments = buildNarrationSegments(timelineWords, masterTimeline.scenes);

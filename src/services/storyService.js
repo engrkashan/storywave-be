@@ -181,9 +181,9 @@ Extract the following in STRICT JSON format:
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-5",
+      model: "gpt-5.6",
       messages: [{ role: "user", content: prompt }],
-      temperature: 1,
+
       response_format: { type: "json_object" },
     });
 
@@ -251,9 +251,9 @@ async function generateIntro({
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await openai.chat.completions.create({
-        model: "gpt-5",
+        model: "gpt-5.6",
         messages: [{ role: "user", content: prompt }],
-        temperature: 1,
+
       });
 
       let content = res.choices[0].message.content.trim();
@@ -326,9 +326,9 @@ async function generateBodyPart({
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await openai.chat.completions.create({
-        model: "gpt-5",
+        model: "gpt-5.6",
         messages: [{ role: "user", content: prompt }],
-        temperature: 1,
+
       });
 
       let content = res.choices[0].message.content.trim();
@@ -401,9 +401,9 @@ async function generateClosing({
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await openai.chat.completions.create({
-        model: "gpt-5",
+        model: "gpt-5.6",
         messages: [{ role: "user", content: prompt }],
-        temperature: 1,
+
       });
 
       let content = res.choices[0].message.content.trim();
@@ -559,54 +559,58 @@ async function generatePromptForChunk({
   prevCharactersInScene,
   characterReferences
 }) {
-  const charactersStr = storyBible?.characters?.map(c => `- ${c.name} (ID: ${c.id}): ${c.appearance} | ${c.clothing || c.base_clothing || ""}`).join('\n') || "None";
+  const charactersStr = storyBible?.characters?.map(c => `- ${c.name} (ID: ${c.id}): ${c.appearance || "Clinical neutral appearance"} | Locked Wardrobe: ${c.clothing || c.base_clothing || "Default cinematic attire"}`).join('\n') || "None";
   const locationsStr = storyBible?.locations?.map(l => `- ${l.name}: ${l.description}`).join('\n') || "None";
   const artStyle = storyBible?.artStyle || "Cinematic photorealistic film still, 8K detail, hyper-realistic, volumetric lighting.";
   const synopsis = storyBible?.synopsis ? `STORY SYNOPSIS:\n${storyBible.synopsis}\n` : "";
 
-  const prompt = `You are a cinematic production designer and prompt engineer.
-Your task is to analyze the following voiceover chunk (which is part of a sequence) and generate a highly detailed cinematic visual prompt for an image generator (like Midjourney or Stable Diffusion).
+  const prompt = `You are an elite cinematic film director, visual storyteller, and master prompt engineer.
+Your objective is to visualize the complete story as a continuous, realistic movie step by step. You are generating the visual prompt for keyframe beat ${chunkIndex + 1} in the sequence.
 
 GLOBAL MOVIE GUIDE:
 ${synopsis}
-Characters:
-${charactersStr}
 
-Locations:
+CHARACTERS (LOCKED IDENTITIES & WARDROBE):
+${charactersStr}
+(Note: Every character has a locked physical appearance and wardrobe. You MUST include their exact physical features and locked wardrobe whenever they appear.)
+
+LOCATIONS & ENVIRONMENT:
 ${locationsStr}
 
-Visual Style & Suggestions: 
+CINEMATIC ART STYLE & LIGHTING DIRECTION:
 ${artStyle}
 ${visualSuggestions || ""}
 
-PREVIOUS SCENE CONTEXT (For Continuity):
-Narration: "${prevChunkText || "None"}"
-Characters Present: ${prevCharactersInScene?.length > 0 ? prevCharactersInScene.join(", ") : "None"}
-Visual State: ${prevVisualContext || "This is the first scene."}
+PREVIOUS SCENE CONTEXT (For Sequential Visual Continuity):
+Previous Narration: "${prevChunkText || "None"}"
+Previous Characters Present: ${prevCharactersInScene?.length > 0 ? prevCharactersInScene.join(", ") : "None"}
+Previous Visual & Environment State: ${prevVisualContext || "This is the first scene."}
 
 CURRENT VOICEOVER CHUNK (Beat ${chunkIndex + 1}):
 "${chunkText}"
 
-CRITICAL INSTRUCTIONS FOR CONTINUITY & SCENE CHANGES:
-1. PRONOUN RESOLUTION: Pronouns (e.g., "he", "she") often refer to characters from the PREVIOUS SCENE CONTEXT.
-2. SCENE/CHARACTER CHANGES: The story is dynamic. If the current voiceover chunk introduces a new character, shifts the focus, or implies a scene change, YOU MUST understand this from the script flow. Do NOT blindly reuse characters from the previous scene if the narrative has moved on to someone else or somewhere else. Use your intelligence to deduce who is actually in the current scene.
-3. Identify the active location, the characters present, and the core action. Then write a detailed cinematic visual prompt.
-4. Do NOT include text or words in the image prompt.
+CRITICAL DIRECTORIAL RULES:
+1. STEP-BY-STEP CINEMATIC STORYTELLING: Treat each chunk as a keyframe beat in a realistic movie sequence. The visual prompt must clearly capture the specific step-by-step action occurring in this beat according to the script flow.
+2. CHARACTER IDENTITY & WARDROBE LOCK: For reference characters, facial and physical features come from the reference image, BUT wardrobe is determined strictly by the story script (ignore any clothing in reference photos). For every character present in this frame, you MUST explicitly specify their locked facial features and story-derived wardrobe from the Character Guide. Do NOT alter their clothing across scenes unless the script explicitly describes a change of clothes.
+3. TIME OF DAY & LIGHTING CONSISTENCY: Maintain strict environment, time of day/timezone, and lighting consistency with previous scenes in the same location unless time explicitly passes in the script.
+4. DYNAMIC CHARACTER DETECTIVE & PRONOUN RESOLUTION:
+   - Pronouns ("he", "she", "they") usually refer to the character(s) from the previous scene context.
+   - However, if the chunk or story flow introduces new characters or transitions to a different location, update 'characters_present' and 'active_location' accordingly based on the script.
+5. NO TEXT IN IMAGES: Ensure no text, labels, or captions appear in the visual prompt.
 
 Return STRICT valid JSON:
 {
   "active_location": "Name of the location",
   "characters_present": ["ID of characters present"],
-  "core_action": "Brief description of the action",
-  "visual_prompt": "Detailed visual prompt here... (include character appearances, location details, and art style)",
-  "visual_context_for_next_scene": "Brief summary of the visual state at the end of this scene to maintain continuity"
+  "core_action": "Clear, specific beat action",
+  "visual_prompt": "Cinematic visual prompt specifying exact character appearances, locked wardrobe, location, lighting, camera framing, and keyframe action...",
+  "visual_context_for_next_scene": "Detailed summary of character visual states, locked wardrobe, location, time of day, and positioning to carry over into the next beat"
 }`;
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-5", // Upgraded to gpt-5 as requested for advanced contextual understanding
+      model: "gpt-5.6", // Upgraded to gpt-5.6 as requested for advanced contextual understanding
       messages: [{ role: "user", content: prompt }],
-      temperature: 1,
       response_format: { type: "json_object" },
     });
 
@@ -691,9 +695,9 @@ async function summarizeText(text) {
     15000
   )}`;
   const result = await openai.chat.completions.create({
-    model: "gpt-5",
+    model: "gpt-5.6",
     messages: [{ role: "user", content: summaryPrompt }],
-    temperature: 1,
+
   });
   return result.choices?.[0]?.message?.content?.trim() || text.slice(0, 5000);
 }
@@ -720,9 +724,9 @@ ${script}
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-5",
+      model: "gpt-5.6",
       messages: [{ role: "user", content: prompt }],
-      temperature: 1,
+
     });
     return res.choices[0].message.content.trim() || script;
   } catch (err) {
@@ -753,9 +757,9 @@ ${narrationChunk}
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-5",
+      model: "gpt-5.6",
       messages: [{ role: "user", content: prompt }],
-      temperature: 1,
+
     });
     return res.choices[0].message.content.trim() || narrationChunk;
   } catch (err) {
