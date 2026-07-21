@@ -181,9 +181,9 @@ Extract the following in STRICT JSON format:
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5",
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.2,
+      temperature: 1,
       response_format: { type: "json_object" },
     });
 
@@ -251,9 +251,9 @@ async function generateIntro({
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-5",
         messages: [{ role: "user", content: prompt }],
-        temperature: 0.8,
+        temperature: 1,
       });
 
       let content = res.choices[0].message.content.trim();
@@ -326,9 +326,9 @@ async function generateBodyPart({
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-5",
         messages: [{ role: "user", content: prompt }],
-        temperature: 0.9,
+        temperature: 1,
       });
 
       let content = res.choices[0].message.content.trim();
@@ -401,9 +401,9 @@ async function generateClosing({
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-5",
         messages: [{ role: "user", content: prompt }],
-        temperature: 0.9,
+        temperature: 1,
       });
 
       let content = res.choices[0].message.content.trim();
@@ -563,7 +563,7 @@ async function generatePromptForChunk({
   const locationsStr = storyBible?.locations?.map(l => `- ${l.name}: ${l.description}`).join('\n') || "None";
   const artStyle = storyBible?.artStyle || "Cinematic photorealistic film still, 8K detail, hyper-realistic, volumetric lighting.";
   const synopsis = storyBible?.synopsis ? `STORY SYNOPSIS:\n${storyBible.synopsis}\n` : "";
-  
+
   const prompt = `You are a cinematic production designer and prompt engineer.
 Your task is to analyze the following voiceover chunk (which is part of a sequence) and generate a highly detailed cinematic visual prompt for an image generator (like Midjourney or Stable Diffusion).
 
@@ -606,10 +606,10 @@ Return STRICT valid JSON:
     const res = await openai.chat.completions.create({
       model: "gpt-5", // Upgraded to gpt-5 as requested for advanced contextual understanding
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.3, 
+      temperature: 1,
       response_format: { type: "json_object" },
     });
-    
+
     const parsed = JSON.parse(res.choices[0].message.content.trim());
     return {
       prompt: parsed.visual_prompt,
@@ -637,14 +637,14 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
 
   let segments = narrationSegments;
   if (!segments || segments.length === 0) {
-     const words = storyScript.split(/\s+/).filter(Boolean);
-     const chunkSize = Math.ceil(words.length / count);
-     segments = Array.from({ length: count }, (_, i) => ({
-       sceneIndex: i,
-       startSec: i * 5,
-       endSec: (i + 1) * 5,
-       text: words.slice(i * chunkSize, (i + 1) * chunkSize).join(" ")
-     }));
+    const words = storyScript.split(/\s+/).filter(Boolean);
+    const chunkSize = Math.ceil(words.length / count);
+    segments = Array.from({ length: count }, (_, i) => ({
+      sceneIndex: i,
+      startSec: i * 5,
+      endSec: (i + 1) * 5,
+      text: words.slice(i * chunkSize, (i + 1) * chunkSize).join(" ")
+    }));
   }
 
   const scenePrompts = [];
@@ -654,19 +654,19 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
 
   for (let i = 0; i < segments.length; i++) {
     const chunk = segments[i];
-    logger.info(`🧠 Generating prompt for chunk ${i+1}/${segments.length}`);
-    
+    logger.info(`🧠 Generating prompt for chunk ${i + 1}/${segments.length}`);
+
     const promptData = await generatePromptForChunk({
-       chunkText: chunk.text,
-       chunkIndex: i,
-       storyBible,
-       visualSuggestions,
-       prevVisualContext,
-       prevChunkText,
-       prevCharactersInScene,
-       characterReferences,
+      chunkText: chunk.text,
+      chunkIndex: i,
+      storyBible,
+      visualSuggestions,
+      prevVisualContext,
+      prevChunkText,
+      prevCharactersInScene,
+      characterReferences,
     });
-    
+
     scenePrompts.push({
       prompt: promptData.prompt,
       charactersInScene: promptData.charactersInScene || [],
@@ -676,12 +676,12 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
       _negativePrompt: "",
       _globalNegativePrompt: storyBible?.globalNegativePrompt || ""
     });
-    
+
     prevVisualContext = promptData.visualContext;
     prevChunkText = chunk.text;
     prevCharactersInScene = promptData.charactersInScene || [];
   }
-  
+
   return { scenePrompts, castBible: storyBible?._preGeneratedBibles?.MATERIALIZED_CAST_BIBLE || null };
 }
 
@@ -691,9 +691,9 @@ async function summarizeText(text) {
     15000
   )}`;
   const result = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "gpt-5",
     messages: [{ role: "user", content: summaryPrompt }],
-    temperature: 0.5,
+    temperature: 1,
   });
   return result.choices?.[0]?.message?.content?.trim() || text.slice(0, 5000);
 }
@@ -720,9 +720,9 @@ ${script}
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5",
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.3,
+      temperature: 1,
     });
     return res.choices[0].message.content.trim() || script;
   } catch (err) {
@@ -753,9 +753,9 @@ ${narrationChunk}
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5",
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.3,
+      temperature: 1,
     });
     return res.choices[0].message.content.trim() || narrationChunk;
   } catch (err) {

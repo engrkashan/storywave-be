@@ -33,7 +33,7 @@ const ai = new GoogleGenAI({
 
 // ─── Model IDs come from config — never hardcoded here ───────────────────────
 const MODELS = {
-  PRO:   config.ai.image.primaryModel,  // Tier 1
+  PRO: config.ai.image.primaryModel,  // Tier 1
   FLASH: config.ai.image.fallbackModel, // Tier 2 — fallback only
 };
 
@@ -200,7 +200,7 @@ INSTRUCTION: Rewrite ONLY the unsafe wording in the original prompt. Return { "r
       throw new Error(`Prompt repair failed: Gemini unavailable and OPENAI_API_KEY not set. Original error: ${geminiRepairErr.message}`);
     }
 
-    const openaiModel = process.env.OPENAI_REPAIR_MODEL || config.ai.image.openaiRepairModel || "gpt-4o-mini";
+    const openaiModel = process.env.OPENAI_REPAIR_MODEL || config.ai.image.openaiRepairModel || "gpt-5";
     logger.info(`🔧 [PromptRepair/OpenAI] Scene ${sceneMeta.sceneId} — Using ${openaiModel}`);
 
     const openaiResponse = await openai.chat.completions.create({
@@ -208,9 +208,9 @@ INSTRUCTION: Rewrite ONLY the unsafe wording in the original prompt. Return { "r
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemInstruction },
-        { role: "user",   content: userMessage },
+        { role: "user", content: userMessage },
       ],
-      temperature: 0.3,
+      temperature: 1,
       max_tokens: 2048,
     });
 
@@ -615,7 +615,7 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
   // B5: if a stickyTierRef was already downgraded to FLASH for this batch, start
   // directly at FLASH so the whole batch is rendered by one consistent model.
   let tierChain = [
-    { name: "PRO",   modelId: MODELS.PRO },
+    { name: "PRO", modelId: MODELS.PRO },
     { name: "FLASH", modelId: MODELS.FLASH },
   ];
   if (stickyTierRef && stickyTierRef.tier === "FLASH") {
