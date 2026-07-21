@@ -129,7 +129,7 @@ async function ttsFishAudio(text, referenceId) {
     );
     const audio = await fishAudio.textToSpeech.convert(
       { text, reference_id: referenceId, format: "mp3" },
-      "s1",
+      "s2.1-pro-free",
     );
     return Buffer.from(await new Response(audio).arrayBuffer());
   } catch (error) {

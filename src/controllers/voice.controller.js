@@ -189,7 +189,7 @@ export async function getVoicePreview(req, res) {
                     text: emotionalText,
                     reference_id: voiceId,
                 },
-                "s1" // Use S1 model for better emotion support
+                "s2.1-pro-free" // Use S1 model for better emotion support
             );
 
             // Convert ReadableStream to Buffer
