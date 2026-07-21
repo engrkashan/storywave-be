@@ -416,7 +416,7 @@ async function _runWorkflow({
     if (shouldGenerateImage) {
       logger.info("Step 2.1: Extracting story metadata and master prompts...");
       const stopMetaTimer = perf?.start("metadata", "Extract metadata & master prompts");
-      
+
       // ── Upload user-supplied character reference images ────────────────────
       //
       // Two code paths (backward compatible):
@@ -464,7 +464,7 @@ async function _runWorkflow({
 
       // Extract reference traits for extractStoryMetadata from uploaded references
       let localRefTraits = [];
-      
+
       if (uploadedMultiRefs.length > 0) {
         logger.info(`Extracting physical traits from ${uploadedMultiRefs.length} reference images...`);
         const traitPromises = uploadedMultiRefs.map(async (ref) => {
@@ -485,19 +485,19 @@ async function _runWorkflow({
           localRefTraits.push({ characterName: "Main Character", ...traits });
         }
       }
-      
+
       referenceTraits = localRefTraits.length > 0 ? localRefTraits : null;
 
       const PROJECT_SPEC = await runModule1_InputNormalization({
         title, sourceType: storyType || "script", storyScript: script, imageCount,
-        aspectRatio, visualSuggestions
+        aspectRatio, visualSuggestions, storyGuidelines
       });
       const STORY_WORLD_MAP = await runModule2_StoryWorldAnalysis(script, PROJECT_SPEC);
       const MATERIALIZED_CAST_BIBLE = await runModule3_MaterializedCastBible(STORY_WORLD_MAP, referenceTraits);
       const MATERIALIZED_VISUAL_WORLD_BIBLE = await runModule4_VisualWorldBible(STORY_WORLD_MAP, PROJECT_SPEC);
 
       const { graph: SCENE_GRAPH } = await generateSceneGraph(script, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE, referenceTraits);
-      
+
       storyMetadata = {
         characters: MATERIALIZED_CAST_BIBLE.characters || [],
         locations: MATERIALIZED_VISUAL_WORLD_BIBLE.locations || [],
@@ -779,10 +779,9 @@ async function _runWorkflow({
         logger.info(
           shouldGeneratePortraits
             ? "Step 2.2: Skipping portrait generation (no characters in story metadata)."
-            : `Step 2.2: Skipping portrait generation — ${
-              uploadedMediaUrl
-                ? "direct media upload provided (AI generation bypassed)"
-                : `${characterReferences.length} user character reference(s) provided (likeness already anchored)`
+            : `Step 2.2: Skipping portrait generation — ${uploadedMediaUrl
+              ? "direct media upload provided (AI generation bypassed)"
+              : `${characterReferences.length} user character reference(s) provided (likeness already anchored)`
             }.`,
         );
       }
@@ -889,7 +888,7 @@ async function _runWorkflow({
       // Use imageCount (or dynamic count from audio duration) as the target scene count.
       const narrationDuration = await getAudioDuration(narrationWavPath);
       const { words: timelineWords } = JSON.parse(transcriptContent);
-      const targetSceneCount = storyMetadata?.targetSceneCount || imageCount || Math.max(5, Math.ceil(narrationDuration / 5));
+      const targetSceneCount = imageCount || Math.max(5, Math.ceil(narrationDuration / 5));
       // script variable holds the original text at this point. 
       const masterTimeline = buildMasterTimeline(timelineWords, narrationDuration, targetSceneCount, script);
       const timelinePath = path.join(workflowTempDir, "timeline.json");
@@ -1032,11 +1031,11 @@ async function _runWorkflow({
           if (mediaType === "single_image") {
             // Build a rich single-image prompt using story metadata when available
             const mainChar = storyMetadata?.characters?.[0];
-            const mainLoc  = storyMetadata?.locations?.[0];
+            const mainLoc = storyMetadata?.locations?.[0];
             const singleImagePrompt = imagePrompt ||
               [
                 mainChar ? `CHARACTER: ${mainChar.name}. ${mainChar.appearance || ""}` : "",
-                mainLoc  ? `LOCATION: ${mainLoc.name}. ${mainLoc.description || ""}` : "",
+                mainLoc ? `LOCATION: ${mainLoc.name}. ${mainLoc.description || ""}` : "",
                 storyMetadata?.synopsis ? `STORY CONTEXT: ${storyMetadata.synopsis}` : "",
                 "Cinematic photorealistic film still, 8K, hyper-realistic, volumetric lighting. NO TEXT in image.",
               ].filter(Boolean).join(" ").trim() ||
@@ -1080,7 +1079,7 @@ async function _runWorkflow({
             const checkpointManager = new CheckpointManager(workflowTempDir);
 
             const isVertical = currentRatio === "9:16";
-            const width  = isVertical ? 1080 : 1920;
+            const width = isVertical ? 1080 : 1920;
             const height = isVertical ? 1920 : 1080;
 
             // Scene boundary lookup from Master Timeline (replaces equal-division arithmetic)
@@ -1092,14 +1091,14 @@ async function _runWorkflow({
               return { startTime: index * approxDuration, duration: approxDuration };
             };
 
-            const segmentFiles  = new Array(scenePrompts.length).fill(null);
+            const segmentFiles = new Array(scenePrompts.length).fill(null);
             const segmentPromises = [];
 
             const onImageReady = async (imagePath, i) => {
               const segmentPromise = (async () => {
-                const sceneId       = `scene_${String(i + 1).padStart(3, "0")}`;
-                const segmentPath   = path.join(ratioDir, `${sceneId}_seg.mp4`);
-                segmentFiles[i]     = segmentPath;
+                const sceneId = `scene_${String(i + 1).padStart(3, "0")}`;
+                const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
+                segmentFiles[i] = segmentPath;
 
                 if (checkpointManager.isRenderCompleted(sceneId) && fs.existsSync(segmentPath)) {
                   logger.info(`⏩ [Segment ${i + 1}/${scenePrompts.length}] Skipping render (Checkpoint)`);
@@ -1150,7 +1149,7 @@ async function _runWorkflow({
             for (let i = 0; i < scenePrompts.length; i++) {
               if (!segmentFiles[i]) {
                 logger.warn(`⚠️ Segment ${i + 1} was not generated. Attempting to regenerate the image...`);
-                
+
                 const fallbackPromise = (async () => {
                   try {
                     // Try to regenerate the single image that failed
@@ -1197,7 +1196,7 @@ async function _runWorkflow({
                 fallbackPromises.push(fallbackPromise);
               }
             }
-            
+
             if (fallbackPromises.length > 0) {
               await Promise.all(fallbackPromises);
             }
@@ -1208,7 +1207,7 @@ async function _runWorkflow({
             // Step 5: Final Concat
             if (mediaItems.length > 0) {
               logger.info(`Step 5: Stitching video for ${currentRatio}...`);
-              
+
               const validSegmentFiles = segmentFiles.filter(Boolean);
               const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${validSegmentFiles.length} items)`);
               await concatSegments(validSegmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null);
