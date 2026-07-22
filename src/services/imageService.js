@@ -535,37 +535,28 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
   let inlineImages = [];
   try {
     if (sceneCharacters && sceneCharacters.length > 0) {
-      // Tier 1: attempt exact ID match for each character in scene
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       let matchedRefs = sceneCharacters
-        .map((charId) => characterReferences.find((c) => c.id === charId))
+        .map((charItem) => {
+          const charId = typeof charItem === "object" ? charItem.id || charItem.name : charItem;
+          const target = norm(charId);
+          if (!target) return null;
+          return characterReferences.find((c) => {
+            const cId = norm(c.id);
+            const cName = norm(c.name);
+            return cId === target || cName === target || (target.length > 2 && (cId.includes(target) || cName.includes(target) || target.includes(cName)));
+          });
+        })
         .filter(Boolean);
 
-      // Tier 1b: exact name match
-      if (matchedRefs.length === 0) {
-        matchedRefs = sceneCharacters
-          .map((charId) => characterReferences.find((c) => c.name === charId))
-          .filter(Boolean);
+      // Deduplicate
+      matchedRefs = Array.from(new Set(matchedRefs));
+
+      // Fallback: if single character reference exists and scene characters were provided but fuzzy match missed, use it
+      if (matchedRefs.length === 0 && characterReferences.length === 1) {
+        matchedRefs = [...characterReferences];
       }
 
-      // Tier 1c: Normalized fuzzy match (guards against case/spaces/underscore differences)
-      if (matchedRefs.length === 0) {
-        const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-        matchedRefs = sceneCharacters
-          .map((charId) => {
-            const target = norm(charId);
-            if (!target) return null;
-            return characterReferences.find((c) => {
-              const cId = norm(c.id);
-              const cName = norm(c.name);
-              return cId === target || cName === target || (target.length > 3 && (cId.includes(target) || cName.includes(target) || target.includes(cName)));
-            });
-          })
-          .filter(Boolean);
-      }
-
-      // IDENTITY FIX (B1/B2): only inject the refs that actually belong to this
-      // scene's characters. If none matched, generate WITHOUT references (text-only)
-      // rather than dumping every character portrait in (which blends identities).
       const refsToUse = matchedRefs;
 
       if (matchedRefs.length === 0 && characterReferences.length > 0) {
@@ -953,9 +944,28 @@ export async function generateMultiImages(
       perFrameRefs = validSelectedRefs;
     } else if (sceneCharacters.length > 0 && characterReferences.length > 0) {
       // FIX B (empty-list fallback): derive refs strictly from this scene's own characters.
-      perFrameRefs = sceneCharacters
-        .map((charId) => characterReferences.find((c) => c.id === charId || c.name === charId))
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      let derivedRefs = sceneCharacters
+        .map((charItem) => {
+          const charId = typeof charItem === "object" ? charItem.id || charItem.name : charItem;
+          const target = norm(charId);
+          if (!target) return null;
+          return characterReferences.find((c) => {
+            const cId = norm(c.id);
+            const cName = norm(c.name);
+            return cId === target || cName === target || (target.length > 2 && (cId.includes(target) || cName.includes(target) || target.includes(cName)));
+          });
+        })
         .filter(Boolean);
+
+      derivedRefs = Array.from(new Set(derivedRefs));
+
+      if (derivedRefs.length === 0 && characterReferences.length === 1) {
+        derivedRefs = [...characterReferences];
+      }
+
+      perFrameRefs = derivedRefs;
+
       if (perFrameRefs.length > 0) {
         logger.info(
           `🔗 [MultiImages] ${sceneId} — FIX B fallback: derived ${perFrameRefs.length} ref(s) from sceneCharacters ` +

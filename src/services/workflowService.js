@@ -699,19 +699,17 @@ async function _runWorkflow({
       // 2.2 Generate Character Portraits for all story characters not yet covered
       // SKIP portrait generation when:
       //   a) User uploaded direct media (uploadedMediaUrl) — AI bypassed entirely
-      //   b) User provided any character reference (single or multi) — likeness anchored
-      const hasAnyUserReference =
-        uploadedMultiRefs.length > 0 || !!userCharacterReferenceBase64;
-      const shouldGeneratePortraits = !uploadedMediaUrl && !hasAnyUserReference;
+      //   b) Individual character already has a user-supplied reference in characterReferences[]
+      const shouldGeneratePortraits = !uploadedMediaUrl;
 
       if (shouldGeneratePortraits && (
         mediaType === "video" ||
         mediaType === "multi_image" ||
         mediaType === "single_image"
       )) {
-        logger.info("Step 2.2: Generating AI character portraits for consistency...");
+        logger.info("Step 2.2: Generating AI character portraits for characters without reference images...");
         for (const char of charactersList) {
-          if (characterReferences.find((c) => c.id === char.id)) continue; // Skip if already assigned
+          if (characterReferences.find((c) => c.id === char.id || nameMatch(c.name, char.name))) continue; // Skip if already assigned
 
           await checkCancelled(workflow.id); // ✅ Check between each character portrait
 
