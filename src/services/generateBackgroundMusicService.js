@@ -6,34 +6,43 @@ import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("MusicService");
 
-export async function generateBackgroundMusic({ title, storyType, tempDir }) {
+export async function generateBackgroundMusic({
+  title,
+  storyType,
+  musicStyle: customMusicStyle,
+  tempDir,
+}) {
   const apiUrl = "https://api.sunoapi.org/api/v1/generate";
   const headers = {
     Authorization: `Bearer ${process.env.SUNO_API_KEY}`,
     "Content-Type": "application/json",
   };
 
-  let musicStyle = "slow ambient background music, calm, emotional, cinematic";
+  let musicStyle = customMusicStyle?.trim();
 
-  if (storyType?.toLowerCase().includes("true_crime")) {
-    musicStyle =
-      "slow dark ambient, suspenseful, minimalistic, cinematic tension";
-  } else if (
-    storyType?.toLowerCase().includes("storytelling") ||
-    storyType?.toLowerCase().includes("cinematic")
-  ) {
-    musicStyle =
-      "slow cinematic ambient, emotional strings, soft piano, atmospheric";
-  } else if (
-    storyType?.toLowerCase().includes("documentary") ||
-    storyType?.toLowerCase().includes("history")
-  ) {
-    musicStyle = "slow documentary ambient, thoughtful, gentle piano and pads";
-  } else if (
-    storyType?.toLowerCase().includes("howto") ||
-    storyType?.toLowerCase().includes("education")
-  ) {
-    musicStyle = "slow calm lo-fi, gentle background, motivational yet relaxed";
+  if (!musicStyle) {
+    musicStyle = "slow ambient background music, calm, emotional, cinematic";
+
+    if (storyType?.toLowerCase().includes("true_crime")) {
+      musicStyle =
+        "slow dark ambient, suspenseful, minimalistic, cinematic tension";
+    } else if (
+      storyType?.toLowerCase().includes("storytelling") ||
+      storyType?.toLowerCase().includes("cinematic")
+    ) {
+      musicStyle =
+        "slow cinematic ambient, emotional strings, soft piano, atmospheric";
+    } else if (
+      storyType?.toLowerCase().includes("documentary") ||
+      storyType?.toLowerCase().includes("history")
+    ) {
+      musicStyle = "slow documentary ambient, thoughtful, gentle piano and pads";
+    } else if (
+      storyType?.toLowerCase().includes("howto") ||
+      storyType?.toLowerCase().includes("education")
+    ) {
+      musicStyle = "slow calm lo-fi, gentle background, motivational yet relaxed";
+    }
   }
 
   const body = {
@@ -48,7 +57,7 @@ export async function generateBackgroundMusic({ title, storyType, tempDir }) {
 
   try {
     logger.info(
-      `[Background Music] Generating for story type: ${storyType || "general"}`,
+      `[Background Music] Generating with style: "${musicStyle}" (story type: ${storyType || "general"})`,
     );
 
     // Step 1: Submit generation request

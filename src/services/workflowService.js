@@ -134,6 +134,7 @@ export async function runScheduledWorkflows() {
       mediaType: meta.mediaType || "single_image",
       imageCount: meta.imageCount || 5,
       backgroundMusic: meta.backgroundMusic ?? true,
+      backgroundMusicStyle: meta.backgroundMusicStyle || null,
       soundEffects: meta.soundEffects ?? false,
       aspectRatio: meta.aspectRatio || "16:9",
       dualPlatform: meta.dualPlatform || false,
@@ -245,6 +246,7 @@ async function _runWorkflow({
   mediaType = "single_image",
   imageCount = 5,
   backgroundMusic = true,
+  backgroundMusicStyle = null,
   soundEffects = false,
   aspectRatio = "16:9",
   dualPlatform = false,
@@ -303,6 +305,7 @@ async function _runWorkflow({
           mediaType,
           imageCount,
           backgroundMusic,
+          backgroundMusicStyle,
           aspectRatio,
           dualPlatform,
           series,
@@ -816,6 +819,7 @@ async function _runWorkflow({
       const musicPath = await generateBackgroundMusic({
         title,
         storyType,
+        musicStyle: backgroundMusicStyle,
         tempDir: workflowTempDir,
       });
       stopMusicTimer?.();
