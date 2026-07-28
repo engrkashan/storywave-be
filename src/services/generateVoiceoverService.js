@@ -105,17 +105,36 @@ async function ttsElevenLabs(text, voiceId) {
 
 async function sfxElevenLabs(text) {
   try {
-    logger.info(`[ElevenLabs SFX] Generating: "${text}"`);
+    const slug = (text || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .substring(0, 50);
+
+    const cacheDir = path.join(process.cwd(), "public", "sfx_cache");
+    fs.mkdirSync(cacheDir, { recursive: true });
+
+    const cachePath = path.join(cacheDir, `${slug || "sfx"}.mp3`);
+
+    if (fs.existsSync(cachePath)) {
+      logger.info(`[SFX Cache Hit] Using cached SFX for "${text}" -> ${cachePath}`);
+      return fs.readFileSync(cachePath);
+    }
+
+    logger.info(`[ElevenLabs SFX] Generating from API: "${text}"`);
     const audioStream = await elevenlabs.textToSoundEffects.convert({
       text,
-      duration_seconds: 12,
+      duration_seconds: 4,
     });
 
     const chunks = [];
     for await (const chunk of audioStream) {
       chunks.push(chunk);
     }
-    return Buffer.concat(chunks);
+    const buffer = Buffer.concat(chunks);
+    fs.writeFileSync(cachePath, buffer);
+    logger.info(`[SFX Cached] Saved to cache: ${cachePath}`);
+    return buffer;
   } catch (error) {
     logger.error(`[ElevenLabs] SFX Error payload: text="${text}"`);
     throw new Error(`ElevenLabs SFX failed: ${error.message}`);
@@ -282,7 +301,7 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
       logger.info(`  [${i + 1}/${segments.length}] type=${segment.type} (Dispatched)`);
 
       try {
-        // ── SFX segment (ElevenLabs only) ──────────────────────────────────────
+        // ── SFX segment ────────────────────────────────────────────────────────
         if (segment.type === "sfx") {
           const sfxBuf = await sfxElevenLabs(segment.content);
           const sfxPath = path.join(tempDir, `sfx_${Date.now()}_part_${i}.mp3`);
@@ -306,11 +325,10 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
         );
         fs.writeFileSync(chunkPath, buffer);
 
-        let durationMs = 0;
-        if (isElevenLabs) {
-          const dur = await getAudioDuration(chunkPath);
-          durationMs = dur * 1000;
-        }
+        // Always compute exact audio duration for precise SFX timeline alignment & sync across all providers
+        const dur = await getAudioDuration(chunkPath);
+        const durationMs = dur * 1000;
+
         return { type: "text", path: chunkPath, durationMs };
       } catch (err) {
         logger.error(`❌ Error generating chunk ${i + 1}: ${err.message}`);
@@ -327,22 +345,21 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
         logger.info(`  🎵 SFX queued at ${(currentDelayMs / 1000).toFixed(2)}s: "${res.content}"`);
       } else if (res.type === "text") {
         chunkFiles.push(res.path);
-        if (isElevenLabs) {
-          currentDelayMs += res.durationMs;
-          logger.info(`  📏 Chunk duration: ${(res.durationMs / 1000).toFixed(2)}s → timeline at ${(currentDelayMs / 1000).toFixed(2)}s`);
-        }
+        currentDelayMs += res.durationMs;
+        logger.info(`  📏 Chunk duration: ${(res.durationMs / 1000).toFixed(2)}s → timeline at ${(currentDelayMs / 1000).toFixed(2)}s`);
       }
     }
 
     // ── Merge narration chunks ────────────────────────────────────────────────
-    const mainNarrationPath = isElevenLabs
+    const mainNarrationPath = sfxLayers.length > 0
       ? path.join(tempDir, `main_narration_${Date.now()}.mp3`)
       : localPath;
 
     await mergeAudioFiles(chunkFiles, mainNarrationPath);
 
-    // ── Mix SFX layers into narration (ElevenLabs only) ──────────────────────
-    if (isElevenLabs) {
+    // ── Mix SFX layers into narration if SFX exist ───────────────────────────
+    if (sfxLayers.length > 0) {
+      logger.info(`🔊 Mixing ${sfxLayers.length} SFX layers into narration track...`);
       await mixAudioFiles(mainNarrationPath, sfxLayers, localPath);
 
       if (fs.existsSync(mainNarrationPath)) fs.unlinkSync(mainNarrationPath);

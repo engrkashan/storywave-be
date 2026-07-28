@@ -708,15 +708,16 @@ async function summarizeText(text) {
  * where they add value to the storytelling.
  */
 export async function enhanceScriptWithSoundEffects(script) {
-  logger.info("🔊 Enhancing script with ElevenLabs sound effects...");
-  const prompt = `You are a cinematic audio director. Your task is to enhance the provided script by adding background sound-effect cues.
+  logger.info("🔊 Enhancing script with high-impact sound effect cues...");
+  const prompt = `You are a world-class cinematic audio director. Your task is to enhance the provided script by inserting concise sound-effect cues.
 
-RULES:
-1. The original content, meaning, tone, and narrative flow of the script MUST remain perfectly unchanged. Do NOT rewrite, add, or remove any narration text.
-2. Insert sound-effect cues in square brackets immediately after the specific word or phrase they correspond to (e.g., He swung the hammer [heavy thud] down.).
-3. Focus on QUALITY over QUANTITY. Create only special, impactful sounds like a roaring fire, a tribal drum beat, or a gunshot, depending on the context. Do NOT add constant ambient noises.
-4. Only add sound effects where they significantly improve the listening experience.
-5. Output ONLY the enhanced script. No explanations or extra text.
+CRITICAL QUALITY RULES:
+1. PRESERVE NARRATION PERFECTLY: Do NOT rewrite, modify, or delete any words of the original narration text.
+2. SELECT ONLY CLEAR, IMPACTFUL SOUND EFFECTS: Insert cues ONLY for explicit, punchy sound actions (e.g. [door slam], [loud gunshot], [thunderclap], [glass shattering], [sword clash], [tires screeching], [heavy explosion], [car crash]).
+3. NEVER ADD WEAK OR AMBIGUOUS SOUNDS: Do NOT add cues for subtle, vague, or human bodily noises such as [gasp], [sigh], [breathing], [walking], [rustling], [thinking], [wind blowing].
+4. MAXIMUM 1-3 CUES PER SCRIPT: Focus on maximum quality over quantity. If there are no major dramatic sound events in the text, return the script completely unchanged without adding any cues.
+5. PLACEMENT: Insert the bracketed cue in square brackets immediately after the specific action word it accompanies (e.g., The thunder roared [thunderclap] across the valley.).
+6. Output ONLY the resulting script. No explanations.
 
 SCRIPT:
 ${script}
@@ -740,13 +741,15 @@ ${script}
  */
 export async function enhanceSceneWithSoundEffects(scenePrompt, narrationChunk) {
   logger.info("🔊 Enhancing scene narration with visual context sound effects...");
-  const prompt = `You are a cinematic audio director. Your task is to enhance the provided narration chunk by adding background sound-effect cues that perfectly match the visual scene.
+  const prompt = `You are a world-class cinematic audio director. Your task is to enhance the provided narration chunk by adding clear, high-impact sound-effect cues matching the visual scene.
 
-RULES:
-1. The original content, meaning, tone, and narrative flow of the narration MUST remain perfectly unchanged. Do NOT rewrite, add, or remove any narration text.
-2. Insert sound-effect cues in square brackets immediately after the specific word or phrase they correspond to (e.g., The cannon fired [loud explosion] with immense force.).
-3. The sound effects MUST MATCH the visual scene described below. Focus on QUALITY over QUANTITY. Create only special, impactful sounds (e.g., fire crackling, drum beat, gunshot) that directly align with the visual action. Do NOT add generic ambient noise.
-4. Output ONLY the enhanced narration. No explanations or extra text.
+CRITICAL QUALITY RULES:
+1. PRESERVE NARRATION PERFECTLY: Do NOT rewrite, modify, or delete any words of the original narration text.
+2. SELECT ONLY CLEAR, IMPACTFUL SOUND EFFECTS: Insert cues ONLY for explicit, punchy sound actions (e.g. [door slam], [loud gunshot], [thunderclap], [glass shattering], [sword clash], [tires screeching], [heavy explosion]).
+3. NEVER ADD WEAK OR AMBIGUOUS SOUNDS: Do NOT add cues for subtle, vague, or human bodily noises such as [gasp], [sigh], [breathing], [walking], [rustling], [thinking], [wind blowing].
+4. MAXIMUM 1 CUE PER SCENE: Only add a cue if there is a distinct, high-impact visual action. If none, return the narration chunk unchanged.
+5. PLACEMENT: Insert the bracketed cue in square brackets immediately after the specific action word it accompanies.
+6. Output ONLY the resulting narration. No explanations.
 
 VISUAL SCENE DESCRIPTION:
 ${scenePrompt}
