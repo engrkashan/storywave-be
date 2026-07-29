@@ -429,22 +429,29 @@ async function _runWorkflow({
       //      → upload once, assign to main character (unchanged behaviour)
 
       if (Array.isArray(userMultiCharacterReferences) && userMultiCharacterReferences.length > 0) {
-        logger.info(`User provided ${userMultiCharacterReferences.length} multi-character reference image(s). Uploading...`);
+        logger.info(`User provided ${userMultiCharacterReferences.length} multi-character reference image(s). Processing...`);
         for (const entry of userMultiCharacterReferences) {
-          if (!entry.base64) continue;
-          try {
-            const upload = await cloudinary.uploader.upload(entry.base64, {
-              folder: "character-references",
-              resource_type: "image",
-              public_id: `user-char-ref-${workflow.id}-${(entry.name || "char").replace(/\s+/g, "-").toLowerCase()}-${Date.now()}`,
-              overwrite: true,
-            });
-            uploadedMultiRefs.push({ name: entry.name || "", url: upload.secure_url });
-            logger.info(`✅ Multi-char ref uploaded: "${entry.name}" → ${upload.secure_url}`);
-          } catch (err) {
-            logger.error(`⚠️ Failed to upload character ref for "${entry.name}": ${err.message}`);
-            // Fallback: use inline base64 so this character still has a reference
-            uploadedMultiRefs.push({ name: entry.name || "", url: entry.base64 });
+          const imgData = entry.url || entry.base64;
+          if (!imgData) continue;
+
+          if (typeof imgData === "string" && imgData.startsWith("http")) {
+            uploadedMultiRefs.push({ name: entry.name || "", url: imgData });
+            logger.info(`✅ Multi-char ref URL preserved: "${entry.name}" → ${imgData}`);
+          } else {
+            try {
+              const upload = await cloudinary.uploader.upload(imgData, {
+                folder: "character-references",
+                resource_type: "image",
+                public_id: `user-char-ref-${workflow.id}-${(entry.name || "char").replace(/\s+/g, "-").toLowerCase()}-${Date.now()}`,
+                overwrite: true,
+              });
+              uploadedMultiRefs.push({ name: entry.name || "", url: upload.secure_url });
+              logger.info(`✅ Multi-char ref uploaded: "${entry.name}" → ${upload.secure_url}`);
+            } catch (err) {
+              logger.error(`⚠️ Failed to upload character ref for "${entry.name}": ${err.message}`);
+              // Fallback: use inline base64/url so this character still has a reference
+              uploadedMultiRefs.push({ name: entry.name || "", url: imgData });
+            }
           }
         }
       } else if (userCharacterReferenceBase64) {
@@ -787,14 +794,22 @@ async function _runWorkflow({
         );
       }
 
-      // Store uploaded multi-char refs in metadata for audit/debug
+      // Store uploaded multi-char refs and music style in metadata for audit/debug and regeneration
+      const savedCharRefs = uploadedMultiRefs.length > 0 ? uploadedMultiRefs : characterReferences;
       await prisma.workflow.update({
         where: { id: workflow.id },
         data: {
           metadata: {
             ...(workflow.metadata || {}),
-            characterReferences,
+            characterReferences: savedCharRefs,
+            uploadedCharacterReferences: uploadedMultiRefs,
             userCharacterRefNames: uploadedMultiRefs.map(r => r.name).filter(Boolean),
+            backgroundMusicStyle: backgroundMusicStyle || (workflow.metadata && workflow.metadata.backgroundMusicStyle) || null,
+            storyMetadata: {
+              ...(storyMetadata || {}),
+              characterReferences: savedCharRefs,
+              backgroundMusicStyle: backgroundMusicStyle || null,
+            },
           },
         },
       });
