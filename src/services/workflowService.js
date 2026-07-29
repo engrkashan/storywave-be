@@ -528,24 +528,13 @@ async function _runWorkflow({
     }
 
     // Auto-enhance script with sound effects cues if the user enabled the toggle.
-    // For multi_image, SFX enhancement now runs AFTER transcription so the exact
-    // Whisper narration segments drive scene boundaries (not estimated word counts).
-    // For all other media types (single_image, video, podcast), enhance the script here.
     if (soundEffects === true) {
-      if (mediaType === "video") {
-        logger.info("Step 2.5: Skipping sound effects because mediaType is video (SFX not needed).");
-      } else if (shouldGenerateImage && mediaType === "multi_image" && !uploadedMediaUrl) {
-        logger.info("Step 2.5: SFX for multi_image will be applied after transcription (post-Step 5) for sync accuracy.");
-        // No-op here: SFX enhancement for multi_image is deferred to after Whisper transcription
-        // so scene boundaries come from actual audio timestamps, not estimated word counts.
-      } else {
-        logger.info(
-          "Step 2.5: Enhancing script with sound-effect cues (soundEffects toggle is ON)...",
-        );
-        const stopSfxScriptTimer = perf?.start("sfx", "Enhance script with sound effects");
-        script = await enhanceScriptWithSoundEffects(script);
-        stopSfxScriptTimer?.();
-      }
+      logger.info(
+        "Step 2.5: Enhancing script with sound-effect cues (soundEffects toggle is ON)...",
+      );
+      const stopSfxScriptTimer = perf?.start("sfx", "Enhance script with sound effects");
+      script = await enhanceScriptWithSoundEffects(script);
+      stopSfxScriptTimer?.();
     }
 
     const story = await prisma.story.create({

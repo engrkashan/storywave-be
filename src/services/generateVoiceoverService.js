@@ -132,12 +132,14 @@ async function sfxElevenLabs(text) {
       chunks.push(chunk);
     }
     const buffer = Buffer.concat(chunks);
-    fs.writeFileSync(cachePath, buffer);
-    logger.info(`[SFX Cached] Saved to cache: ${cachePath}`);
+    if (buffer && buffer.length > 0) {
+      fs.writeFileSync(cachePath, buffer);
+      logger.info(`[SFX Cached] Saved to cache: ${cachePath}`);
+    }
     return buffer;
   } catch (error) {
-    logger.error(`[ElevenLabs] SFX Error payload: text="${text}"`);
-    throw new Error(`ElevenLabs SFX failed: ${error.message}`);
+    logger.error(`[ElevenLabs SFX Error] payload: text="${text}" — ${error.message}`);
+    return Buffer.alloc(0);
   }
 }
 
@@ -304,9 +306,12 @@ export async function generateVoiceover(script, filename, voiceObj, tempDir) {
         // ── SFX segment ────────────────────────────────────────────────────────
         if (segment.type === "sfx") {
           const sfxBuf = await sfxElevenLabs(segment.content);
-          const sfxPath = path.join(tempDir, `sfx_${Date.now()}_part_${i}.mp3`);
-          fs.writeFileSync(sfxPath, sfxBuf);
-          return { type: "sfx", path: sfxPath, content: segment.content };
+          if (sfxBuf && sfxBuf.length > 0) {
+            const sfxPath = path.join(tempDir, `sfx_${Date.now()}_part_${i}.mp3`);
+            fs.writeFileSync(sfxPath, sfxBuf);
+            return { type: "sfx", path: sfxPath, content: segment.content };
+          }
+          return null;
         }
 
         // ── Text segment ────────────────────────────────────────────────────────
