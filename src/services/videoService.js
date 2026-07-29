@@ -464,9 +464,11 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
         const promptObj = prompts[i];
         const uniquePrompt = typeof promptObj === "object" ? promptObj.prompt : promptObj;
         const sceneCharacters = typeof promptObj === "object" ? promptObj.charactersInScene || [] : [];
-        const finalPrompt = commonPrompt ? `${commonPrompt} UNIQUE SCENE DETAIL: ${uniquePrompt}` : uniquePrompt;
+        const finalPrompt = (commonPrompt && !uniquePrompt.includes("STYLE & TONAL ENVELOPE"))
+          ? `${uniquePrompt}\n\nSTYLE & ATMOSPHERE: ${commonPrompt}`
+          : uniquePrompt;
 
-        logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Veo 3.1 Fast...`);
+        logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Google Veo 3.1...`);
 
         const videoConfig = {
           model: "veo-3.1-generate-preview",

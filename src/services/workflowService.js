@@ -32,6 +32,8 @@ import {
   generateMasterPrompts,
   generateCommonVisualPrompt,
   analyzeReferenceImage,
+  buildSceneObjects,
+  planVideoPrompts,
 } from "./promptService.js";
 import {
   runModule1_InputNormalization,
@@ -1114,8 +1116,13 @@ async function _runWorkflow({
                 charactersInScene: mainChar?.id ? [mainChar.id] : [],
               },
             ];
+          } else if (mediaType === "video") {
+            // Video mode: generate specialized motion prompts for Google Veo
+            const sharedSceneObjects = buildSceneObjects(preGeneratedScenePrompts || [], storyMetadata, narrationSegments);
+            scenePrompts = planVideoPrompts(sharedSceneObjects, storyMetadata, { aspectRatio: currentRatio });
+            logger.info(`🎬 Using ${scenePrompts.length} Video-Planned motion prompts for Veo`);
           } else {
-            // multi_image: use pre-generated prompts built alongside Master Timeline
+            // multi_image: use pre-generated prompts built alongside Master Timeline (100% untouched)
             scenePrompts = preGeneratedScenePrompts || [];
             logger.info(`Using ${scenePrompts.length} Whisper-aligned scene prompts`);
           }
