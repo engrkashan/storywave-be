@@ -72,15 +72,15 @@ ${wordsPreview.slice(0, 10000)}
 
 DESIGN INSTRUCTIONS & RULES:
 1. NARRATIVE & SCENE ANALYSIS: Analyze the story step-by-step for actions, objects, environment, emotional state, tension level, camera perspective, and pacing.
-2. AMBIENT LAYERS: Identify continuous background ambience for scenes (e.g. room tone, wind draft, rain on roof, insects, city traffic, horror texture). Ambient layers MUST be continuous so there is NEVER dead silence.
-3. FOLEY & SOUND EVENTS (MAX 1-2 PER MINUTE):
-   - Only select the MOST CRITICAL, high-impact key sound events (e.g., gunshot, door slam, heavy footsteps, explosion, car crash, glass shatter).
-   - Do NOT select low-impact or cluttering sounds. Maximum 1 to 2 sound events PER MINUTE of narration (0 to 2 per 60 seconds). If a minute has no major sound event, return 0 events for that segment.
+2. AMBIENT LAYERS: Identify continuous background ambience for scenes (e.g. room tone, wind draft, rain on roof, insects, city traffic, horror texture). Ambient layers MUST be continuous so there is NEVER dead silence. Keep ambience volume subtle and soft (0.15 - 0.25).
+3. FOLEY & SOUND EVENTS (MAX 1 PER MINUTE):
+   - Select ONLY the single most critical key sound event per minute of narration (e.g. 1 event max for 1 minute, 2 events max for 2 minutes).
+   - Do NOT select low-impact or cluttering sounds. If a minute has no major dramatic sound event, return 0 events.
    - Specify 'targetStartWord' as the exact word in the narration script where the sound begins.
    - Assign 'importance': "critical", "high", "medium", or "low".
    - Assign 'priority': 1 (low) to 5 (critical, e.g. gunshot=5, door slam=4, footsteps=4).
    - Assign 'layer': "foreground", "midground", "background_ambience", or "tension_drone".
-   - Set 'fadeInSec', 'fadeOutSec', 'volume' (0.1 to 1.0), 'duckMusic' (boolean), 'overlapNarration': true.
+   - Set 'fadeInSec', 'fadeOutSec', 'volume' to a lowered, subtle level (0.2 to 0.45). SFX must never overpower narration voice.
 4. MUSIC INTERACTION: Specify if background music should duck during key SFX (e.g., door creak, gunshot, whisper).
 
 Return STRICT VALID JSON in this format:
@@ -211,7 +211,7 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
           file: ambPath,
           delayMs: startSec * 1000,
           targetDurationSec: dur,
-          volume: amb.volume || 0.3,
+          volume: Math.min(0.25, amb.volume || 0.20),
           fadeInSec: amb.fadeInSec || 1.0,
           fadeOutSec: amb.fadeOutSec || 1.0,
           layer: "background_ambience",
@@ -226,8 +226,8 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
   // 2. Process & Filter Sound Events (Foley, actions, key SFX)
   const rawSfxList = soundscapePlan.sound_events || [];
 
-  // Max 1-2 sound effects per minute of audio duration
-  const maxSFXCount = Math.max(1, Math.ceil((totalDuration / 60) * 2));
+  // Strictly 1 event max per minute (60s): 1 min -> 1 SFX max, 2 mins -> 2 SFX max
+  const maxSFXCount = Math.max(1, Math.floor(totalDuration / 60) || 1);
 
   // Score candidate events by importance & priority for rate-limiting
   const sfxCandidates = rawSfxList.map((sfx, idx) => {
@@ -244,13 +244,13 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
   // Sort by highest importance/priority first
   sfxCandidates.sort((a, b) => b.importanceScore - a.importanceScore);
 
-  // Select top priority SFX respecting maxSFXCount and minimum 15s spacing between sound events
+  // Select top priority SFX respecting maxSFXCount and minimum 20s spacing between sound events
   const filteredSfxList = [];
   for (const sfx of sfxCandidates) {
     if (filteredSfxList.length >= maxSFXCount) break;
 
     const hasSpacingOverlap = filteredSfxList.some(
-      (selected) => Math.abs(selected.startSec - sfx.startSec) < 15.0
+      (selected) => Math.abs(selected.startSec - sfx.startSec) < 20.0
     );
 
     if (!hasSpacingOverlap) {
@@ -282,7 +282,7 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
           file: sfxPath,
           delayMs: startSec * 1000,
           durationSec: realDur,
-          volume: sfx.volume || 0.65,
+          volume: Math.min(0.45, sfx.volume || 0.40),
           fadeInSec: sfx.fadeInSec || 0.1,
           fadeOutSec: sfx.fadeOutSec || 0.4,
           layer: sfx.layer || "foreground",
@@ -317,7 +317,7 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
           file: tPath,
           delayMs: startSec * 1000,
           durationSec: realDur,
-          volume: t.volume || 0.45,
+          volume: Math.min(0.35, t.volume || 0.30),
           fadeInSec: t.fadeInSec || 1.0,
           fadeOutSec: t.fadeOutSec || 1.0,
           layer: t.layer || "tension_drone",

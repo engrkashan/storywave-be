@@ -81,7 +81,7 @@ export async function mixAudioFiles(
   mainFile,
   sfxLayers,
   outputFile,
-  sfxVolume = parseFloat(process.env.SFX_VOLUME || "1.2")
+  sfxVolume = parseFloat(process.env.SFX_VOLUME || "0.9")
 ) {
   return new Promise(async (resolve, reject) => {
     if (!sfxLayers || sfxLayers.length === 0) {
@@ -215,7 +215,7 @@ export async function mixCinematicSoundscape({
 
       const delayMs = Math.round(asset.delayMs || 0);
       const delayStr = `${delayMs}|${delayMs}`;
-      const vol = asset.volume || 0.5;
+      const vol = asset.volume || 0.35;
       const fadeIn = asset.fadeInSec || 0.1;
       const fadeOut = asset.fadeOutSec || 0.4;
 
@@ -235,9 +235,9 @@ export async function mixCinematicSoundscape({
       filterComplex += `${sfxOutputs[0]}anull[mixed_soundscape];`;
     }
 
-    // Final mix with narration & optional music
+    // Final mix with narration & optional music (soft ambient music at volume=0.08)
     if (hasMusic) {
-      filterComplex += `[1:a]volume=0.15[bg_music];[bg_music][0:a]sidechaincompress=threshold=0.03:ratio=5:attack=20:release=300[ducked_music];[0:a][ducked_music][mixed_soundscape]amix=inputs=3:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-0.5dB`;
+      filterComplex += `[1:a]volume=0.08[bg_music];[bg_music][0:a]sidechaincompress=threshold=0.03:ratio=5:attack=20:release=300[ducked_music];[0:a][ducked_music][mixed_soundscape]amix=inputs=3:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-0.5dB`;
     } else {
       filterComplex += `[0:a][mixed_soundscape]amix=inputs=2:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-0.5dB`;
     }
