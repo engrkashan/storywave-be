@@ -106,7 +106,7 @@ async function ttsElevenLabs(text, voiceId) {
   }
 }
 
-async function sfxElevenLabs(text) {
+export async function sfxElevenLabs(text) {
   try {
     const slug = (text || "")
       .toLowerCase()
