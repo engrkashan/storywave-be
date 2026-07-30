@@ -81,7 +81,7 @@ export async function mixAudioFiles(
   mainFile,
   sfxLayers,
   outputFile,
-  sfxVolume = parseFloat(process.env.SFX_VOLUME || "1")
+  sfxVolume = parseFloat(process.env.SFX_VOLUME || "1.2")
 ) {
   return new Promise(async (resolve, reject) => {
     if (!sfxLayers || sfxLayers.length === 0) {
@@ -91,16 +91,10 @@ export async function mixAudioFiles(
     }
 
     let command = ffmpeg().input(mainFile);
-
     let filterComplex = "";
-
-    // 1. Split main narration for sidechain compression
-    // [main_mix] will be mixed at the end. [main_sc] acts as the sidechain trigger.
-    filterComplex += `[0:a]asplit=2[main_mix][main_sc];`;
-
     const delayOutputs = [];
 
-    // 2. Process each SFX layer with cinematic fading and EQ
+    // Process each SFX layer with clean fade transitions & exact delay positioning
     for (let i = 0; i < sfxLayers.length; i++) {
       const layer = sfxLayers[i];
       command = command.input(layer.file);
@@ -112,35 +106,28 @@ export async function mixAudioFiles(
       // adelay positions the SFX at exactly the word timestamp (stereo: left|right)
       const delayStr = `${Math.round(layer.delayMs)}|${Math.round(layer.delayMs)}`;
 
-      // Calculate fade-out start to avoid abrupt cut-offs.
-      const fadeOutStart = Math.max(0, sfxDuration - 0.4);
+      // Calculate fade-out start to avoid abrupt cut-offs
+      const fadeOutStart = Math.max(0, sfxDuration - 0.3);
 
-      // Immediate attack (0.05s fade-in) for 100% sync alignment on the exact word timestamp.
-      // Clean 0.4s fade-out near the end of clip. Boosted sound effects volume for high-impact cinematic feel.
       const sfxFilters = [
         `volume=${sfxVolume}`,
-        `equalizer=f=1000:width_type=o:width=2:g=-6`,
-        `afade=t=in:st=0:d=0.05`,
-        `afade=t=out:st=${fadeOutStart}:d=0.4`,
+        `afade=t=in:st=0:d=0.03`,
+        `afade=t=out:st=${fadeOutStart}:d=0.3`,
         `adelay=${delayStr}`
       ].join(",");
 
       filterComplex += `[${inputIdx}:a]${sfxFilters}[${delayOutput}];`;
     }
 
-    // 3. Mix all SFX layers together before ducking
+    // Combine all SFX layers
     if (sfxLayers.length > 1) {
       filterComplex += `${delayOutputs.join("")}amix=inputs=${sfxLayers.length}:normalize=0[mixed_sfx];`;
     } else {
-      filterComplex += `${delayOutputs[0]}anull[mixed_sfx];`; // Simple passthrough if only 1 SFX
+      filterComplex += `${delayOutputs[0]}anull[mixed_sfx];`;
     }
 
-    // 4. Duck the mixed SFX against the main narration using sidechaincompress
-    // Boosted threshold 0.12 and ratio 4 ensures SFX remains loud, clear, and prominent alongside narration.
-    filterComplex += `[mixed_sfx][main_sc]sidechaincompress=threshold=0.12:ratio=4:attack=20:release=400[ducked_sfx];`;
-
-    // 5. Final cinematic mix with alimiter to prevent clipping
-    filterComplex += `[main_mix][ducked_sfx]amix=inputs=2:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-1dB`;
+    // Mix narration track [0:a] directly with [mixed_sfx] using amix and alimiter to keep audio clear and prevent clipping
+    filterComplex += `[0:a][mixed_sfx]amix=inputs=2:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-0.5dB`;
 
     command
       .complexFilter(filterComplex)

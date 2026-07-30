@@ -55,12 +55,15 @@ function cleanScript(script, preserveEmotions = false) {
 }
 
 function chunkBySentences(text, maxChunkSize = 300) {
+  if (!text || !text.trim()) return [];
   const chunks = [];
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+  // Match full sentences including terminal punctuation, OR trailing text without punctuation
+  const sentences = text.match(/[^.!?]+(?:[.!?]+|\s*$)/g) || [text];
   let currentChunk = "";
 
   for (const sentence of sentences) {
     const trimmed = sentence.trim();
+    if (!trimmed) continue;
     if (
       currentChunk &&
       currentChunk.length + trimmed.length + 1 > maxChunkSize
@@ -73,7 +76,7 @@ function chunkBySentences(text, maxChunkSize = 300) {
   }
 
   if (currentChunk.trim()) chunks.push(currentChunk.trim());
-  return chunks.length > 0 ? chunks : [text];
+  return chunks.length > 0 ? chunks : [text.trim()];
 }
 
 // ─── Per-provider TTS chunk functions ─────────────────────────────────────────
@@ -121,10 +124,21 @@ async function sfxElevenLabs(text) {
       return fs.readFileSync(cachePath);
     }
 
-    logger.info(`[ElevenLabs SFX] Generating from API: "${text}"`);
+    // Dynamic duration depending on SFX type
+    let durationSeconds = 3;
+    const lower = (text || "").toLowerCase();
+    if (lower.includes("gunshot") || lower.includes("shot") || lower.includes("buzz") || lower.includes("click") || lower.includes("beep") || lower.includes("slam")) {
+      durationSeconds = 2;
+    } else if (lower.includes("footstep") || lower.includes("steps") || lower.includes("door") || lower.includes("creak") || lower.includes("whisper")) {
+      durationSeconds = 3.5;
+    } else if (lower.includes("thunder") || lower.includes("explosion") || lower.includes("storm") || lower.includes("wind")) {
+      durationSeconds = 4;
+    }
+
+    logger.info(`[ElevenLabs SFX] Generating from API: "${text}" (${durationSeconds}s)`);
     const audioStream = await elevenlabs.textToSoundEffects.convert({
       text,
-      duration_seconds: 4,
+      duration_seconds: durationSeconds,
     });
 
     const chunks = [];

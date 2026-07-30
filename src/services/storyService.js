@@ -704,20 +704,20 @@ async function summarizeText(text) {
 
 /**
  * Automatically analyze the script context and generate an enhanced version
- * that intelligently includes appropriate sound-effect cues (e.g. [door opening])
+ * that intelligently includes appropriate sound-effect cues (e.g. [creaking door])
  * where they add value to the storytelling.
  */
 export async function enhanceScriptWithSoundEffects(script) {
-  logger.info("🔊 Enhancing script with high-impact sound effect cues...");
-  const prompt = `You are a world-class cinematic audio director. Your task is to enhance the provided script by inserting concise sound-effect cues.
+  logger.info("🔊 Enhancing script with intelligent cinematic sound-effect cues...");
+  const prompt = `You are a world-class cinematic sound designer and audio director. Your task is to analyze the script and insert concise sound-effect cues in square brackets (e.g. [creaking door], [slow footsteps], [phone vibration], [loud gunshot], [eerie whisper], [thunderclap], [glass shattering], [clock ticking], [wind howling]).
 
-CRITICAL QUALITY RULES:
-1. PRESERVE NARRATION PERFECTLY: Do NOT rewrite, modify, or delete any words of the original narration text.
-2. SELECT ONLY CLEAR, IMPACTFUL SOUND EFFECTS: Insert cues ONLY for explicit, punchy sound actions (e.g. [door slam], [loud gunshot], [thunderclap], [glass shattering], [sword clash], [tires screeching], [heavy explosion], [car crash]).
-3. NEVER ADD WEAK OR AMBIGUOUS SOUNDS: Do NOT add cues for subtle, vague, or human bodily noises such as [gasp], [sigh], [breathing], [walking], [rustling], [thinking], [wind blowing].
-4. MAXIMUM 1-3 CUES PER SCRIPT: Focus on maximum quality over quantity. If there are no major dramatic sound events in the text, return the script completely unchanged without adding any cues.
-5. PLACEMENT: Insert the bracketed cue in square brackets immediately after the specific action word it accompanies (e.g., The thunder roared [thunderclap] across the valley.).
-6. Output ONLY the resulting script. No explanations.
+CRITICAL DIRECTORIAL RULES:
+1. PRESERVE ORIGINAL TEXT 100%: Do NOT alter, rewrite, or delete any words of the original narration script text.
+2. INTELLIGENT AUDIO DETECTION: Identify ALL distinct visual, atmospheric, and action-driven sound events in the text. This includes doors opening/closing/creaking, footsteps approaching/running, phone buzzes/chimes/messages, gunshots, explosions, screams, whispers, glass breaking, thunder, wind, etc.
+3. PLACEMENT FOR PERFECT AUDIO SYNC: Always insert the bracketed sound-effect cue IMMEDIATELY BEFORE the specific phrase or action word describing the sound event (e.g., "where [creaking door] a bedroom door slowly opened...", "Then came [slow footsteps] slow footsteps...", "Her phone buzzed [phone vibration] with a message...", "then [loud gunshot] a deafening gunshot echoed...", "[eerie whisper] A whisper broke the silence..."). This ensures the sound effect triggers right as the narration describes it.
+4. ACCURATE DESCRIPTIVE TAGS: Use short, vivid 2-3 word descriptions inside brackets like [creaking door], [heavy footsteps], [phone vibration], [loud gunshot], [eerie whisper]. Do not use generic terms like [sound].
+5. NATURAL DENSITY: Add cues whenever a clear sound event occurs in the story. Do not add redundant or duplicate tags within the same sentence.
+6. Output ONLY the resulting enhanced script. No explanations or extra commentary.
 
 SCRIPT:
 ${script}
@@ -727,7 +727,6 @@ ${script}
     const res = await openai.chat.completions.create({
       model: "gpt-5.6",
       messages: [{ role: "user", content: prompt }],
-
     });
     return res.choices[0].message.content.trim() || script;
   } catch (err) {
@@ -741,15 +740,13 @@ ${script}
  */
 export async function enhanceSceneWithSoundEffects(scenePrompt, narrationChunk) {
   logger.info("🔊 Enhancing scene narration with visual context sound effects...");
-  const prompt = `You are a world-class cinematic audio director. Your task is to enhance the provided narration chunk by adding clear, high-impact sound-effect cues matching the visual scene.
+  const prompt = `You are a world-class cinematic sound designer. Your task is to enhance the provided narration chunk by inserting clear, high-impact sound-effect cues matching the visual scene.
 
-CRITICAL QUALITY RULES:
-1. PRESERVE NARRATION PERFECTLY: Do NOT rewrite, modify, or delete any words of the original narration text.
-2. SELECT ONLY CLEAR, IMPACTFUL SOUND EFFECTS: Insert cues ONLY for explicit, punchy sound actions (e.g. [door slam], [loud gunshot], [thunderclap], [glass shattering], [sword clash], [tires screeching], [heavy explosion]).
-3. NEVER ADD WEAK OR AMBIGUOUS SOUNDS: Do NOT add cues for subtle, vague, or human bodily noises such as [gasp], [sigh], [breathing], [walking], [rustling], [thinking], [wind blowing].
-4. MAXIMUM 1 CUE PER SCENE: Only add a cue if there is a distinct, high-impact visual action. If none, return the narration chunk unchanged.
-5. PLACEMENT: Insert the bracketed cue in square brackets immediately after the specific action word it accompanies.
-6. Output ONLY the resulting narration. No explanations.
+CRITICAL DIRECTORIAL RULES:
+1. PRESERVE ORIGINAL TEXT 100%: Do NOT rewrite, modify, or delete any words of the original narration text.
+2. INTELLIGENT AUDIO DETECTION: Insert cues for clear sound actions (e.g. [creaking door], [heavy footsteps], [phone vibration], [loud gunshot], [thunderclap], [glass shattering], [eerie whisper]).
+3. PLACEMENT FOR PERFECT SYNC: Place the bracketed cue IMMEDIATELY BEFORE the specific phrase or action word describing the sound.
+4. Output ONLY the resulting narration chunk. No explanations.
 
 VISUAL SCENE DESCRIPTION:
 ${scenePrompt}
@@ -762,7 +759,6 @@ ${narrationChunk}
     const res = await openai.chat.completions.create({
       model: "gpt-5.6",
       messages: [{ role: "user", content: prompt }],
-
     });
     return res.choices[0].message.content.trim() || narrationChunk;
   } catch (err) {
@@ -770,3 +766,4 @@ ${narrationChunk}
     return narrationChunk;
   }
 }
+
