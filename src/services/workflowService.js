@@ -15,8 +15,8 @@ import {
   enhanceSceneWithSoundEffects,
 } from "./storyService.js";
 import { transcribeWithTimestamps } from "./transcribeService.js";
-import { getAudioDuration } from "./audioService.js";
-import { convertToWav } from "./audioService.js";
+import { getAudioDuration, convertToWav, mixAudioFiles, mixCinematicSoundscape } from "./audioService.js";
+import { analyzeNarrativeAndPlanSoundscape, buildSoundscapeAssets } from "./soundDirectorService.js";
 import { buildMasterTimeline, saveMasterTimeline, buildNarrationSegments } from "./timelineService.js";
 import {
   createVideo,
@@ -804,7 +804,7 @@ async function _runWorkflow({
       });
     }
 
-    logger.info("Step 3: Generating voiceover...");
+    logger.info("Step 3: Generating continuous voiceover narration...");
     logger.info(
       `[WorkflowService] voice payload dispatched to generateVoiceover: ${JSON.stringify(voice)}`,
     );
@@ -815,29 +815,73 @@ async function _runWorkflow({
       await generateVoiceover(script, voiceFilename, voice, workflowTempDir);
     stopVoiceTimer?.();
 
-    let finalAudioLocalPath = voiceLocalPath;
+    // ── Transcribe narration with Whisper to obtain word-level timestamps ────────
+    logger.info("Step 3.1: Transcribing voiceover narration with Whisper for word-level audio sync...");
+    const stopSubTimer = perf?.start("subtitle", "Transcribe Audio with Whisper");
+    const narrationWavPath = path.join(workflowTempDir, `narration-${workflow.id}.wav`);
+    await convertToWav(voiceLocalPath, narrationWavPath);
 
+    const transcriptContent = await transcribeWithTimestamps(narrationWavPath);
+    transcriptPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
+    fs.writeFileSync(transcriptPath, transcriptContent);
+    stopSubTimer?.();
+
+    const { words: timelineWords } = JSON.parse(transcriptContent);
+
+    // ── Step 3.2: AI Cinematic Sound Director Pipeline ────────────────────────────
+    let soundscapeAssets = [];
+    let soundscapePlan = null;
+
+    if (soundEffects === true) {
+      logger.info("Step 3.2: [AI Sound Director] Planning cinematic soundscape & multi-layer audio...");
+      const stopSoundscapeTimer = perf?.start("soundscape", "AI Sound Director Analysis & Asset Building");
+      soundscapePlan = await analyzeNarrativeAndPlanSoundscape({
+        script,
+        words: timelineWords,
+        storyMetadata: storyMetadata || { genre: storyType, voiceTone },
+      });
+
+      soundscapeAssets = await buildSoundscapeAssets({
+        soundscapePlan,
+        words: timelineWords,
+        tempDir: workflowTempDir,
+      });
+      stopSoundscapeTimer?.();
+    }
+
+    // ── Step 3.5: Background Music Generation ──────────────────────────────────────
+    let musicPath = null;
     if (backgroundMusic === true) {
       logger.info("Step 3.5: Generating background music...");
       const stopMusicTimer = perf?.start("audio", "Generate Background Music (Suno)");
-      const musicPath = await generateBackgroundMusic({
+      musicPath = await generateBackgroundMusic({
         title,
         storyType,
         musicStyle: backgroundMusicStyle,
         tempDir: workflowTempDir,
       });
       stopMusicTimer?.();
+    }
 
-      const mixedFilename = `mixed-${voiceFilename}`;
-      const mixedLocalPath = path.join(workflowTempDir, mixedFilename);
+    // ── Step 3.6: Multi-Track Soundscape Mixing ───────────────────────────────────
+    let finalAudioLocalPath = voiceLocalPath;
+    const mixedFilename = `cinematic_master_${workflow.id}_${Date.now()}.mp3`;
+    const mixedLocalPath = path.join(workflowTempDir, mixedFilename);
 
-      const stopMixTimer = perf?.start("audio", "Mix Voice and Background Music");
-      await mixAudioWithBackground(voiceLocalPath, musicPath, mixedLocalPath);
+    if (soundscapeAssets.length > 0 || musicPath) {
+      logger.info("Step 3.6: Mixing cinematic soundscape (Narration + Ambience + Foley SFX + Tension + Music)...");
+      const stopMixTimer = perf?.start("audio", "Mix Cinematic Soundscape");
+      await mixCinematicSoundscape({
+        narrationFile: voiceLocalPath,
+        backgroundMusicFile: musicPath,
+        soundscapeAssets,
+        outputFile: mixedLocalPath,
+      });
       stopMixTimer?.();
       finalAudioLocalPath = mixedLocalPath;
     }
 
-    logger.info("Uploading final audio to Cloudinary...");
+    logger.info("Uploading final cinematic audio to Cloudinary...");
     const stopAudioUploadTimer = perf?.start("upload", "Upload Final Audio to Cloudinary");
     const uploadRes = await cloudinary.uploader.upload(finalAudioLocalPath, {
       folder: "voiceovers",
@@ -852,6 +896,17 @@ async function _runWorkflow({
     // Detect actual audio duration for synchronization
     const actualAudioDuration = await getAudioDuration(finalAudioLocalPath);
     logger.info(`📊 Actual audio duration: ${actualAudioDuration.toFixed(2)}s`);
+
+    await prisma.workflow.update({
+      where: { id: workflow.id },
+      data: {
+        metadata: {
+          ...(workflow.metadata || {}),
+          soundscapePlan: soundscapePlan || null,
+          soundscapeAssetsCount: soundscapeAssets.length,
+        },
+      },
+    });
 
     await prisma.voiceover.create({
       data: {
@@ -878,16 +933,23 @@ async function _runWorkflow({
         `Generating for ratios: ${ratiosToGenerate.join(", ")} (Dual: ${dualPlatform})`,
       );
 
-      logger.info("Step 5: Generating subtitles...");
-      const stopSubTimer = perf?.start("subtitle", "Transcribe Audio to Subtitles (Whisper)");
+      logger.info("Step 5: Preparing subtitles & Master Timeline...");
+      const stopSubTimer = perf?.start("subtitle", "Prepare Subtitles (Whisper)");
 
-      // Phase 1/2 fix: transcribe from lossless WAV to eliminate MP3 encoder delay
       const narrationWavPath = path.join(workflowTempDir, `narration-${workflow.id}.wav`);
-      await convertToWav(voiceLocalPath, narrationWavPath);
+      if (!fs.existsSync(narrationWavPath)) {
+        await convertToWav(voiceLocalPath, narrationWavPath);
+      }
 
-      const transcriptContent = await transcribeWithTimestamps(narrationWavPath);
-      transcriptPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
-      fs.writeFileSync(transcriptPath, transcriptContent);
+      let transcriptContent;
+      const cachedSubPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
+      if (fs.existsSync(cachedSubPath)) {
+        transcriptContent = fs.readFileSync(cachedSubPath, "utf-8");
+      } else {
+        transcriptContent = await transcribeWithTimestamps(narrationWavPath);
+        fs.writeFileSync(cachedSubPath, transcriptContent);
+      }
+      transcriptPath = cachedSubPath;
       stopSubTimer?.();
 
       // Build the immutable Master Timeline FIRST — narrationSegments depend on it.

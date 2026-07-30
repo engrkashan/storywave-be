@@ -166,3 +166,95 @@ export async function convertToWav(inputPath, outputPath) {
       .run();
   });
 }
+
+/**
+ * Mix full cinematic soundscape: Narration + Continuous Ambience + Foley SFX + Tension Drones + Background Music.
+ */
+export async function mixCinematicSoundscape({
+  narrationFile,
+  backgroundMusicFile = null,
+  soundscapeAssets = [],
+  outputFile,
+}) {
+  return new Promise(async (resolve, reject) => {
+    if (!fs.existsSync(narrationFile)) {
+      return reject(new Error(`Narration file missing: ${narrationFile}`));
+    }
+
+    if (!soundscapeAssets || soundscapeAssets.length === 0) {
+      if (backgroundMusicFile && fs.existsSync(backgroundMusicFile)) {
+        // Simple narration + music mix
+        let command = ffmpeg()
+          .input(narrationFile)
+          .input(backgroundMusicFile)
+          .inputOptions(["-stream_loop -1"])
+          .complexFilter(`[1:a]volume=0.15[bg];[0:a][bg]amix=inputs=2:duration=first:normalize=0,alimiter=limit=-0.5dB`)
+          .save(outputFile)
+          .on("end", () => resolve(outputFile))
+          .on("error", reject);
+        return;
+      }
+      fs.copyFileSync(narrationFile, outputFile);
+      return resolve(outputFile);
+    }
+
+    let command = ffmpeg().input(narrationFile);
+    const hasMusic = backgroundMusicFile && fs.existsSync(backgroundMusicFile);
+    if (hasMusic) {
+      command = command.input(backgroundMusicFile).inputOptions(["-stream_loop -1"]);
+    }
+
+    let filterComplex = "";
+    const sfxOutputs = [];
+    const baseOffset = hasMusic ? 2 : 1;
+
+    for (let i = 0; i < soundscapeAssets.length; i++) {
+      const asset = soundscapeAssets[i];
+      const inputIdx = baseOffset + i;
+      command = command.input(asset.file);
+
+      const delayMs = Math.round(asset.delayMs || 0);
+      const delayStr = `${delayMs}|${delayMs}`;
+      const vol = asset.volume || 0.5;
+      const fadeIn = asset.fadeInSec || 0.1;
+      const fadeOut = asset.fadeOutSec || 0.4;
+
+      const dur = asset.durationSec || (await getAudioDuration(asset.file).catch(() => 3.0));
+      const fadeOutStart = Math.max(0, dur - fadeOut);
+
+      const outLabel = `layer_${i}`;
+      sfxOutputs.push(`[${outLabel}]`);
+
+      filterComplex += `[${inputIdx}:a]volume=${vol},afade=t=in:st=0:d=${fadeIn},afade=t=out:st=${fadeOutStart}:d=${fadeOut},adelay=${delayStr}[${outLabel}];`;
+    }
+
+    // Combine all soundscape asset tracks
+    if (sfxOutputs.length > 1) {
+      filterComplex += `${sfxOutputs.join("")}amix=inputs=${sfxOutputs.length}:normalize=0[mixed_soundscape];`;
+    } else {
+      filterComplex += `${sfxOutputs[0]}anull[mixed_soundscape];`;
+    }
+
+    // Final mix with narration & optional music
+    if (hasMusic) {
+      filterComplex += `[1:a]volume=0.15[bg_music];[bg_music][0:a]sidechaincompress=threshold=0.03:ratio=5:attack=20:release=300[ducked_music];[0:a][ducked_music][mixed_soundscape]amix=inputs=3:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-0.5dB`;
+    } else {
+      filterComplex += `[0:a][mixed_soundscape]amix=inputs=2:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-0.5dB`;
+    }
+
+    logger.info(`🎛️ [Cinematic Sound Mixer] Mixing ${soundscapeAssets.length} sound layers + ${hasMusic ? "Music" : "No Music"} + Narration...`);
+
+    command
+      .complexFilter(filterComplex)
+      .save(outputFile)
+      .on("end", () => {
+        logger.info(`✅ Cinematic Soundscape mixed successfully to ${outputFile}`);
+        resolve(outputFile);
+      })
+      .on("error", (err) => {
+        logger.error("❌ FFMPEG Cinematic Soundscape Mix Error:", err.message);
+        reject(err);
+      });
+  });
+}
+
