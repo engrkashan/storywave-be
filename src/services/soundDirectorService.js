@@ -73,10 +73,12 @@ ${wordsPreview.slice(0, 10000)}
 DESIGN INSTRUCTIONS & RULES:
 1. NARRATIVE & SCENE ANALYSIS: Analyze the story step-by-step for actions, objects, environment, emotional state, tension level, camera perspective, and pacing.
 2. AMBIENT LAYERS: Identify AT MOST ONE single subtle continuous background ambience layer for the entire story (e.g. quiet room tone or soft wind draft). Do NOT create multiple ambient tracks. Ambient volume must be soft and unobtrusive (0.10 - 0.18).
-3. FOLEY & SOUND EVENTS (EXTREME MINIMALISM - MAX 1 TO 2 TOTAL FOR ENTIRE STORY):
-   - BE EXTREMELY SELECTIVE. Most sentences in the narration script MUST NOT produce any sound effects.
-   - Select AT MOST 1 to 2 sound events TOTAL for the ENTIRE story (e.g. 1 single iconic climax sound like a gunshot or door slam).
-   - If there is no major dramatic climax sound, return 0 sound events. Do NOT add sound for mundane actions (like walking, sitting, looking, opening doors unless it is a major climax).
+3. FOLEY & SOUND EVENTS (MAX 1 OR 2 TOTAL FOR A 3-MINUTE STORY):
+   - BE EXTREMELY SPARING AND MINIMAL. Most narration sentences MUST NOT produce any sound effects.
+   - For stories under 3 minutes (< 180s), select AT MOST 1 sound event TOTAL for the ENTIRE story (only the single climax moment like a gunshot).
+   - For stories 3 minutes or longer (>= 180s), select AT MOST 2 sound events TOTAL for the ENTIRE story.
+   - Sound effects MUST be separated by a wide gap of at least 90 seconds.
+   - If there is no major dramatic climax sound, return 0 sound events. Do NOT add sound for ordinary actions.
    - Specify 'targetStartWord' as the exact word in the narration script where the sound begins.
    - Assign 'importance': "critical", "high", "medium", or "low".
    - Assign 'priority': 1 (low) to 5 (critical, e.g. gunshot=5, door slam=4).
@@ -227,9 +229,8 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
   // 2. Process & Filter Sound Events (Foley, actions, key SFX)
   const rawSfxList = soundscapePlan.sound_events || [];
 
-  // ULTRA-MINIMALIST HARD CAP: Max 1 to 2 sound events TOTAL for the ENTIRE story
-  // 1-min story -> max 1 sound. 2+ min story -> max 2 sounds TOTAL overall.
-  const maxSFXCount = Math.min(2, Math.max(1, Math.floor(totalDuration / 60)));
+  // ULTRA-MINIMALIST CAP: 1 sound event max for stories under 3 mins (< 180s), 2 max for 3 mins or longer (>= 180s)
+  const maxSFXCount = totalDuration >= 180 ? 2 : 1;
 
   // Score candidate events by importance & priority for rate-limiting
   const sfxCandidates = rawSfxList.map((sfx, idx) => {
@@ -246,13 +247,13 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
   // Sort by highest importance/priority first
   sfxCandidates.sort((a, b) => b.importanceScore - a.importanceScore);
 
-  // Select top priority SFX respecting maxSFXCount and minimum 25s spacing between sound events
+  // Select top priority SFX respecting maxSFXCount and minimum 90s spacing gap between sound events
   const filteredSfxList = [];
   for (const sfx of sfxCandidates) {
     if (filteredSfxList.length >= maxSFXCount) break;
 
     const hasSpacingOverlap = filteredSfxList.some(
-      (selected) => Math.abs(selected.startSec - sfx.startSec) < 25.0
+      (selected) => Math.abs(selected.startSec - sfx.startSec) < 90.0
     );
 
     if (!hasSpacingOverlap) {
