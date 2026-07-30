@@ -73,11 +73,12 @@ ${wordsPreview.slice(0, 10000)}
 DESIGN INSTRUCTIONS & RULES:
 1. NARRATIVE & SCENE ANALYSIS: Analyze the story step-by-step for actions, objects, environment, emotional state, tension level, camera perspective, and pacing.
 2. AMBIENT LAYERS: Identify continuous background ambience for scenes (e.g. room tone, wind draft, rain on roof, insects, city traffic, horror texture). Ambient layers MUST be continuous so there is NEVER dead silence.
-3. FOLEY & SOUND EVENTS:
-   - Identify both EXPLICIT sound actions (door open/creak, footsteps, gunshot, phone vibration, glass shattering) AND IMPLIED emotional sound cues (horror drone swell, sub-bass drop, wood settling creak, breathing tension).
+3. FOLEY & SOUND EVENTS (MAX 1-2 PER MINUTE):
+   - Only select the MOST CRITICAL, high-impact key sound events (e.g., gunshot, door slam, heavy footsteps, explosion, car crash, glass shatter).
+   - Do NOT select low-impact or cluttering sounds. Maximum 1 to 2 sound events PER MINUTE of narration (0 to 2 per 60 seconds). If a minute has no major sound event, return 0 events for that segment.
    - Specify 'targetStartWord' as the exact word in the narration script where the sound begins.
    - Assign 'importance': "critical", "high", "medium", or "low".
-   - Assign 'priority': 1 (low) to 5 (critical).
+   - Assign 'priority': 1 (low) to 5 (critical, e.g. gunshot=5, door slam=4, footsteps=4).
    - Assign 'layer': "foreground", "midground", "background_ambience", or "tension_drone".
    - Set 'fadeInSec', 'fadeOutSec', 'volume' (0.1 to 1.0), 'duckMusic' (boolean), 'overlapNarration': true.
 4. MUSIC INTERACTION: Specify if background music should duck during key SFX (e.g., door creak, gunshot, whisper).
@@ -222,13 +223,51 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
     }
   }
 
-  // 2. Process Sound Events (Foley, actions, explicit & implied SFX)
-  const sfxList = soundscapePlan.sound_events || [];
-  for (let i = 0; i < sfxList.length; i++) {
-    const sfx = sfxList[i];
+  // 2. Process & Filter Sound Events (Foley, actions, key SFX)
+  const rawSfxList = soundscapePlan.sound_events || [];
+
+  // Max 1-2 sound effects per minute of audio duration
+  const maxSFXCount = Math.max(1, Math.ceil((totalDuration / 60) * 2));
+
+  // Score candidate events by importance & priority for rate-limiting
+  const sfxCandidates = rawSfxList.map((sfx, idx) => {
+    const startSec = findWordTimestamp(sfx.targetStartWord, words, Math.floor((idx / Math.max(1, rawSfxList.length)) * words.length));
+    const prioMap = { critical: 5, high: 4, medium: 3, low: 1 };
+    const importanceScore = prioMap[sfx.importance?.toLowerCase()] || (sfx.priority || 3);
+    return {
+      ...sfx,
+      startSec,
+      importanceScore
+    };
+  });
+
+  // Sort by highest importance/priority first
+  sfxCandidates.sort((a, b) => b.importanceScore - a.importanceScore);
+
+  // Select top priority SFX respecting maxSFXCount and minimum 15s spacing between sound events
+  const filteredSfxList = [];
+  for (const sfx of sfxCandidates) {
+    if (filteredSfxList.length >= maxSFXCount) break;
+
+    const hasSpacingOverlap = filteredSfxList.some(
+      (selected) => Math.abs(selected.startSec - sfx.startSec) < 15.0
+    );
+
+    if (!hasSpacingOverlap) {
+      filteredSfxList.push(sfx);
+    }
+  }
+
+  // Sort selected SFX chronologically for rendering
+  filteredSfxList.sort((a, b) => a.startSec - b.startSec);
+
+  logger.info(`🔍 [SFX Prioritizer] Selected ${filteredSfxList.length}/${rawSfxList.length} top key SFX events (Max allowed for ${totalDuration.toFixed(1)}s audio: ${maxSFXCount})`);
+
+  for (let i = 0; i < filteredSfxList.length; i++) {
+    const sfx = filteredSfxList[i];
     try {
-      const startSec = findWordTimestamp(sfx.targetStartWord, words, Math.floor((i / Math.max(1, sfxList.length)) * words.length));
-      logger.info(`  🔊 SFX [${i + 1}/${sfxList.length}]: "${sfx.type}" ("${sfx.description || sfx.type}") queued at ${startSec.toFixed(2)}s (Word: "${sfx.targetStartWord}")`);
+      const startSec = sfx.startSec;
+      logger.info(`  🔊 SFX [${i + 1}/${filteredSfxList.length}]: "${sfx.type}" ("${sfx.description || sfx.type}") queued at ${startSec.toFixed(2)}s (Word: "${sfx.targetStartWord}")`);
 
       const sfxBuf = await sfxElevenLabs(sfx.description || sfx.type);
       if (sfxBuf && sfxBuf.length > 0) {
