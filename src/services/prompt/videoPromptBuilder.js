@@ -73,15 +73,19 @@ export function buildCinematicSceneDirectorObject(scene, storyMetadata = {}, com
     lighting: lightingStr,
   };
 
-  // 4. Veo Motion Prompt Synthesis (Continuous Kinetic Motion)
+  const isCharacterTalk = options.characterTalk || storyMetadata.characterTalk || scene.characterTalk;
+  const spokenText = narrative.narrationText || narrative.beatSummary || "";
+
+  // 4. Motion Prompt Synthesis (Continuous Kinetic Motion & Character Dialogue)
   const veoPromptParts = [
     `[CINEMATOGRAPHY: ${cameraPlan.shotSize}, ${cameraPlan.angle}, ${cameraPlan.lens}, ${cameraPlan.rig}. ${cameraPlan.movement}]`,
     `ACTING & KINETICS: ${characterPerformance}`,
+    isCharacterTalk && spokenText ? `CHARACTER DIALOGUE & NATIVE AUDIO: The primary character on screen is visibly speaking out loud with realistic lip sync and clear audio narration output for these exact lines: "${spokenText}"` : "",
     `ENVIRONMENT & PHYSICS: ${sceneObject.environmentPhysics} Lighting: ${sceneObject.lighting}`,
     `SCENE OBJECTIVE: ${narrative.sceneObjective || narrative.beatSummary || "Advance story beat"}. Duration: ${timing.durationSec || 5}s.`,
     commonPrompt ? `VISUAL ENVELOPE: ${commonPrompt}` : "Style: Photorealistic 8k cinematic motion, organic physics, fluid continuous movement.",
     "DIRECTOR INSTRUCTION: Every subject, camera, and environmental element must remain continuously alive in motion. Zero frozen poses. Zero static still frames.",
-  ];
+  ].filter(Boolean);
 
   const veoPrompt = veoPromptParts.join("\n\n").trim();
 

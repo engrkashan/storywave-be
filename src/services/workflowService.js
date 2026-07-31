@@ -24,10 +24,7 @@ import {
   generateVideoClips,
   concatSegments,
   renderMediaSegment,
-  convertTranscriptToAss,
-  extractAudioFromVideo,
-  combineAudioFiles,
-  applyLipSync,
+  convertTranscriptToAss
 } from "./videoService.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
 import {
@@ -143,6 +140,7 @@ export async function runScheduledWorkflows() {
       soundEffects: meta.soundEffects ?? false,
       aspectRatio: meta.aspectRatio || "16:9",
       dualPlatform: meta.dualPlatform || false,
+      characterTalk: meta.characterTalk ?? false,
       uploadedMediaUrl: meta.uploadedMediaUrl || null,
       existingWorkflow: workflow,
     };
@@ -255,6 +253,7 @@ async function _runWorkflow({
   soundEffects = false,
   aspectRatio = "16:9",
   dualPlatform = false,
+  characterTalk = false,
   series = null,
   coverArtPrompt = null,
   seoContent = null,
@@ -263,8 +262,6 @@ async function _runWorkflow({
   characterReferenceBase64: userCharacterReferenceBase64 = null,
   // New: multi-character reference array [{ name, base64 }]
   characterReferences: userMultiCharacterReferences = null,
-  enableLipSync = false,
-  useOmniAudio = false,
 }) {
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
@@ -811,29 +808,50 @@ async function _runWorkflow({
       });
     }
 
-    logger.info("Step 3: Generating continuous voiceover narration...");
-    logger.info(
-      `[WorkflowService] voice payload dispatched to generateVoiceover: ${JSON.stringify(voice)}`,
-    );
-    await checkCancelled(workflow.id); // ✔️ Cancellation check
-    const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
-    const stopVoiceTimer = perf?.start("audio", "Generate Voiceover TTS");
-    const { url: pureVoiceURL, localPath: voiceLocalPath } =
-      await generateVoiceover(script, voiceFilename, voice, workflowTempDir);
-    stopVoiceTimer?.();
+    const hasVoiceSelected = voice && ((typeof voice === "object" && voice.id && String(voice.id).trim()) || (typeof voice === "string" && voice.trim()));
+    const isCharacterTalkNoTts = characterTalk === true && !hasVoiceSelected;
 
-    // ── Transcribe narration with Whisper to obtain word-level timestamps ────────
-    logger.info("Step 3.1: Transcribing voiceover narration with Whisper for word-level audio sync...");
-    const stopSubTimer = perf?.start("subtitle", "Transcribe Audio with Whisper");
-    const narrationWavPath = path.join(workflowTempDir, `narration-${workflow.id}.wav`);
-    await convertToWav(voiceLocalPath, narrationWavPath);
+    let pureVoiceURL = null;
+    let voiceLocalPath = null;
+    let timelineWords = [];
 
-    const transcriptContent = await transcribeWithTimestamps(narrationWavPath);
-    transcriptPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
-    fs.writeFileSync(transcriptPath, transcriptContent);
-    stopSubTimer?.();
+    if (isCharacterTalkNoTts) {
+      logger.info("🎙️ [Character Talk] Enabled without TTS voice — skipping external TTS generation. Gemini Omni Flash will generate video clips with native character dialogue & audio.");
+      const scriptWords = script.split(/\s+/).filter(Boolean);
+      const secPerWord = 0.35;
+      timelineWords = scriptWords.map((w, idx) => ({
+        word: w,
+        start: idx * secPerWord,
+        end: (idx + 1) * secPerWord,
+      }));
+      transcriptPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
+      fs.writeFileSync(transcriptPath, JSON.stringify({ text: script, words: timelineWords }));
+    } else {
+      logger.info("Step 3: Generating continuous voiceover narration...");
+      logger.info(
+        `[WorkflowService] voice payload dispatched to generateVoiceover: ${JSON.stringify(voice)}`,
+      );
+      await checkCancelled(workflow.id); // ✔️ Cancellation check
+      const voiceFilename = `${workflow.id}-${Date.now()}.mp3`;
+      const stopVoiceTimer = perf?.start("audio", "Generate Voiceover TTS");
+      const voiceRes = await generateVoiceover(script, voiceFilename, voice, workflowTempDir);
+      pureVoiceURL = voiceRes.url;
+      voiceLocalPath = voiceRes.localPath;
+      stopVoiceTimer?.();
 
-    const { words: timelineWords } = JSON.parse(transcriptContent);
+      logger.info("Step 3.1: Transcribing voiceover narration with Whisper for word-level audio sync...");
+      const stopSubTimer = perf?.start("subtitle", "Transcribe Audio with Whisper");
+      const narrationWavPath = path.join(workflowTempDir, `narration-${workflow.id}.wav`);
+      await convertToWav(voiceLocalPath, narrationWavPath);
+
+      const transcriptContent = await transcribeWithTimestamps(narrationWavPath);
+      transcriptPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
+      fs.writeFileSync(transcriptPath, transcriptContent);
+      stopSubTimer?.();
+
+      const parsedSub = JSON.parse(transcriptContent);
+      timelineWords = parsedSub.words || [];
+    }
 
     // ── Step 3.2: AI Cinematic Sound Director Pipeline ────────────────────────────
     let soundscapeAssets = [];
@@ -875,7 +893,7 @@ async function _runWorkflow({
     const mixedFilename = `cinematic_master_${workflow.id}_${Date.now()}.mp3`;
     const mixedLocalPath = path.join(workflowTempDir, mixedFilename);
 
-    if (soundscapeAssets.length > 0 || musicPath) {
+    if ((soundscapeAssets.length > 0 || musicPath) && voiceLocalPath) {
       logger.info("Step 3.6: Mixing cinematic soundscape (Narration + Ambience + Foley SFX + Tension + Music)...");
       const stopMixTimer = perf?.start("audio", "Mix Cinematic Soundscape");
       await mixCinematicSoundscape({
@@ -886,41 +904,49 @@ async function _runWorkflow({
       });
       stopMixTimer?.();
       finalAudioLocalPath = mixedLocalPath;
+    } else if (musicPath && !voiceLocalPath) {
+      finalAudioLocalPath = musicPath;
     }
 
-    logger.info("Uploading final cinematic audio to Cloudinary...");
-    const stopAudioUploadTimer = perf?.start("upload", "Upload Final Audio to Cloudinary");
-    const uploadRes = await cloudinary.uploader.upload(finalAudioLocalPath, {
-      folder: "voiceovers",
-      resource_type: "video",
-      public_id: path.parse(finalAudioLocalPath).name,
-      overwrite: true,
-    });
-    stopAudioUploadTimer?.();
+    let mixedVoiceURL = null;
+    let actualAudioDuration = 0;
 
-    const mixedVoiceURL = uploadRes.secure_url;
+    if (finalAudioLocalPath && fs.existsSync(finalAudioLocalPath)) {
+      logger.info("Uploading final audio track to Cloudinary...");
+      const stopAudioUploadTimer = perf?.start("upload", "Upload Final Audio to Cloudinary");
+      const uploadRes = await cloudinary.uploader.upload(finalAudioLocalPath, {
+        folder: "voiceovers",
+        resource_type: "video",
+        public_id: path.parse(finalAudioLocalPath).name,
+        overwrite: true,
+      });
+      stopAudioUploadTimer?.();
 
-    // Detect actual audio duration for synchronization
-    const actualAudioDuration = await getAudioDuration(finalAudioLocalPath);
-    logger.info(`📊 Actual audio duration: ${actualAudioDuration.toFixed(2)}s`);
+      mixedVoiceURL = uploadRes.secure_url;
+      actualAudioDuration = await getAudioDuration(finalAudioLocalPath);
+      logger.info(`📊 Actual audio duration: ${actualAudioDuration.toFixed(2)}s`);
+
+      await prisma.voiceover.create({
+        data: {
+          script,
+          audioURL: mixedVoiceURL,
+          workflowId: workflow.id,
+          userId,
+        },
+      });
+    } else {
+      actualAudioDuration = Math.max(5, Math.ceil(script.split(/\s+/).length * 0.35));
+    }
 
     await prisma.workflow.update({
       where: { id: workflow.id },
       data: {
         metadata: {
           ...(workflow.metadata || {}),
+          characterTalk,
           soundscapePlan: soundscapePlan || null,
           soundscapeAssetsCount: soundscapeAssets.length,
         },
-      },
-    });
-
-    await prisma.voiceover.create({
-      data: {
-        script,
-        audioURL: mixedVoiceURL,
-        workflowId: workflow.id,
-        userId,
       },
     });
 
@@ -1127,8 +1153,8 @@ async function _runWorkflow({
           } else if (mediaType === "video") {
             // Video mode: generate specialized motion prompts for Gemini Omni Flash (gemini-omni-flash-preview)
             const sharedSceneObjects = buildSceneObjects(preGeneratedScenePrompts || [], storyMetadata, narrationSegments);
-            scenePrompts = planVideoPrompts(sharedSceneObjects, storyMetadata, { aspectRatio: currentRatio });
-            logger.info(`🎬 Using ${scenePrompts.length} Video-Planned motion prompts for Gemini Omni Flash`);
+            scenePrompts = planVideoPrompts(sharedSceneObjects, storyMetadata, { aspectRatio: currentRatio, characterTalk });
+            logger.info(`🎬 Using ${scenePrompts.length} Video-Planned motion prompts for Gemini Omni Flash (Character Talk: ${characterTalk})`);
           } else {
             // multi_image: use pre-generated prompts built alongside Master Timeline (100% untouched)
             scenePrompts = preGeneratedScenePrompts || [];
@@ -1183,20 +1209,7 @@ async function _runWorkflow({
 
                 checkpointManager.markRenderRunning(sceneId);
                 try {
-                  let activeClipPath = clipPath;
-                  if (enableLipSync === true && fs.existsSync(finalAudioLocalPath)) {
-                    const syncedClipPath = path.join(ratioDir, `${sceneId}_lipsynced.mp4`);
-                    try {
-                      await applyLipSync(clipPath, finalAudioLocalPath, syncedClipPath);
-                      if (fs.existsSync(syncedClipPath)) {
-                        activeClipPath = syncedClipPath;
-                      }
-                    } catch (syncErr) {
-                      logger.warn(`⚠️ Lip sync failed for segment ${i + 1}: ${syncErr.message}. Using original clip.`);
-                    }
-                  }
-
-                  await renderMediaSegment(activeClipPath, segmentPath, duration, width, height, escapedSegmentAssPath);
+                  await renderMediaSegment(clipPath, segmentPath, duration, width, height, escapedSegmentAssPath);
                   checkpointManager.markRenderCompleted(sceneId);
                 } catch (err) {
                   checkpointManager.markRenderFailed(sceneId);
@@ -1209,7 +1222,12 @@ async function _runWorkflow({
               }
 
               const validSegmentFiles = segmentFiles.filter(Boolean);
-              await concatSegments(validSegmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null);
+              const useSegmentAudioOnly = isCharacterTalkNoTts;
+              const mixSegmentAudio = characterTalk && hasVoiceSelected;
+              await concatSegments(validSegmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null, {
+                useSegmentAudioOnly,
+                mixSegmentAudio,
+              });
               stopStitchTimer?.();
             }
           } else if (mediaType === "multi_image") {

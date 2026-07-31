@@ -7,9 +7,7 @@ import { createLogger } from "../utils/logger.js";
 import { config } from "../config/workflow.config.js";
 import { enqueueRender, enqueueSegmentRender } from "../utils/renderQueue.js";
 import { getPerfSession } from "../utils/perfLogger.js";
-import { extractAudioFromVideo, combineAudioFiles, applyLipSync } from "./lipSyncService.js";
-
-export { extractAudioFromVideo, combineAudioFiles, applyLipSync };
+import { buildSubtitleGroups } from "./timelineService.js";
 
 const logger = createLogger("VideoService");
 
@@ -588,6 +586,7 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
       "-vf", `${commonScale},fps=30${trimFilter}${subFilter}`,
       "-t", String(duration),
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-b:a", "192k",
       outputPath
     ];
   } else {
@@ -649,7 +648,7 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
  * Merges pre-rendered segments into a single video, synchronized with audio.
  * Phase 5 Safe Disk Cleanup is implemented here.
  */
-export async function concatSegments(segmentFiles, audioPath, outputPath, audioDuration, assPathToRemove) {
+export async function concatSegments(segmentFiles, audioPath, outputPath, audioDuration, assPathToRemove, options = {}) {
   const SEGMENT_TEMP_DIR = path.dirname(outputPath);
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -661,25 +660,63 @@ export async function concatSegments(segmentFiles, audioPath, outputPath, audioD
 
   logger.info(`✅ Segments ready. Starting final merge pass (copy-stream)...`);
 
-  // Final merge: concat demuxer + audio mix.
-  // -c:v copy — NO re-encode. Segments already carry burned subtitles.
-  // -c:a aac  — encode the audio track (always a stream transcode needed).
-  const mergeArgs = [
-    "-y",
-    "-loglevel", "error",
-    "-f", "concat",
-    "-safe", "0",
-    "-i", segmentsListPath,
-    "-i", audioPath,
-    "-map", "0:v",
-    "-map", "1:a",
-    "-c:v", "copy",         // ✅ Bitstream copy — no re-encode, instant
-    "-c:a", "aac",
-    "-b:a", "192k",
-    "-t", String(audioDuration),
-    "-threads", String(config.workflow.ffmpegThreads),
-    outputPath
-  ];
+  const hasAudioPath = audioPath && fs.existsSync(audioPath);
+
+  let mergeArgs = [];
+  if (!hasAudioPath || options.useSegmentAudioOnly) {
+    // Character Talk without external TTS: Use the segment native audio tracks
+    mergeArgs = [
+      "-y",
+      "-loglevel", "error",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", segmentsListPath,
+      "-map", "0:v",
+      "-map", "0:a?",
+      "-c:v", "copy",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-threads", String(config.workflow.ffmpegThreads),
+      outputPath
+    ];
+  } else if (options.mixSegmentAudio && hasAudioPath) {
+    // Character Talk WITH external TTS / BGM: Mix segment native audio (0:a) with external audio track (1:a)
+    mergeArgs = [
+      "-y",
+      "-loglevel", "error",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", segmentsListPath,
+      "-i", audioPath,
+      "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+      "-map", "0:v",
+      "-map", "[aout]",
+      "-c:v", "copy",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-t", String(audioDuration),
+      "-threads", String(config.workflow.ffmpegThreads),
+      outputPath
+    ];
+  } else {
+    // Standard mapping: video from segments, audio from external narration track
+    mergeArgs = [
+      "-y",
+      "-loglevel", "error",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", segmentsListPath,
+      "-i", audioPath,
+      "-map", "0:v",
+      "-map", "1:a",
+      "-c:v", "copy",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-t", String(audioDuration),
+      "-threads", String(config.workflow.ffmpegThreads),
+      outputPath
+    ];
+  }
 
   try {
     await enqueueRender(async () => {
