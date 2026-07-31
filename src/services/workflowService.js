@@ -1120,10 +1120,10 @@ async function _runWorkflow({
               },
             ];
           } else if (mediaType === "video") {
-            // Video mode: generate specialized motion prompts for Google Veo
+            // Video mode: generate specialized motion prompts for Gemini Omni Flash (gemini-omni-flash-preview)
             const sharedSceneObjects = buildSceneObjects(preGeneratedScenePrompts || [], storyMetadata, narrationSegments);
             scenePrompts = planVideoPrompts(sharedSceneObjects, storyMetadata, { aspectRatio: currentRatio });
-            logger.info(`🎬 Using ${scenePrompts.length} Video-Planned motion prompts for Veo`);
+            logger.info(`🎬 Using ${scenePrompts.length} Video-Planned motion prompts for Gemini Omni Flash`);
           } else {
             // multi_image: use pre-generated prompts built alongside Master Timeline (100% untouched)
             scenePrompts = preGeneratedScenePrompts || [];

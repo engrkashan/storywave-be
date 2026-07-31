@@ -42,6 +42,11 @@ export async function generateBackgroundMusic({
       storyType?.toLowerCase().includes("education")
     ) {
       musicStyle = "slow calm lo-fi, gentle background, motivational yet relaxed";
+    } else if (
+      storyType?.toLowerCase().includes("advertisement") ||
+      storyType?.toLowerCase().includes("ad")
+    ) {
+      musicStyle = "upbeat corporate commercial background music, energetic, modern, high production value";
     }
   }
 

@@ -468,62 +468,102 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
           ? `${uniquePrompt}\n\nSTYLE & ATMOSPHERE: ${commonPrompt}`
           : uniquePrompt;
 
-        logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Google Veo 3.1...`);
+        logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Gemini Omni Flash (gemini-omni-flash-preview)...`);
 
-        const videoConfig = {
-          model: "veo-3.1-generate-preview",
-          prompt: finalPrompt,
-          config: {
-            aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9"
-          }
-        };
-
-        // Add character references for identity lock based on characters in scene
         const activeReferences = [];
         for (const charId of sceneCharacters) {
           if (fetchedReferences[charId]) activeReferences.push(fetchedReferences[charId]);
         }
-        // Fallback for single character mode
         if (activeReferences.length === 0 && characterAssets.length > 0 && fetchedReferences[characterAssets[0].id]) {
           activeReferences.push(fetchedReferences[characterAssets[0].id]);
         }
 
-        if (activeReferences.length > 0) {
-          videoConfig.referenceImages = activeReferences;
+        let previousFrameData = null;
+        if (previousClipLastFrame && fs.existsSync(previousClipLastFrame)) {
+          previousFrameData = fs.readFileSync(previousClipLastFrame).toString("base64");
         }
 
-        // Add bridge logic: use last frame of previous clip as starting point
-        if (previousClipLastFrame) {
-          const lastFrameData = fs.readFileSync(previousClipLastFrame).toString("base64");
-          videoConfig.image = {
-            imageBytes: lastFrameData,
-            mimeType: "image/png"
-          };
-        }
+        let videoBuffer = null;
 
-        // 📺 Start the video generation operation
-        let operation = await ai.models.generateVideos(videoConfig);
+        // Approach 1: Try GoogleGenAI SDK interactions API with Gemini Omni Flash
+        try {
+          const inputParts = [{ text: finalPrompt }];
+          if (previousFrameData) {
+            inputParts.push({
+              inlineData: { mimeType: "image/png", data: previousFrameData }
+            });
+          }
+          for (const ref of activeReferences) {
+            if (ref.imageBytes) {
+              inputParts.push({
+                inlineData: { mimeType: ref.mimeType || "image/png", data: ref.imageBytes }
+              });
+            }
+          }
 
-        // ⏳ Poll the operation status until the video is ready
-        while (!operation.done) {
-          logger.info(`⏳ Clip ${i + 1}: Waiting for video generation...`);
-          await new Promise((resolve) => setTimeout(resolve, 10000));
-          // ✅ Check cancellation on every poll tick (every 10s)
-          if (onCheckCancelled) await onCheckCancelled();
-
-          operation = await ai.operations.getVideosOperation({
-            operation: operation,
+          const interaction = await ai.interactions.create({
+            model: "gemini-omni-flash-preview",
+            input: inputParts.length === 1 ? finalPrompt : inputParts,
           });
+
+          if (interaction.output_video?.data) {
+            videoBuffer = Buffer.from(interaction.output_video.data, "base64");
+          } else if (interaction.steps) {
+            for (const step of interaction.steps) {
+              if (step.type === "model_output" && Array.isArray(step.content)) {
+                for (const item of step.content) {
+                  if (item.type === "video" && item.data) {
+                    videoBuffer = Buffer.from(item.data, "base64");
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        } catch (sdkErr) {
+          logger.warn(`Gemini Omni Flash SDK call failed: ${sdkErr.message}. Trying REST API fallback...`);
+        }
+
+        // Approach 2: REST API fallback for Gemini Omni Flash
+        if (!videoBuffer) {
+          const apiKey = process.env.GEMINI_API_KEY;
+          const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${apiKey}`;
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "gemini-omni-flash-preview",
+              input: finalPrompt,
+            }),
+          });
+
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Gemini Omni Flash REST error (${res.status}): ${errText}`);
+          }
+
+          const json = await res.json();
+          if (json.steps) {
+            for (const step of json.steps) {
+              if (step.type === "model_output" && Array.isArray(step.content)) {
+                for (const item of step.content) {
+                  if (item.type === "video" && item.data) {
+                    videoBuffer = Buffer.from(item.data, "base64");
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if (!videoBuffer) {
+          throw new Error("No video output received from Gemini Omni Flash model.");
         }
 
         const clipFilename = `clip_${String(i).padStart(3, "0")}.mp4`;
         const filePath = path.join(tempDir, clipFilename);
-
-        // 💾 Download the generated video
-        await ai.files.download({
-          file: operation.response.generatedVideos[0].video,
-          downloadPath: filePath
-        });
+        fs.writeFileSync(filePath, videoBuffer);
 
         logger.info(`✅ Clip ${i + 1} saved to ${filePath}`);
         results.push({ filePath, error: null });

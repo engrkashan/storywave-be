@@ -118,6 +118,16 @@ export function generateThumbnailPrompt(title, storyType) {
             composition:
                 "tense close-up, asymmetrical for dread, focal on bloodied symbol",
         },
+
+        advertisement: {
+            style:
+                "sleek high-impact commercial promotional product display illustration, 8k advertising style",
+            elements:
+                "modern product showcase, dynamic lighting flares, vibrant brand hero visuals, premium packaging details",
+            colors: "vibrant high-contrast energetic brand palette, gold, electric neon, bold primary accents",
+            mood: "exciting, persuasive, premium, high-energy, attractive",
+            composition: "hero product centered, strong dynamic angle, studio lighting, bold visual appeal",
+        },
     };
 
     const g = genres[storyType] || genres.storytelling_cinematic;
