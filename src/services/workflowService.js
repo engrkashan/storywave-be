@@ -809,14 +809,14 @@ async function _runWorkflow({
     }
 
     const hasVoiceSelected = voice && ((typeof voice === "object" && voice.id && String(voice.id).trim()) || (typeof voice === "string" && voice.trim()));
-    const isCharacterTalkNoTts = characterTalk === true && !hasVoiceSelected;
+    const isCharacterTalkActive = characterTalk === true;
 
     let pureVoiceURL = null;
     let voiceLocalPath = null;
     let timelineWords = [];
 
-    if (isCharacterTalkNoTts) {
-      logger.info("🎙️ [Character Talk] Enabled without TTS voice — skipping external TTS generation. Gemini Omni Flash will generate video clips with native character dialogue & audio.");
+    if (isCharacterTalkActive) {
+      logger.info("🎙️ [Character Talk] Enabled — skipping external TTS generation. Gemini Omni Flash will generate video clips with native character dialogue & real voice.");
       const scriptWords = script.split(/\s+/).filter(Boolean);
       const secPerWord = 0.35;
       timelineWords = scriptWords.map((w, idx) => ({
@@ -1222,8 +1222,8 @@ async function _runWorkflow({
               }
 
               const validSegmentFiles = segmentFiles.filter(Boolean);
-              const useSegmentAudioOnly = isCharacterTalkNoTts;
-              const mixSegmentAudio = characterTalk && hasVoiceSelected;
+              const useSegmentAudioOnly = characterTalk === true && !musicPath;
+              const mixSegmentAudio = characterTalk === true && !!musicPath;
               await concatSegments(validSegmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null, {
                 useSegmentAudioOnly,
                 mixSegmentAudio,
