@@ -7,7 +7,9 @@ import { createLogger } from "../utils/logger.js";
 import { config } from "../config/workflow.config.js";
 import { enqueueRender, enqueueSegmentRender } from "../utils/renderQueue.js";
 import { getPerfSession } from "../utils/perfLogger.js";
-import { buildSubtitleGroups } from "./timelineService.js";
+import { extractAudioFromVideo, combineAudioFiles, applyLipSync } from "./lipSyncService.js";
+
+export { extractAudioFromVideo, combineAudioFiles, applyLipSync };
 
 const logger = createLogger("VideoService");
 

@@ -24,7 +24,10 @@ import {
   generateVideoClips,
   concatSegments,
   renderMediaSegment,
-  convertTranscriptToAss
+  convertTranscriptToAss,
+  extractAudioFromVideo,
+  combineAudioFiles,
+  applyLipSync,
 } from "./videoService.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
 import {
@@ -260,6 +263,8 @@ async function _runWorkflow({
   characterReferenceBase64: userCharacterReferenceBase64 = null,
   // New: multi-character reference array [{ name, base64 }]
   characterReferences: userMultiCharacterReferences = null,
+  enableLipSync = false,
+  useOmniAudio = false,
 }) {
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
@@ -1178,7 +1183,20 @@ async function _runWorkflow({
 
                 checkpointManager.markRenderRunning(sceneId);
                 try {
-                  await renderMediaSegment(clipPath, segmentPath, duration, width, height, escapedSegmentAssPath);
+                  let activeClipPath = clipPath;
+                  if (enableLipSync === true && fs.existsSync(finalAudioLocalPath)) {
+                    const syncedClipPath = path.join(ratioDir, `${sceneId}_lipsynced.mp4`);
+                    try {
+                      await applyLipSync(clipPath, finalAudioLocalPath, syncedClipPath);
+                      if (fs.existsSync(syncedClipPath)) {
+                        activeClipPath = syncedClipPath;
+                      }
+                    } catch (syncErr) {
+                      logger.warn(`⚠️ Lip sync failed for segment ${i + 1}: ${syncErr.message}. Using original clip.`);
+                    }
+                  }
+
+                  await renderMediaSegment(activeClipPath, segmentPath, duration, width, height, escapedSegmentAssPath);
                   checkpointManager.markRenderCompleted(sceneId);
                 } catch (err) {
                   checkpointManager.markRenderFailed(sceneId);
