@@ -130,15 +130,16 @@ Style Mode: HOWTO_FIELD_MANUAL
 Chapter Template:
 Hook (one-line job + win) → Scope → Safety → Tools/Materials → Setup → Steps (4–8) → Verify → Common fails + fixes → Document → Recap (three bullets).
 Sentence Patterns for Audio:
-“You’ll need… Then… Finally…”
-  advertisement: "Style Mode: High_Impact_Commercial_Advertisement (persuasive, punchy, high-energy).
+“You’ll need… Then… Finally…`,
+  advertisement: `
+Style Mode: High_Impact_Commercial_Advertisement (persuasive, punchy, high-energy).
 * Voice: compelling, benefit-focused, dynamic. Short, high-retention hook in first 3 seconds.
 * Pacing: fast-paced, high visual impact, clear value proposition and call to action (CTA).
 * Structure:
     * Beat 1 – The Hook: Grab attention with a relatable problem or bold visual statement.
     * Beat 2 – The Solution & Key Features: Showcase the product/service benefits dynamically.
     * Beat 3 – Social Proof & Value: Build trust with transformation or strong results.
-    * Beat 4 – Call to Action (CTA): Clear, urgent next step (visit site, buy now, try today)."
+    * Beat 4 – Call to Action (CTA): Clear, urgent next step (visit site, buy now, try today).
   `,
   // Default fallback if storyType not matched
   default: `

@@ -484,73 +484,34 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
         }
 
         let videoBuffer = null;
+        const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+        const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${apiKey}`;
 
-        // Approach 1: Try GoogleGenAI SDK interactions API with Gemini Omni Flash
-        try {
-          const inputParts = [{ text: finalPrompt }];
-          if (previousFrameData) {
-            inputParts.push({
-              inlineData: { mimeType: "image/png", data: previousFrameData }
-            });
-          }
-          for (const ref of activeReferences) {
-            if (ref.imageBytes) {
-              inputParts.push({
-                inlineData: { mimeType: ref.mimeType || "image/png", data: ref.imageBytes }
-              });
-            }
-          }
-
-          const interaction = await ai.interactions.create({
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Api-Revision": "2026-05-20",
+          },
+          body: JSON.stringify({
             model: "gemini-omni-flash-preview",
-            input: inputParts.length === 1 ? finalPrompt : inputParts,
-          });
+            input: finalPrompt,
+          }),
+        });
 
-          if (interaction.output_video?.data) {
-            videoBuffer = Buffer.from(interaction.output_video.data, "base64");
-          } else if (interaction.steps) {
-            for (const step of interaction.steps) {
-              if (step.type === "model_output" && Array.isArray(step.content)) {
-                for (const item of step.content) {
-                  if (item.type === "video" && item.data) {
-                    videoBuffer = Buffer.from(item.data, "base64");
-                    break;
-                  }
-                }
-              }
-            }
-          }
-        } catch (sdkErr) {
-          logger.warn(`Gemini Omni Flash SDK call failed: ${sdkErr.message}. Trying REST API fallback...`);
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`Gemini Omni Flash API error (${res.status}): ${errText}`);
         }
 
-        // Approach 2: REST API fallback for Gemini Omni Flash
-        if (!videoBuffer) {
-          const apiKey = process.env.GEMINI_API_KEY;
-          const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${apiKey}`;
-          const res = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "gemini-omni-flash-preview",
-              input: finalPrompt,
-            }),
-          });
-
-          if (!res.ok) {
-            const errText = await res.text();
-            throw new Error(`Gemini Omni Flash REST error (${res.status}): ${errText}`);
-          }
-
-          const json = await res.json();
-          if (json.steps) {
-            for (const step of json.steps) {
-              if (step.type === "model_output" && Array.isArray(step.content)) {
-                for (const item of step.content) {
-                  if (item.type === "video" && item.data) {
-                    videoBuffer = Buffer.from(item.data, "base64");
-                    break;
-                  }
+        const json = await res.json();
+        if (json.steps && Array.isArray(json.steps)) {
+          for (const step of json.steps) {
+            if (step.type === "model_output" && Array.isArray(step.content)) {
+              for (const item of step.content) {
+                if (item.type === "video" && item.data) {
+                  videoBuffer = Buffer.from(item.data, "base64");
+                  break;
                 }
               }
             }
