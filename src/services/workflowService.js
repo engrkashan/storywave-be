@@ -954,11 +954,14 @@ async function _runWorkflow({
       transcriptPath = cachedSubPath;
       stopSubTimer?.();
 
-      // Build the immutable Master Timeline FIRST — narrationSegments depend on it.
-      // Use imageCount (or dynamic count from audio duration) as the target scene count.
+      // Use dynamic count from audio duration for video (Veo max clip length = 5s), or imageCount/dynamic for multi_image.
       const narrationDuration = await getAudioDuration(narrationWavPath);
       const { words: timelineWords } = JSON.parse(transcriptContent);
-      const targetSceneCount = imageCount || Math.max(5, Math.ceil(narrationDuration / 5));
+      const dynamicCount = Math.max(1, Math.ceil(narrationDuration / 5));
+      const targetSceneCount = (mediaType === "video")
+        ? dynamicCount
+        : (imageCount || Math.max(5, dynamicCount));
+
       // script variable holds the original text at this point. 
       const masterTimeline = buildMasterTimeline(timelineWords, narrationDuration, targetSceneCount, script);
       const timelinePath = path.join(workflowTempDir, "timeline.json");
@@ -973,14 +976,14 @@ async function _runWorkflow({
       // narrationSegments maps Whisper words → per-scene text so each prompt's
       // narration matches the exact audio slot it will be rendered over.
       let preGeneratedScenePrompts = null;
+      let narrationSegments = [];
       let mgeToStoryIdMap = {};  // bridges MGE char_N IDs → storyMetadata char IDs
 
-      if (mediaType === "multi_image" && !uploadedMediaUrl) {
-        const dynamicCount = Math.max(5, Math.ceil(narrationDuration / 5));
-        const count = imageCount || dynamicCount;
+      if ((mediaType === "multi_image" || mediaType === "video") && !uploadedMediaUrl) {
+        const count = masterTimeline.actualSceneCount;
 
         // Build narration segments aligned to Master Timeline audio boundaries
-        const narrationSegments = buildNarrationSegments(timelineWords, masterTimeline.scenes);
+        narrationSegments = buildNarrationSegments(timelineWords, masterTimeline.scenes);
         logger.info(`🎙️  Narration segments built: ${narrationSegments.length} segments from Whisper timestamps`);
 
         // SFX post-transcription: enhance each narration segment's text with SFX cues
@@ -1143,9 +1146,52 @@ async function _runWorkflow({
 
             if (mediaItems.length > 0) {
               const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
-              // Legacy non-streaming fallback for video/clips
-              const dummySegmentFiles = []; // Not fully refactored for video clips yet
-              // We would need a createMultiMediaVideo for video clips or use the same streaming logic
+              const checkpointManager = new CheckpointManager(workflowTempDir);
+
+              const isVertical = currentRatio === "9:16";
+              const width = isVertical ? 1080 : 1920;
+              const height = isVertical ? 1920 : 1080;
+
+              const getSegmentRange = (index) => {
+                const scene = masterTimeline.scenes[index];
+                if (scene) return { startTime: scene.startSec, duration: scene.durationSec };
+                const approxDuration = masterTimeline.totalDuration / scenePrompts.length;
+                return { startTime: index * approxDuration, duration: approxDuration };
+              };
+
+              const segmentFiles = new Array(mediaItems.length).fill(null);
+              for (let i = 0; i < mediaItems.length; i++) {
+                const clipPath = mediaItems[i];
+                const sceneId = `scene_${String(i + 1).padStart(3, "0")}`;
+                const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
+                segmentFiles[i] = segmentPath;
+
+                if (checkpointManager.isRenderCompleted(sceneId) && fs.existsSync(segmentPath)) {
+                  logger.info(`⏩ [Segment ${i + 1}/${mediaItems.length}] Skipping render (Checkpoint)`);
+                  continue;
+                }
+
+                const { duration } = getSegmentRange(i);
+                const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
+                convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, i);
+                const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+
+                checkpointManager.markRenderRunning(sceneId);
+                try {
+                  await renderMediaSegment(clipPath, segmentPath, duration, width, height, escapedSegmentAssPath);
+                  checkpointManager.markRenderCompleted(sceneId);
+                } catch (err) {
+                  checkpointManager.markRenderFailed(sceneId);
+                  throw err;
+                } finally {
+                  if (fs.existsSync(segmentAssPath)) {
+                    fs.unlinkSync(segmentAssPath);
+                  }
+                }
+              }
+
+              const validSegmentFiles = segmentFiles.filter(Boolean);
+              await concatSegments(validSegmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null);
               stopStitchTimer?.();
             }
           } else if (mediaType === "multi_image") {

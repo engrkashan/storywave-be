@@ -25,7 +25,13 @@ export function buildSceneObjects(rawScenePrompts = [], storyMetadata = {}, narr
   const charactersList = storyMetadata.characters || [];
   const locationsList = storyMetadata.locations || [];
 
-  return rawScenePrompts.map((sp, idx) => {
+  const items = (rawScenePrompts && rawScenePrompts.length > 0)
+    ? rawScenePrompts
+    : (narrationSegments && narrationSegments.length > 0
+        ? narrationSegments.map((seg) => ({ prompt: seg.text, narration: seg.text, charactersInScene: [] }))
+        : []);
+
+  return items.map((sp, idx) => {
     const narrationSeg = narrationSegments[idx] || {};
     const textNarrative = narrationSeg.text || sp.narration || sp.prompt || "";
     
