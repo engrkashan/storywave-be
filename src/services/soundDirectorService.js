@@ -83,7 +83,7 @@ DESIGN INSTRUCTIONS & RULES:
    - Assign 'importance': "critical", "high", "medium", or "low".
    - Assign 'priority': 1 (low) to 5 (critical, e.g. gunshot=5, door slam=4).
    - Assign 'layer': "foreground" or "midground".
-   - Set 'fadeInSec', 'fadeOutSec', 'volume' to a subtle, soft level (0.15 to 0.35). SFX must NEVER overpower narration voice.
+   - Set 'fadeInSec', 'fadeOutSec', 'volume' to a subtle, soft level (0.10 to 0.20). SFX must NEVER overpower narration voice.
 4. MUSIC INTERACTION: Specify if background music should duck during key SFX (e.g., gunshot, whisper).
 
 Return STRICT VALID JSON in this format:
@@ -105,7 +105,7 @@ Return STRICT VALID JSON in this format:
       "prompt": "Eerie quiet room tone inside an old creaky wooden house with subtle low wind draft",
       "startWord": "It",
       "endWord": "silence",
-      "volume": 0.30,
+      "volume": 0.12,
       "fadeInSec": 1.0,
       "fadeOutSec": 1.5,
       "layer": "background_ambience"
@@ -128,7 +128,7 @@ Return STRICT VALID JSON in this format:
       "layer": "foreground",
       "fadeInSec": 0.3,
       "fadeOutSec": 0.6,
-      "volume": 0.65,
+      "volume": 0.18,
       "duckMusic": false,
       "overlapNarration": true
     }
@@ -140,7 +140,7 @@ Return STRICT VALID JSON in this format:
       "description": "Low frequency cinematic sub-bass rumble swell for rising suspense",
       "targetStartWord": "darkness",
       "durationSec": 4.0,
-      "volume": 0.40,
+      "volume": 0.18,
       "fadeInSec": 1.5,
       "fadeOutSec": 1.0,
       "layer": "tension_drone"
@@ -285,7 +285,7 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
           file: sfxPath,
           delayMs: startSec * 1000,
           durationSec: realDur,
-          volume: Math.min(0.35, sfx.volume || 0.30),
+          volume: Math.min(0.20, sfx.volume || 0.15),
           fadeInSec: sfx.fadeInSec || 0.1,
           fadeOutSec: sfx.fadeOutSec || 0.4,
           layer: sfx.layer || "foreground",
@@ -320,7 +320,7 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
           file: tPath,
           delayMs: startSec * 1000,
           durationSec: realDur,
-          volume: Math.min(0.35, t.volume || 0.30),
+          volume: Math.min(0.20, t.volume || 0.15),
           fadeInSec: t.fadeInSec || 1.0,
           fadeOutSec: t.fadeOutSec || 1.0,
           layer: t.layer || "tension_drone",

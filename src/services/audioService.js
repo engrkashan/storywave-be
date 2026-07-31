@@ -75,13 +75,13 @@ export async function getAudioDuration(filePath) {
  * @param {string} mainFile - Path to the primary continuous audio file (e.g., narration)
  * @param {Array<{file: string, delayMs: number}>} sfxLayers - Array of SFX objects
  * @param {string} outputFile - Destination path
- * @param {number} [sfxVolume] - Sound effects volume level multiplier (default: 1.25 / 125%)
+ * @param {number} [sfxVolume] - Sound effects volume level multiplier (default: 0.5 / 50%)
  */
 export async function mixAudioFiles(
   mainFile,
   sfxLayers,
   outputFile,
-  sfxVolume = parseFloat(process.env.SFX_VOLUME || "0.9")
+  sfxVolume = parseFloat(process.env.SFX_VOLUME || "0.5")
 ) {
   return new Promise(async (resolve, reject) => {
     if (!sfxLayers || sfxLayers.length === 0) {
@@ -215,7 +215,7 @@ export async function mixCinematicSoundscape({
 
       const delayMs = Math.round(asset.delayMs || 0);
       const delayStr = `${delayMs}|${delayMs}`;
-      const vol = asset.volume || 0.35;
+      const vol = asset.volume || 0.20;
       const fadeIn = asset.fadeInSec || 0.1;
       const fadeOut = asset.fadeOutSec || 0.4;
 
