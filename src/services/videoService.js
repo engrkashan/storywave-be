@@ -431,6 +431,42 @@ export async function extractLastFrame(videoPath, outputPath) {
   });
 }
 
+/**
+ * Extracts 16kHz mono WAV audio track from a video clip for Whisper transcription
+ */
+export async function extractAudioFromClip(clipPath, outputPath) {
+  return await enqueueRender(async () => {
+    try {
+      await new Promise((resolve, reject) => {
+        const ff = spawn("ffmpeg", [
+          "-y",
+          "-loglevel", "error",
+          "-i", clipPath,
+          "-vn",
+          "-acodec", "pcm_s16le",
+          "-ar", "16000",
+          "-ac", "1",
+          outputPath
+        ]);
+
+        let errorLog = "";
+        ff.stderr.on("data", (data) => errorLog += data.toString());
+
+        ff.on("close", (code) => {
+          if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100) resolve();
+          else reject(new Error(errorLog || `FFmpeg audio extraction exited with code ${code}`));
+        });
+
+        ff.on("error", (err) => reject(err));
+      });
+      return outputPath;
+    } catch (err) {
+      logger.error(`❌ Failed to extract audio from video clip: ${err.message}`);
+      return null;
+    }
+  });
+}
+
 export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = [], commonPrompt = null, onCheckCancelled = null) {
   const results = [];
   let previousClipLastFrame = null;
@@ -586,6 +622,7 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
       "-map", "0:v",
       "-map", "0:a?",
       "-vf", `${commonScale},fps=30${trimFilter}${subFilter}`,
+      "-af", "aresample=async=1",
       "-t", String(duration),
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-b:a", "192k",
@@ -690,7 +727,7 @@ export async function concatSegments(segmentFiles, audioPath, outputPath, audioD
       "-safe", "0",
       "-i", segmentsListPath,
       "-i", audioPath,
-      "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+      "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[aout]",
       "-map", "0:v",
       "-map", "[aout]",
       "-c:v", "copy",

@@ -3,6 +3,65 @@ import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("TimelineService");
 
+/**
+ * Intelligently chunks a script into optimal video clip segments (~8-10 words per 5s clip).
+ * Respects sentence boundaries, punctuation, and clause connectives.
+ * Guarantees 100% script word coverage with 0 skipped words and 0 overlaps.
+ * Used EXCLUSIVELY for Video mode (Google Veo / Gemini Omni Flash) to ensure speech fits within 5s clips.
+ *
+ * @param {string} script
+ * @param {number} targetWordsPerChunk - Default 9 words (~1.8 words/sec speech rate)
+ * @returns {Array<string>} Array of script segment chunks
+ */
+export function intelligentVideoScriptChunker(script, targetWordsPerChunk = 9) {
+  if (!script || !script.trim()) return [];
+
+  const rawWords = script.trim().split(/\s+/).filter(Boolean);
+  if (rawWords.length === 0) return [];
+
+  const chunks = [];
+  let currentChunk = [];
+
+  for (let i = 0; i < rawWords.length; i++) {
+    const word = rawWords[i];
+    currentChunk.push(word);
+
+    const isLastWord = i === rawWords.length - 1;
+    const hasTerminalPunct = /[.!?]$/.test(word);
+    const hasClausePunct = /[,;:]$/.test(word);
+
+    let shouldCut = false;
+
+    if (isLastWord) {
+      shouldCut = true;
+    } else if (currentChunk.length >= targetWordsPerChunk + 3) {
+      // Hard maximum words per 5s video clip reached -> cut
+      shouldCut = true;
+    } else if (currentChunk.length >= targetWordsPerChunk - 3) {
+      // Target range (6 to 12 words) -> cut on sentence or clause punctuation
+      if (hasTerminalPunct || hasClausePunct) {
+        shouldCut = true;
+      }
+    }
+
+    if (shouldCut && currentChunk.length > 0) {
+      chunks.push(currentChunk.join(" "));
+      currentChunk = [];
+    }
+  }
+
+  if (currentChunk.length > 0) {
+    if (chunks.length > 0 && currentChunk.length < 3) {
+      // Merge tiny trailing stub into last chunk to avoid 1-2 word isolated clips
+      chunks[chunks.length - 1] += " " + currentChunk.join(" ");
+    } else {
+      chunks.push(currentChunk.join(" "));
+    }
+  }
+
+  return chunks;
+}
+
 /* ============================================================
    SUBTITLE GROUP BUILDER
    Extracts chunking logic from parseJsonToAss into a pure

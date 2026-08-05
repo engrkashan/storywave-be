@@ -17,15 +17,17 @@ import {
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { getAudioDuration, convertToWav, mixAudioFiles, mixCinematicSoundscape } from "./audioService.js";
 import { analyzeNarrativeAndPlanSoundscape, buildSoundscapeAssets } from "./soundDirectorService.js";
-import { buildMasterTimeline, saveMasterTimeline, buildNarrationSegments } from "./timelineService.js";
+import { buildMasterTimeline, saveMasterTimeline, buildNarrationSegments, buildSubtitleGroups, intelligentVideoScriptChunker } from "./timelineService.js";
 import {
   createVideo,
   createVideoWithTimeline,
   generateVideoClips,
   concatSegments,
   renderMediaSegment,
-  convertTranscriptToAss
+  convertTranscriptToAss,
+  extractAudioFromClip
 } from "./videoService.js";
+import { planDedicatedVideoPipeline } from "./videoPlanner/index.js";
 import { generateThumbnailPrompt } from "../utils/thumbnailPrompt.js";
 import {
   extractStoryMetadata,
@@ -808,26 +810,64 @@ async function _runWorkflow({
       });
     }
 
-    const hasVoiceSelected = voice && ((typeof voice === "object" && voice.id && String(voice.id).trim()) || (typeof voice === "string" && voice.trim()));
+    const isExplicitVoiceSelected = (v) => {
+      if (!v) return false;
+      if (typeof v === "string") {
+        const s = v.trim().toLowerCase();
+        return s !== "" && s !== "none" && s !== "null" && s !== "undefined" && s !== "default";
+      }
+      if (typeof v === "object" && v !== null) {
+        const id = String(v.id || "").trim().toLowerCase();
+        return id !== "" && id !== "none" && id !== "null" && id !== "undefined" && id !== "default";
+      }
+      return false;
+    };
+
+    const hasVoiceSelected = isExplicitVoiceSelected(voice);
     const isCharacterTalkActive = characterTalk === true;
 
     let pureVoiceURL = null;
     let voiceLocalPath = null;
     let timelineWords = [];
+    let actualAudioDuration = 0;
 
-    if (isCharacterTalkActive) {
-      logger.info("🎙️ [Character Talk] Enabled — skipping external TTS generation. Gemini Omni Flash will generate video clips with native character dialogue & real voice.");
-      const scriptWords = script.split(/\s+/).filter(Boolean);
-      const secPerWord = 0.35;
-      timelineWords = scriptWords.map((w, idx) => ({
-        word: w,
-        start: idx * secPerWord,
-        end: (idx + 1) * secPerWord,
-      }));
+    if (isCharacterTalkActive && !hasVoiceSelected) {
+      logger.info("🎙️ [Character Talk] Enabled (No explicit external voice selected) — skipping external TTS generation completely. Gemini Omni Flash will generate video clips with native character dialogue & real voice.");
+      
+      if (mediaType === "video") {
+        const chunks = intelligentVideoScriptChunker(script, 9);
+        logger.info(`🎬 [Intelligent Video Chunker] Script split into ${chunks.length} optimal video dialogue chunks (~8-10 words/chunk).`);
+        
+        let currentTime = 0;
+        chunks.forEach((chunkText) => {
+          const wordsInChunk = chunkText.split(/\s+/).filter(Boolean);
+          const chunkDuration = 5.0; // 5.0s per Gemini Omni Flash clip
+          const secPerWord = chunkDuration / Math.max(1, wordsInChunk.length);
+          
+          wordsInChunk.forEach((w, wIdx) => {
+            timelineWords.push({
+              word: w,
+              start: currentTime + (wIdx * secPerWord),
+              end: currentTime + ((wIdx + 1) * secPerWord),
+            });
+          });
+          currentTime += chunkDuration;
+        });
+        actualAudioDuration = currentTime;
+      } else {
+        const scriptWords = script.split(/\s+/).filter(Boolean);
+        const secPerWord = 0.35;
+        timelineWords = scriptWords.map((w, idx) => ({
+          word: w,
+          start: idx * secPerWord,
+          end: (idx + 1) * secPerWord,
+        }));
+      }
+
       transcriptPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
       fs.writeFileSync(transcriptPath, JSON.stringify({ text: script, words: timelineWords }));
     } else {
-      logger.info("Step 3: Generating continuous voiceover narration...");
+      logger.info(`Step 3: Generating continuous voiceover narration (CharacterTalk: ${isCharacterTalkActive}, ExternalVoiceSelected: ${hasVoiceSelected})...`);
       logger.info(
         `[WorkflowService] voice payload dispatched to generateVoiceover: ${JSON.stringify(voice)}`,
       );
@@ -909,7 +949,7 @@ async function _runWorkflow({
     }
 
     let mixedVoiceURL = null;
-    let actualAudioDuration = 0;
+    if (!actualAudioDuration) actualAudioDuration = 0;
 
     if (finalAudioLocalPath && fs.existsSync(finalAudioLocalPath)) {
       logger.info("Uploading final audio track to Cloudinary...");
@@ -970,7 +1010,7 @@ async function _runWorkflow({
       const stopSubTimer = perf?.start("subtitle", "Prepare Subtitles (Whisper)");
 
       const narrationWavPath = path.join(workflowTempDir, `narration-${workflow.id}.wav`);
-      if (!fs.existsSync(narrationWavPath)) {
+      if (voiceLocalPath && fs.existsSync(voiceLocalPath) && !fs.existsSync(narrationWavPath)) {
         await convertToWav(voiceLocalPath, narrationWavPath);
       }
 
@@ -978,20 +1018,34 @@ async function _runWorkflow({
       const cachedSubPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
       if (fs.existsSync(cachedSubPath)) {
         transcriptContent = fs.readFileSync(cachedSubPath, "utf-8");
-      } else {
+      } else if (fs.existsSync(narrationWavPath)) {
         transcriptContent = await transcribeWithTimestamps(narrationWavPath);
         fs.writeFileSync(cachedSubPath, transcriptContent);
+      } else {
+        transcriptContent = JSON.stringify({ text: script, words: timelineWords });
       }
       transcriptPath = cachedSubPath;
       stopSubTimer?.();
 
-      // Use dynamic count from audio duration for video (Veo max clip length = 5s), or imageCount/dynamic for multi_image.
-      const narrationDuration = await getAudioDuration(narrationWavPath);
+      let targetSceneCount;
+      let narrationDuration;
+
+      if (mediaType === "video") {
+        const videoChunks = intelligentVideoScriptChunker(script, 9);
+        targetSceneCount = Math.max(1, videoChunks.length);
+        narrationDuration = (fs.existsSync(narrationWavPath))
+          ? await getAudioDuration(narrationWavPath)
+          : targetSceneCount * 5.0;
+        logger.info(`🎬 [Video Mode] Target scene count set to ${targetSceneCount} clips based on intelligent script chunking (~8-10 words/chunk).`);
+      } else {
+        narrationDuration = (fs.existsSync(narrationWavPath))
+          ? await getAudioDuration(narrationWavPath)
+          : (actualAudioDuration || Math.max(5, Math.ceil(script.split(/\s+/).length * 0.35)));
+        const dynamicCount = Math.max(1, Math.ceil(narrationDuration / 5));
+        targetSceneCount = imageCount || Math.max(5, dynamicCount);
+      }
+
       const { words: timelineWords } = JSON.parse(transcriptContent);
-      const dynamicCount = Math.max(1, Math.ceil(narrationDuration / 5));
-      const targetSceneCount = (mediaType === "video")
-        ? dynamicCount
-        : (imageCount || Math.max(5, dynamicCount));
 
       // script variable holds the original text at this point. 
       const masterTimeline = buildMasterTimeline(timelineWords, narrationDuration, targetSceneCount, script);
@@ -1151,10 +1205,16 @@ async function _runWorkflow({
               },
             ];
           } else if (mediaType === "video") {
-            // Video mode: generate specialized motion prompts for Gemini Omni Flash (gemini-omni-flash-preview)
-            const sharedSceneObjects = buildSceneObjects(preGeneratedScenePrompts || [], storyMetadata, narrationSegments);
-            scenePrompts = planVideoPrompts(sharedSceneObjects, storyMetadata, { aspectRatio: currentRatio, characterTalk });
-            logger.info(`🎬 Using ${scenePrompts.length} Video-Planned motion prompts for Gemini Omni Flash (Character Talk: ${characterTalk})`);
+            // Video mode: generate specialized state-based motion prompts for Gemini Omni Flash via dedicated Video Planner
+            const videoPlanResult = await planDedicatedVideoPipeline(script, storyMetadata, {
+              aspectRatio: currentRatio,
+              characterTalk,
+              backgroundMusic,
+              soundEffects,
+              voice,
+            });
+            scenePrompts = videoPlanResult.scenePrompts;
+            logger.info(`🎬 Using ${scenePrompts.length} State-Based Video-Planned motion prompts for Gemini Omni Flash (Character Talk: ${characterTalk})`);
           } else {
             // multi_image: use pre-generated prompts built alongside Master Timeline (100% untouched)
             scenePrompts = preGeneratedScenePrompts || [];
@@ -1176,6 +1236,49 @@ async function _runWorkflow({
             mediaItems = clips.filter((c) => c.filePath).map((c) => c.filePath);
 
             if (mediaItems.length > 0) {
+              // Refine subtitle timestamps from actual spoken audio of native video clips
+              if (characterTalk === true && !hasVoiceSelected) {
+                logger.info("🎙️ [Character Talk] Refinement: Extracting audio & transcribing generated video clips for exact subtitle timestamp sync...");
+                try {
+                  const refinedWords = [];
+                  for (let i = 0; i < mediaItems.length; i++) {
+                    const clipPath = mediaItems[i];
+                    const scene = masterTimeline.scenes[i];
+                    if (!clipPath || !fs.existsSync(clipPath) || !scene) continue;
+
+                    const clipWavPath = path.join(workflowTempDir, `clip_audio_${i}_${Date.now()}.wav`);
+                    try {
+                      await extractAudioFromClip(clipPath, clipWavPath);
+                      const transcriptJsonStr = await transcribeWithTimestamps(clipWavPath);
+                      const { words: clipWords } = JSON.parse(transcriptJsonStr);
+
+                      if (Array.isArray(clipWords) && clipWords.length > 0) {
+                        for (const w of clipWords) {
+                          refinedWords.push({
+                            word: w.word,
+                            start: scene.startSec + (w.start || 0),
+                            end: scene.startSec + (w.end || 0),
+                          });
+                        }
+                      }
+                    } catch (clipErr) {
+                      logger.warn(`Could not transcribe native audio for clip ${i + 1}: ${clipErr.message}`);
+                    } finally {
+                      if (fs.existsSync(clipWavPath)) fs.unlinkSync(clipWavPath);
+                    }
+                  }
+
+                  if (refinedWords.length > 0) {
+                    masterTimeline.subtitleGroups = buildSubtitleGroups(refinedWords);
+                    const timelinePath = path.join(workflowTempDir, "timeline.json");
+                    saveMasterTimeline(masterTimeline, timelinePath);
+                    logger.info(`✅ [Character Talk] Subtitle timestamps refined from native video audio: ${masterTimeline.subtitleGroups.length} subtitle groups generated.`);
+                  }
+                } catch (refineErr) {
+                  logger.warn(`⚠️ Character Talk timestamp refinement warning: ${refineErr.message}`);
+                }
+              }
+
               const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
               const checkpointManager = new CheckpointManager(workflowTempDir);
 
@@ -1222,8 +1325,8 @@ async function _runWorkflow({
               }
 
               const validSegmentFiles = segmentFiles.filter(Boolean);
-              const useSegmentAudioOnly = characterTalk === true && !musicPath;
-              const mixSegmentAudio = characterTalk === true && !!musicPath;
+              const useSegmentAudioOnly = characterTalk === true && !hasVoiceSelected && !musicPath;
+              const mixSegmentAudio = (characterTalk === true && hasVoiceSelected) || (characterTalk === true && !hasVoiceSelected && !!musicPath);
               await concatSegments(validSegmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null, {
                 useSegmentAudioOnly,
                 mixSegmentAudio,

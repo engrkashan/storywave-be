@@ -68,13 +68,25 @@ export function startCpuMonitor(workflowId, intervalMs = 2000) {
       // ── Count FFmpeg processes ────────────────────────────────────────
       let ffmpegCount = 0;
       try {
-        const psOut = execSync("ps aux 2>/dev/null | grep -c '[f]fmpeg'", {
-          timeout: 500,
-          encoding: 'utf8',
-        }).trim();
-        ffmpegCount = parseInt(psOut, 10) || 0;
+        if (os.platform() === 'win32') {
+          const psOut = execSync('tasklist /FI "IMAGENAME eq ffmpeg.exe" /NH', {
+            timeout: 500,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+          });
+          if (psOut.includes('ffmpeg.exe')) {
+            ffmpegCount = (psOut.match(/ffmpeg\.exe/gi) || []).length;
+          }
+        } else {
+          const psOut = execSync("ps aux 2>/dev/null | grep -c '[f]fmpeg'", {
+            timeout: 500,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+          }).trim();
+          ffmpegCount = parseInt(psOut, 10) || 0;
+        }
       } catch (_) {
-        // ps may fail on Windows or under load — ignore
+        // ps/tasklist may fail on Windows or under load — ignore
       }
 
       const sample = {

@@ -76,15 +76,24 @@ export function buildCinematicSceneDirectorObject(scene, storyMetadata = {}, com
   const isCharacterTalk = options.characterTalk || storyMetadata.characterTalk || scene.characterTalk;
   const spokenText = narrative.narrationText || narrative.beatSummary || "";
 
+  // Elevate camera shot size and angle for Character Talk beats to guarantee face and mouth visibility
+  if (isCharacterTalk) {
+    cameraPlan.shotSize = camera.shotSize && camera.shotSize.toLowerCase().includes("close")
+      ? camera.shotSize
+      : "Medium Close-Up Shot";
+    cameraPlan.angle = camera.angle && camera.angle.toLowerCase().includes("face")
+      ? camera.angle
+      : "Eye Level Facing Camera";
+    cameraPlan.depthOfField = "Shallow depth of field, sharp focus on speaking character's face and mouth";
+  }
+
   // 4. Motion Prompt Synthesis (Continuous Kinetic Motion & Character Dialogue)
   const veoPromptParts = [
-    `[CINEMATOGRAPHY: ${cameraPlan.shotSize}, ${cameraPlan.angle}, ${cameraPlan.lens}, ${cameraPlan.rig}. ${cameraPlan.movement}]`,
-    `ACTING & KINETICS: ${characterPerformance}`,
-    isCharacterTalk && spokenText ? `CHARACTER DIALOGUE & NATIVE AUDIO: The primary character on screen is visibly speaking out loud with realistic lip sync and clear audio narration output for these exact lines: "${spokenText}"` : "",
-    `ENVIRONMENT & PHYSICS: ${sceneObject.environmentPhysics} Lighting: ${sceneObject.lighting}`,
-    `SCENE OBJECTIVE: ${narrative.sceneObjective || narrative.beatSummary || "Advance story beat"}. Duration: ${timing.durationSec || 5}s.`,
-    commonPrompt ? `VISUAL ENVELOPE: ${commonPrompt}` : "Style: Photorealistic 8k cinematic motion, organic physics, fluid continuous movement.",
-    "DIRECTOR INSTRUCTION: Every subject, camera, and environmental element must remain continuously alive in motion. Zero frozen poses. Zero static still frames.",
+    `VISUAL SCENE: ${cameraPlan.shotSize}, ${cameraPlan.angle}. ${characterPerformance} Environment: ${locName} (${locDetails}). Lighting: ${lightingStr}.`,
+    isCharacterTalk && spokenText
+      ? `CHARACTER DIALOGUE: The character on screen speaks out loud reading these exact lines: "${spokenText}"`
+      : "",
+    commonPrompt ? `STYLE: ${commonPrompt}` : "Style: Photorealistic 8k cinematic video, natural motion.",
   ].filter(Boolean);
 
   const veoPrompt = veoPromptParts.join("\n\n").trim();
