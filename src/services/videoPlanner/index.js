@@ -12,6 +12,7 @@ import { initializeSceneState, updateSceneState } from "./sceneStateEngine.js";
 import { validateBeatContinuity } from "./promptValidator.js";
 import { buildStateBasedPrompt } from "./promptBuilder.js";
 import { buildUnifiedSpeechTimeline, allocateSpeechToBeats } from "./speechTimelineService.js";
+import { runPromptQualityPipeline } from "./pqa/promptQualityPipeline.js";
 import { createLogger } from "../../utils/logger.js";
 
 const logger = createLogger("VideoPlannerOrchestrator");
@@ -70,6 +71,9 @@ export async function planDedicatedVideoPipeline(script, storyBible = {}, option
     currentState = updateSceneState(currentState, currentBeat, nextBeat, i, totalBeatsCount);
   }
 
+  // 7.5 Dedicated Prompt Quality Assurance (PQA) Pipeline (Video Only)
+  const auditedAndOptimizedPrompts = runPromptQualityPipeline(stateBasedPrompts, validatedBeats, storyBible, options);
+
   // 8. Build Master Timeline format compatible with videoService concat & timeline structures
   let totalDuration = 0;
   const scenes = validatedBeats.map((b, idx) => {
@@ -84,10 +88,10 @@ export async function planDedicatedVideoPipeline(script, storyBible = {}, option
     };
   });
 
-  logger.info(`✅ [Video Planner] Pipeline complete: ${stateBasedPrompts.length} action-continuous video prompts generated (Total Video Duration: ${totalDuration.toFixed(1)}s).`);
+  logger.info(`✅ [Video Planner] Pipeline complete: ${auditedAndOptimizedPrompts.length} audited & action-continuous video prompts generated (Total Video Duration: ${totalDuration.toFixed(1)}s).`);
 
   return {
-    scenePrompts: stateBasedPrompts,
+    scenePrompts: auditedAndOptimizedPrompts,
     plannedScenes: scenes,
     totalDuration,
     speechTimeline,

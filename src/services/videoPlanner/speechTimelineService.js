@@ -156,18 +156,26 @@ export function allocateSpeechToBeats(beats = [], speechTimeline = {}) {
   }
 
   let globalWordCounter = 0;
+  const usedSegmentIds = new Set();
 
   return beats.map((beat, bIdx) => {
     const beatStart = beat.timing?.startSec || bIdx * 5.0;
     const beatEnd = beat.timing?.endSec || (bIdx + 1) * 5.0;
 
-    // Find overlapping speech segments for this beat's time window or direct 1-to-1 segment index
-    const matchingSegments = segments.filter(
+    // Find unused speech segments for this beat's time window
+    const unusedSegments = segments.filter((s) => !usedSegmentIds.has(s.segmentId));
+
+    const matchingSegments = unusedSegments.filter(
       (s) => (s.startSec >= beatStart && s.startSec < beatEnd) || (s.endSec > beatStart && s.endSec <= beatEnd) || (s.startSec <= beatStart && s.endSec >= beatEnd)
     );
 
-    // Direct 1-to-1 index mapping — never repeat the last segment on extra beats!
-    const activeSeg = matchingSegments[0] || segments[bIdx] || null;
+    // Direct 1-to-1 index mapping for unused segments — never repeat an already used segment!
+    const fallbackSeg = unusedSegments.find((s) => segments.indexOf(s) === bIdx) || null;
+    const activeSeg = matchingSegments[0] || fallbackSeg;
+
+    if (activeSeg) {
+      usedSegmentIds.add(activeSeg.segmentId);
+    }
 
     const wordsInSeg = activeSeg ? activeSeg.words.map((w) => w.word) : [];
     const startIndex = globalWordCounter;
@@ -177,7 +185,7 @@ export function allocateSpeechToBeats(beats = [], speechTimeline = {}) {
     const speechAlloc = {
       speaker: activeSeg?.speaker || beat.characterName || "Subject",
       speakerId: activeSeg?.speakerId || beat.characterId || "char_1",
-      spokenText: activeSeg?.text || beat.spokenText || "",
+      spokenText: activeSeg ? (activeSeg.text || "") : "",
       expectedWords: wordsInSeg,
       wordRange: { startIndex, endIndex },
       speechStartSec: activeSeg?.startSec ?? beatStart,
