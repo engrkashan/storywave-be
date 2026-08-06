@@ -19,18 +19,20 @@ const OMNI_MAX_CLIP_DURATION = 5.0;
  * @param {Array<object>} atomicBeats - List of atomic beats
  * @returns {Array<object>} Beats with calculated durationSec and timing metadata
  */
-export function planBeatDurations(atomicBeats = []) {
-  logger.info(`⏱️ [Duration Planner] Estimating durations for ${atomicBeats.length} atomic beats...`);
+export function planBeatDurations(atomicBeats = [], targetSceneCount = null, targetTotalDuration = null) {
+  logger.info(`⏱️ [Duration Planner] Estimating durations for ${atomicBeats.length} atomic beats (Target Scenes: ${targetSceneCount || "Auto"})...`);
 
   const durationPlannedBeats = [];
   let currentStartSec = 0;
   let beatCounter = 0;
 
+  const allowBeatSplitting = !targetSceneCount || targetSceneCount <= 0 || atomicBeats.length < targetSceneCount;
+
   for (let i = 0; i < atomicBeats.length; i++) {
     const beat = atomicBeats[i];
     const estimatedDuration = estimateSingleBeatDuration(beat);
 
-    if (estimatedDuration > OMNI_MAX_CLIP_DURATION) {
+    if (estimatedDuration > OMNI_MAX_CLIP_DURATION && allowBeatSplitting) {
       // Split beat naturally across micro-movement phases
       logger.info(`✂️ Beat ${i + 1} estimated duration ${estimatedDuration.toFixed(1)}s exceeds 5s max — splitting naturally...`);
       const microBeats = splitOverlongBeat(beat, estimatedDuration);

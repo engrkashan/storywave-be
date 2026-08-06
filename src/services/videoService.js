@@ -8,6 +8,7 @@ import { config } from "../config/workflow.config.js";
 import { enqueueRender, enqueueSegmentRender } from "../utils/renderQueue.js";
 import { getPerfSession } from "../utils/perfLogger.js";
 import { buildSubtitleGroups } from "./timelineService.js";
+import { validateClipSpeech } from "./videoPlanner/speechValidator.js";
 
 const logger = createLogger("VideoService");
 
@@ -519,6 +520,38 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
           previousFrameData = fs.readFileSync(previousClipLastFrame).toString("base64");
         }
 
+        let apiInput = finalPrompt;
+        const inputParts = [{ type: "text", text: finalPrompt }];
+        let hasMediaInput = false;
+
+        if (previousFrameData) {
+          inputParts.push({
+            type: "image",
+            data: previousFrameData,
+            mime_type: "image/png",
+          });
+          hasMediaInput = true;
+          logger.info(`🌉 [Video Clip ${i + 1}] Attached previous clip's last frame as bridge image for motion continuity.`);
+        }
+
+        for (const ref of activeReferences) {
+          if (ref && ref.imageBytes) {
+            inputParts.push({
+              type: "image",
+              data: ref.imageBytes,
+              mime_type: ref.mimeType || "image/png",
+            });
+            hasMediaInput = true;
+          }
+        }
+        if (activeReferences.length > 0) {
+          logger.info(`👤 [Video Clip ${i + 1}] Attached ${activeReferences.length} character reference image(s) for identity lock.`);
+        }
+
+        if (hasMediaInput) {
+          apiInput = inputParts;
+        }
+
         let videoBuffer = null;
         const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
         const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${apiKey}`;
@@ -531,7 +564,7 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
           },
           body: JSON.stringify({
             model: "gemini-omni-flash-preview",
-            input: finalPrompt,
+            input: apiInput,
           }),
         });
 
@@ -563,6 +596,25 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
         fs.writeFileSync(filePath, videoBuffer);
 
         logger.info(`✅ Clip ${i + 1} saved to ${filePath}`);
+
+        // Phase 5 & 8: Perform Speech Validation & Detailed Audit Logging
+        if (promptObj && typeof promptObj === "object" && promptObj.speechAllocation) {
+          const valRes = await validateClipSpeech(filePath, promptObj.speechAllocation, {
+            sceneId: promptObj.sceneId || `scene_${String(i + 1).padStart(3, "0")}`,
+            beatIndex: i,
+            durationSec: promptObj.durationSec || 5.0,
+            action: promptObj.prompt?.slice(0, 60) || "Action",
+            conversationState: promptObj.conversationState || {},
+            attempt,
+          });
+
+          if (!valRes.passed && attempt < MAX_RETRIES) {
+            logger.warn(`⚠️ Speech validation failed for clip ${i + 1} (${valRes.accuracyPct}% accuracy). Retrying clip ${i + 1} (Attempt ${attempt + 1}/${MAX_RETRIES})...`);
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            continue; // Selective retry ONLY this failed clip
+          }
+        }
+
         results.push({ filePath, error: null });
 
         // Extract last frame for the next clip's "bridge"
@@ -578,11 +630,11 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
         const isQuotaError = err.message.toLowerCase().includes("quota") || err.message.includes("429");
         if (isQuotaError || attempt >= MAX_RETRIES) {
           logger.error(`❌ Video generation failed for clip ${i + 1} (Attempt ${attempt}):`, err.message);
-          results.push({ filePath: null, error: err });
+          results.push({ filePath: null, error: err.message });
           break; // Stop retrying
         }
-        logger.warn(`⚠️ Video generation failed for clip ${i + 1} (Attempt ${attempt}). Retrying in 5s...`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        logger.warn(`⚠️ Video clip ${i + 1} attempt ${attempt} failed: ${err.message}. Retrying...`);
+        await new Promise((resolve) => setTimeout(resolve, 3000));
       }
     }
   }
@@ -719,7 +771,7 @@ export async function concatSegments(segmentFiles, audioPath, outputPath, audioD
       outputPath
     ];
   } else if (options.mixSegmentAudio && hasAudioPath) {
-    // Character Talk WITH external TTS / BGM: Mix segment native audio (0:a) with external audio track (1:a)
+    // Character Talk WITH external TTS / BGM: Mix segment native audio (0:a) with ducked background music (1:a)
     mergeArgs = [
       "-y",
       "-loglevel", "error",
@@ -727,7 +779,7 @@ export async function concatSegments(segmentFiles, audioPath, outputPath, audioD
       "-safe", "0",
       "-i", segmentsListPath,
       "-i", audioPath,
-      "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+      "-filter_complex", "[1:a]volume=0.15[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout]",
       "-map", "0:v",
       "-map", "[aout]",
       "-c:v", "copy",

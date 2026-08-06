@@ -104,11 +104,11 @@ export function startCpuMonitor(workflowId, intervalMs = 2000) {
       samples.push(sample);
 
       // Log every sample so it's visible in PM2 logs
-      logger.info(
-        `📊 [CPU][${workflowId}] ` +
-        `cpu=${cpuPct}% | mem=${usedMemMB}MB (${memPct}%) | ` +
-        `load=${load1.toFixed(2)} | ffmpeg_procs=${ffmpegCount}`,
-      );
+      // logger.info(
+      //   `📊 [CPU][${workflowId}] ` +
+      //   `cpu=${cpuPct}% | mem=${usedMemMB}MB (${memPct}%) | ` +
+      //   `load=${load1.toFixed(2)} | ffmpeg_procs=${ffmpegCount}`,
+      // );
     } catch (err) {
       // Never crash the workflow due to monitoring
       logger.error(`[CpuMonitor] Sampling error: ${err.message}`);
@@ -148,11 +148,11 @@ export function stopCpuMonitor(monitor) {
     samples,
   };
 
-  logger.info(
-    `📊 [CPU SUMMARY][${workflowId}] ` +
-    `avgCpu=${avgCpu}% | peakCpu=${peakCpu}% | ` +
-    `peakMem=${peakMem}MB | peakFFmpeg=${peakFfmpeg}`,
-  );
+  // logger.info(
+  //   `📊 [CPU SUMMARY][${workflowId}] ` +
+  //   `avgCpu=${avgCpu}% | peakCpu=${peakCpu}% | ` +
+  //   `peakMem=${peakMem}MB | peakFFmpeg=${peakFfmpeg}`,
+  // );
 
   return summary;
 }

@@ -18,62 +18,80 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  * @param {object} storyBible    - Story Bible metadata (characters, locations, etc.)
  * @returns {Promise<Array<object>>} List of cinematic narrative beats
  */
-export async function generateNarrativeTimeline(script, storyBible = {}) {
-  logger.info("🎬 [Video Planner] Generating Narrative Timeline for script...");
+export async function generateNarrativeTimeline(script, storyBible = {}, targetSceneCount = null) {
+  logger.info(`🎬 [Video Planner] Generating Master Director Movie Guide for script (Target Scene Count: ${targetSceneCount || "Auto"})...`);
 
-  const charactersStr = storyBible?.characters?.map(c => `- ${c.name} (ID: ${c.id})`).join("\n") || "None";
-  const locationsStr = storyBible?.locations?.map(l => `- ${l.name}`).join("\n") || "None";
+  const charactersStr = storyBible?.characters?.map(c => `- ${c.name} (ID: ${c.id}): ${c.appearance || c.role || "Main character"}`).join("\n") || "None";
+  const locationsStr = storyBible?.locations?.map(l => `- ${l.name}: ${l.description || "Scene location"}`).join("\n") || "None";
+  const storySynopsis = storyBible?.synopsis || storyBible?.concept || "Cinematic storytelling sequence";
 
-  const prompt = `You are a master cinematic director and action continuity editor.
-Your objective is to analyze the ENTIRE script below and break it down into an ordered timeline of individual, continuous cinematic action beats.
+  const targetConstraintStr = targetSceneCount && targetSceneCount > 0
+    ? `6. EXACT BEAT COUNT: Create EXACTLY ${targetSceneCount} beats. Map spoken dialogue and actions into these ${targetSceneCount} sequential beats without skipping any part of the script.`
+    : "6. BALANCED BEATS: Create concise, fluid narrative beats matching natural speech flow.";
 
-CRITICAL DIRECTORIAL RULES:
-1. ZERO SKIPPED ACTIONS: You MUST extract every physical action, movement, reaction, and transition. Never jump over intermediate physical steps (e.g. if a character walks to a wall, climbs, jumps, lands, looks behind, and runs — EVERY single step MUST be its own distinct beat).
-2. NO COMPOUND OVERFLOW: Do NOT compress multiple major physical movements into a single beat. Break them down step by step.
-3. DIALOGUE INTEGRATION: Attach the exact spoken dialogue lines to the specific beat where the character speaks them.
-4. CHRONOLOGICAL CONTINUITY: Every beat MUST start exactly where the previous beat ended.
+  const prompt = `You are a master Hollywood cinematic director and action continuity supervisor.
+Your objective is to analyze the ENTIRE script and Story Bible below and construct a Master Director Movie Guide — an ordered timeline of continuous visual action beats.
 
-CHARACTERS:
+MASTER DIRECTORIAL GUIDELINES:
+1. DIALOGUE INTEGRATION: Attach spoken dialogue lines to the exact beat where the character speaks them.
+2. CHRONOLOGICAL ACTION CONTINUITY: Every beat MUST start precisely in the physical pose where the previous beat ended. No jump cuts, no teleportation, no repeated actions.
+3. COMPLETE VISUAL ACTIONS: Describe rich physical movements, facial expressions, and body language for every beat.
+4. PACING & EMOTIONAL ARC: Match camera movement and character posture to the emotional tone of the scene.
+5. NO OVERLAPS: Every word of the script belongs to exactly one beat.
+${targetConstraintStr}
+
+STORY SYNOPSIS:
+${storySynopsis}
+
+CHARACTERS & VISUAL IDENTITY:
 ${charactersStr}
 
-LOCATIONS:
+LOCATIONS & ENVIRONMENT:
 ${locationsStr}
 
-SCRIPT:
+FULL SCRIPT:
 ${script}
 
 Return STRICT JSON object format:
 {
+  "directorNote": "Overall directorial vision and visual flow strategy for the movie",
   "beats": [
     {
       "beatIndex": 0,
-      "narrative": "Description of the specific visual action",
-      "action": "Specific physical movement (e.g., 'character climbs to top of wall')",
+      "narrative": "Detailed description of the visual scene and action",
+      "action": "Specific physical movement (e.g. 'Character steps forward, turning slightly left')",
+      "startingPose": "Exact initial pose character is in at the start of this clip",
       "spokenText": "Dialogue lines spoken during this beat, or empty string",
       "characterName": "Name of primary character active",
       "characterId": "ID or name of primary character",
       "location": "Active location name",
       "emotion": "Dominant emotional tone",
-      "isTransition": false
+      "cameraMotion": "Cinematic camera movement (e.g. Smooth steady tracking shot)"
     }
   ]
 }`;
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-5.6",
+      model: "gpt-5.5",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
     });
 
     const parsed = JSON.parse(res.choices[0].message.content.trim());
-    const beats = parsed.beats || [];
+    let beats = parsed.beats || [];
+
+    if (targetSceneCount && targetSceneCount > 0 && beats.length > targetSceneCount) {
+      logger.info(`⚠️ LLM returned ${beats.length} beats, trimming/merging to target ${targetSceneCount} beats...`);
+      beats = beats.slice(0, targetSceneCount);
+    }
+
     logger.info(`✅ [Narrative Timeline] Successfully generated ${beats.length} cinematic beats.`);
     return beats;
   } catch (err) {
     logger.error("❌ Narrative Timeline generation failed, using fallback parser:", err.message);
     const sentences = script.split(/(?<=[.!?])\s+/).filter(Boolean);
-    return sentences.map((s, idx) => ({
+    const resultBeats = sentences.map((s, idx) => ({
       beatIndex: idx,
       narrative: s,
       action: s,
@@ -84,5 +102,6 @@ Return STRICT JSON object format:
       emotion: "cinematic",
       isTransition: false,
     }));
+    return targetSceneCount && targetSceneCount > 0 ? resultBeats.slice(0, targetSceneCount) : resultBeats;
   }
 }

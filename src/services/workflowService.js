@@ -835,8 +835,9 @@ async function _runWorkflow({
       logger.info("🎙️ [Character Talk] Enabled (No explicit external voice selected) — skipping external TTS generation completely. Gemini Omni Flash will generate video clips with native character dialogue & real voice.");
       
       if (mediaType === "video") {
-        const chunks = intelligentVideoScriptChunker(script, 9);
-        logger.info(`🎬 [Intelligent Video Chunker] Script split into ${chunks.length} optimal video dialogue chunks (~8-10 words/chunk).`);
+        const targetWords = isCharacterTalkActive ? 6 : 8;
+        const chunks = intelligentVideoScriptChunker(script, targetWords);
+        logger.info(`🎬 [Intelligent Video Chunker] Script split into ${chunks.length} optimal video dialogue chunks (max 6-7 words/chunk).`);
         
         let currentTime = 0;
         chunks.forEach((chunkText) => {
@@ -1031,12 +1032,13 @@ async function _runWorkflow({
       let narrationDuration;
 
       if (mediaType === "video") {
-        const videoChunks = intelligentVideoScriptChunker(script, 9);
+        const targetWords = isCharacterTalkActive ? 6 : 8;
+        const videoChunks = intelligentVideoScriptChunker(script, targetWords);
         targetSceneCount = Math.max(1, videoChunks.length);
         narrationDuration = (fs.existsSync(narrationWavPath))
           ? await getAudioDuration(narrationWavPath)
           : targetSceneCount * 5.0;
-        logger.info(`🎬 [Video Mode] Target scene count set to ${targetSceneCount} clips based on intelligent script chunking (~8-10 words/chunk).`);
+        logger.info(`🎬 [Video Mode] Target scene count set to ${targetSceneCount} clips based on intelligent 6-7 word script chunking.`);
       } else {
         narrationDuration = (fs.existsSync(narrationWavPath))
           ? await getAudioDuration(narrationWavPath)
@@ -1212,8 +1214,28 @@ async function _runWorkflow({
               backgroundMusic,
               soundEffects,
               voice,
+              whisperWords: timelineWords,
+              targetSceneCount,
+              narrationDuration,
             });
             scenePrompts = videoPlanResult.scenePrompts;
+            if (videoPlanResult.plannedScenes && videoPlanResult.plannedScenes.length > 0) {
+              masterTimeline.scenes = videoPlanResult.plannedScenes.map((sc) => ({
+                sceneIndex: sc.index,
+                startSec: sc.startSec,
+                endSec: sc.endSec,
+                durationSec: sc.durationSec,
+                text: sc.narration || "",
+              }));
+              masterTimeline.actualSceneCount = masterTimeline.scenes.length;
+              if (videoPlanResult.totalDuration > 0) {
+                masterTimeline.totalDuration = videoPlanResult.totalDuration;
+                actualAudioDuration = videoPlanResult.totalDuration;
+              }
+              const timelinePath = path.join(workflowTempDir, "timeline.json");
+              saveMasterTimeline(masterTimeline, timelinePath);
+              logger.info(`🗺️ [Video Planner] Master Timeline synchronized with ${masterTimeline.scenes.length} planned video scenes.`);
+            }
             logger.info(`🎬 Using ${scenePrompts.length} State-Based Video-Planned motion prompts for Gemini Omni Flash (Character Talk: ${characterTalk})`);
           } else {
             // multi_image: use pre-generated prompts built alongside Master Timeline (100% untouched)

@@ -16,8 +16,8 @@ const logger = createLogger("PromptValidator");
  * @param {Array<object>} beats - List of atomic beats
  * @returns {Array<object>} Validated beat list with missing transition beats inserted
  */
-export function validateBeatContinuity(beats = []) {
-  logger.info(`🔍 [Prompt Validator] Checking continuity across ${beats.length} beats...`);
+export function validateBeatContinuity(beats = [], targetSceneCount = null) {
+  logger.info(`🔍 [Prompt Validator] Checking continuity across ${beats.length} beats (Target Scenes: ${targetSceneCount || "Auto"})...`);
 
   const validatedBeats = [];
 
@@ -27,7 +27,9 @@ export function validateBeatContinuity(beats = []) {
 
     validatedBeats.push(currentBeat);
 
-    if (nextBeat) {
+    const allowAutoInsert = !targetSceneCount || targetSceneCount <= 0 || (validatedBeats.length + (beats.length - 1 - i) < targetSceneCount);
+
+    if (nextBeat && allowAutoInsert) {
       const missingTransition = detectMissingTransition(currentBeat, nextBeat);
       if (missingTransition) {
         logger.info(`⚠️ [Prompt Validator] Missing transition detected between beat ${i + 1} ("${currentBeat.action}") and beat ${i + 2} ("${nextBeat.action}"). Auto-inserting transition beat: "${missingTransition.action}"`);

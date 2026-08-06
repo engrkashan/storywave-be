@@ -13,53 +13,64 @@ const logger = createLogger("TimelineService");
  * @param {number} targetWordsPerChunk - Default 9 words (~1.8 words/sec speech rate)
  * @returns {Array<string>} Array of script segment chunks
  */
-export function intelligentVideoScriptChunker(script, targetWordsPerChunk = 9) {
+export function intelligentVideoScriptChunker(script) {
   if (!script || !script.trim()) return [];
 
-  const rawWords = script.trim().split(/\s+/).filter(Boolean);
-  if (rawWords.length === 0) return [];
+  const rawScript = script.trim();
+  // 1. Split script into complete sentences
+  const rawSentences = rawScript.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (rawSentences.length === 0) return [rawScript];
 
   const chunks = [];
-  let currentChunk = [];
 
-  for (let i = 0; i < rawWords.length; i++) {
-    const word = rawWords[i];
-    currentChunk.push(word);
+  for (const sentence of rawSentences) {
+    const sWords = sentence.split(/\s+/).filter(Boolean);
 
-    const isLastWord = i === rawWords.length - 1;
-    const hasTerminalPunct = /[.!?]$/.test(word);
-    const hasClausePunct = /[,;:]$/.test(word);
+    if (sWords.length <= 12) {
+      // Complete sentence fits within ideal clip speech window — keep 100% intact!
+      chunks.push(sentence.trim());
+    } else {
+      // Long sentence (>12 words) — split strictly at clause punctuation or conjunctions
+      const clauseParts = sentence.split(/(?<=[,;:—])\s+|\s+(?:and then|because|which|while|whereby)\s+/i).filter(Boolean);
+      let currentClause = [];
 
-    let shouldCut = false;
+      for (let c = 0; c < clauseParts.length; c++) {
+        const part = clauseParts[c].trim();
+        const partWords = part.split(/\s+/).filter(Boolean);
 
-    if (isLastWord) {
-      shouldCut = true;
-    } else if (currentChunk.length >= targetWordsPerChunk + 3) {
-      // Hard maximum words per 5s video clip reached -> cut
-      shouldCut = true;
-    } else if (currentChunk.length >= targetWordsPerChunk - 3) {
-      // Target range (6 to 12 words) -> cut on sentence or clause punctuation
-      if (hasTerminalPunct || hasClausePunct) {
-        shouldCut = true;
+        if (currentClause.length === 0) {
+          currentClause.push(part);
+        } else {
+          const combinedWords = currentClause.join(" ").split(/\s+/).filter(Boolean).length + partWords.length;
+          if (combinedWords <= 12) {
+            currentClause.push(part);
+          } else {
+            chunks.push(currentClause.join(" ").trim());
+            currentClause = [part];
+          }
+        }
+      }
+
+      if (currentClause.length > 0) {
+        chunks.push(currentClause.join(" ").trim());
       }
     }
-
-    if (shouldCut && currentChunk.length > 0) {
-      chunks.push(currentChunk.join(" "));
-      currentChunk = [];
-    }
   }
 
-  if (currentChunk.length > 0) {
-    if (chunks.length > 0 && currentChunk.length < 3) {
-      // Merge tiny trailing stub into last chunk to avoid 1-2 word isolated clips
-      chunks[chunks.length - 1] += " " + currentChunk.join(" ");
+  // Final cleanup: merge tiny trailing stubs (< 3 words) into adjacent chunk
+  const finalChunks = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const ch = chunks[i];
+    const wCount = ch.split(/\s+/).filter(Boolean).length;
+
+    if (wCount < 3 && finalChunks.length > 0) {
+      finalChunks[finalChunks.length - 1] += " " + ch;
     } else {
-      chunks.push(currentChunk.join(" "));
+      finalChunks.push(ch);
     }
   }
 
-  return chunks;
+  return finalChunks.length > 0 ? finalChunks : [rawScript];
 }
 
 /* ============================================================

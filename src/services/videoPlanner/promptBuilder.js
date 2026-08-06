@@ -25,7 +25,9 @@ const logger = createLogger("StateBasedPromptBuilder");
 export function buildStateBasedPrompt(beat = {}, sceneState = {}, nextBeat = null, storyBible = {}, options = {}) {
   const commonPrompt = buildCommonPrompt(storyBible);
   const isCharacterTalk = options.characterTalk === true || beat.characterTalk === true;
-  const spokenText = beat.spokenText || beat.narrationText || "";
+  const spokenText = beat.spokenText || beat.speechAllocation?.spokenText || beat.narrationText || "";
+  const speechAlloc = beat.speechAllocation || {};
+  const convState = sceneState.conversationState || {};
 
   // 1. Construct base scene payload for Story Director Engine
   const baseScene = {
@@ -37,8 +39,8 @@ export function buildStateBasedPrompt(beat = {}, sceneState = {}, nextBeat = nul
     },
     characters: [
       {
-        id: sceneState.activeCharacter?.id || "char_1",
-        name: sceneState.activeCharacter?.name || beat.characterName || "Subject",
+        id: speechAlloc.speakerId || sceneState.activeCharacter?.id || "char_1",
+        name: speechAlloc.speaker || sceneState.activeCharacter?.name || beat.characterName || "Subject",
         identityLock: sceneState.activeCharacter?.identityLock || "Cinematic subject",
         costumeState: sceneState.activeCharacter?.costumeState || "standard wardrobe",
         currentAction: beat.action || "perform beat action",
@@ -63,7 +65,7 @@ export function buildStateBasedPrompt(beat = {}, sceneState = {}, nextBeat = nul
   const directorObj = buildCinematicSceneDirectorObject(baseScene, storyBible, commonPrompt, options);
 
   const charInfo = sceneState.activeCharacter || {};
-  const charName = charInfo.name || beat.characterName || "Subject";
+  const charName = speechAlloc.speaker || charInfo.name || beat.characterName || "Subject";
   const identityLock = charInfo.identityLock || "Cinematic subject";
   const costume = charInfo.costumeState || "standard wardrobe";
   const locName = sceneState.currentLocation || beat.location || "Scene Location";
@@ -73,18 +75,32 @@ export function buildStateBasedPrompt(beat = {}, sceneState = {}, nextBeat = nul
   const startingPose = sceneState.currentPose || "Standing in natural posture";
   const currentAction = beat.action || beat.narrative || "Perform scene action";
   const stoppingBoundary = nextBeat ? (nextBeat.action || nextBeat.narrative || "Stop action") : "Conclude scene";
+  const nextDialoguePreview = nextBeat?.speechAllocation?.spokenText || nextBeat?.spokenText || "";
 
-  // 3. Combine Story Director specs + State boundaries into final Gemini Omni Flash prompt
+  // 3. Precise Boundaries (Visual, Speech, Conversation, Stopping)
+  const clipDurationSec = beat.timing?.durationSec || 5.0;
+
+  const speechBoundary = (isCharacterTalk && spokenText)
+    ? `CHARACTER SPOKEN DIALOGUE: ${charName} starts speaking out loud immediately at t=0.0s and reads these exact lines: "${spokenText}" (Local clip speech window: t=0.0s to t=${clipDurationSec.toFixed(1)}s). Synchronize lip movement and facial expression precisely to this speech window.`
+    : "";
+
+  const conversationBoundary = (convState.currentSpeaker && convState.nextExpectedSpeaker)
+    ? `CONVERSATION FLOW: ${charName} is actively engaging with ${convState.nextExpectedSpeaker}. Maintain direct eyeline and body orientation.`
+    : "";
+
+  const nextActionText = nextBeat ? (nextBeat.action || nextBeat.narrative || "next scene movement") : "natural conclusion";
+  const stoppingBoundaryText = `ACTION CONTINUITY & BOUNDARY: Perform ONLY current action (${currentAction}) starting from initial pose (${startingPose}). Conclude clip smoothly at t=${clipDurationSec.toFixed(1)}s in a natural posture ready for ${nextActionText}. Do NOT repeat past actions.`;
+
+  // 4. Combine Story Director specs + State boundaries into final Gemini Omni Flash prompt
   const promptParts = [
-    `VISUAL SCENE: ${directorObj.cameraPlan.shotSize}, ${directorObj.cameraPlan.angle}. ${charName} (${identityLock}, wearing ${costume}). Location: ${locName} (${locDetails}). Lighting: ${lighting}.`,
-    `CINEMATOGRAPHY: Lens ${directorObj.cameraPlan.lens}, Rig: ${directorObj.cameraPlan.rig}. Focus: ${directorObj.cameraPlan.depthOfField}.`,
-    `STARTING POSE: ${charName} is initially positioned in this starting pose: ${startingPose}.`,
-    `CURRENT ACTION: ${charName} performs this exact action: ${currentAction}.`,
-    `STOPPING BOUNDARY: Complete ONLY the current action (${currentAction}). Stop immediately before starting (${stoppingBoundary}). Do NOT perform ${stoppingBoundary}; that action belongs strictly to the next beat.`,
-    isCharacterTalk && spokenText
-      ? `CHARACTER DIALOGUE: ${charName} speaks out loud reading these exact lines: "${spokenText}"`
-      : "",
-    commonPrompt ? `STYLE: ${commonPrompt}` : "Style: Photorealistic 8k cinematic video, natural continuous motion.",
+    `SCENE VISUALS: ${directorObj.cameraPlan.shotSize}, ${directorObj.cameraPlan.angle}. ${charName} (${identityLock}, wearing ${costume}). Location: ${locName}${locDetails ? ` (${locDetails})` : ""}. Lighting: ${lighting}.`,
+    `CINEMATOGRAPHY: Lens ${directorObj.cameraPlan.lens}, Movement: ${directorObj.cameraPlan.rig}, Focus: ${directorObj.cameraPlan.depthOfField}.`,
+    `STARTING POSE: ${charName} begins in starting pose: ${startingPose}.`,
+    `COMPLETE ACTION VISUALS: ${charName} performs complete continuous action: ${currentAction}.`,
+    speechBoundary,
+    stoppingBoundaryText,
+    conversationBoundary,
+    commonPrompt ? `VISUAL STYLE: ${commonPrompt}` : "VISUAL STYLE: Photorealistic 8k ultra-detailed cinematic film quality, natural continuous physics, smooth motion.",
   ].filter(Boolean);
 
   const veoPrompt = promptParts.join("\n\n").trim();
@@ -93,9 +109,12 @@ export function buildStateBasedPrompt(beat = {}, sceneState = {}, nextBeat = nul
     sceneId: beat.sceneId || `scene_${String((beat.beatIndex || 0) + 1).padStart(3, "0")}`,
     sceneIndex: beat.beatIndex || 0,
     prompt: veoPrompt,
-    charactersInScene: charInfo.id ? [charInfo.id] : [],
+    charactersInScene: (speechAlloc.speakerId || charInfo.id) ? [speechAlloc.speakerId || charInfo.id] : [],
     durationSec: beat.timing?.durationSec || 5.0,
     narration: spokenText,
+    speechAllocation: speechAlloc,
+    conversationState: convState,
+    _beat: beat,
     _sceneState: sceneState,
     _directorObject: directorObj,
   };

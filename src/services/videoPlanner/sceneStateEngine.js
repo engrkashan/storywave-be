@@ -5,6 +5,7 @@
  * Replaces raw text as the continuity source of truth.
  */
 
+import { initializeConversationState, updateConversationState } from "./conversationStateEngine.js";
 import { createLogger } from "../../utils/logger.js";
 
 const logger = createLogger("SceneStateEngine");
@@ -39,6 +40,7 @@ export function initializeSceneState(storyBible = {}, initialBeat = {}) {
     emotion: initialBeat.emotion || "cinematic focus",
     environment: `${mainLoc.name || "Environment"} with natural lighting`,
     nextAction: initialBeat.action || "Advance scene",
+    conversationState: initializeConversationState(storyBible, initialBeat),
   };
 }
 
@@ -48,9 +50,11 @@ export function initializeSceneState(storyBible = {}, initialBeat = {}) {
  * @param {object} currentState - Current SceneState object
  * @param {object} executedBeat - The beat that was just executed
  * @param {object} nextBeat - The upcoming beat (if any)
+ * @param {number} beatIndex - Index of executed beat
+ * @param {number} totalBeats - Total beats count
  * @returns {object} Updated SceneState object for the next beat
  */
-export function updateSceneState(currentState = {}, executedBeat = {}, nextBeat = null) {
+export function updateSceneState(currentState = {}, executedBeat = {}, nextBeat = null, beatIndex = 0, totalBeats = 10) {
   const updatedCompleted = [
     ...(currentState.completedActions || []),
     executedBeat.action || executedBeat.narrative || "Beat completed",
@@ -66,6 +70,7 @@ export function updateSceneState(currentState = {}, executedBeat = {}, nextBeat 
     currentLocation: executedBeat.location || currentState.currentLocation,
     emotion: executedBeat.emotion || currentState.emotion,
     nextAction: nextBeat ? (nextBeat.action || nextBeat.narrative || "Complete sequence") : "Conclude scene",
+    conversationState: updateConversationState(currentState.conversationState, executedBeat, nextBeat, beatIndex, totalBeats),
   };
 }
 
