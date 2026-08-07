@@ -75,6 +75,8 @@ export function buildCinematicSceneDirectorObject(scene, storyMetadata = {}, com
 
   const isCharacterTalk = options.characterTalk || storyMetadata.characterTalk || scene.characterTalk;
   const spokenText = narrative.narrationText || narrative.beatSummary || "";
+  const targetRatio = options.aspectRatio || storyMetadata.aspectRatio || "16:9";
+  const isVerticalRatio = targetRatio === "9:16" || targetRatio === "9/16" || targetRatio === "vertical";
 
   // Elevate camera shot size and angle for Character Talk beats to guarantee face and mouth visibility
   if (isCharacterTalk) {
@@ -90,6 +92,9 @@ export function buildCinematicSceneDirectorObject(scene, storyMetadata = {}, com
   // 4. Motion Prompt Synthesis (Continuous Kinetic Motion & Character Dialogue)
   const veoPromptParts = [
     `VISUAL SCENE: ${cameraPlan.shotSize}, ${cameraPlan.angle}. ${characterPerformance} Environment: ${locName} (${locDetails}). Lighting: ${lightingStr}.`,
+    isVerticalRatio
+      ? `ASPECT RATIO & COMPOSITION: Native Vertical 9:16 aspect ratio. Keep characters and focal action centered inside vertical 9:16 frame.`
+      : `ASPECT RATIO & COMPOSITION: Native Horizontal 16:9 widescreen aspect ratio.`,
     isCharacterTalk && spokenText
       ? `CHARACTER DIALOGUE: The character on screen speaks out loud reading these exact lines: "${spokenText}"`
       : "",

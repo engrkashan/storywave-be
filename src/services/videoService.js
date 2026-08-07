@@ -501,11 +501,18 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
         const promptObj = prompts[i];
         const uniquePrompt = typeof promptObj === "object" ? promptObj.prompt : promptObj;
         const sceneCharacters = typeof promptObj === "object" ? promptObj.charactersInScene || [] : [];
-        const finalPrompt = (commonPrompt && !uniquePrompt.includes("STYLE & TONAL ENVELOPE"))
-          ? `${uniquePrompt}\n\nSTYLE & ATMOSPHERE: ${commonPrompt}`
-          : uniquePrompt;
 
-        logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Gemini Omni Flash (gemini-omni-flash-preview)...`);
+        const isVerticalRatio = aspectRatio === "9:16" || aspectRatio === "9/16" || aspectRatio === "vertical";
+        const formattedRatio = isVerticalRatio ? "9:16" : "16:9";
+        const ratioPromptSuffix = isVerticalRatio
+          ? "\n\nFRAME ASPECT RATIO: Native 9:16 vertical video composition. Frame all main action and characters centered vertically within 9:16 bounds."
+          : "\n\nFRAME ASPECT RATIO: Native 16:9 horizontal widescreen video composition.";
+
+        const finalPrompt = (commonPrompt && !uniquePrompt.includes("STYLE & TONAL ENVELOPE"))
+          ? `${uniquePrompt}${ratioPromptSuffix}\n\nSTYLE & ATMOSPHERE: ${commonPrompt}`
+          : `${uniquePrompt}${ratioPromptSuffix}`;
+
+        logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}, Aspect Ratio: ${formattedRatio}) using Gemini Omni Flash (gemini-omni-flash-preview)...`);
 
         const activeReferences = [];
         for (const charId of sceneCharacters) {

@@ -116,16 +116,39 @@ export function optimizePrompt(promptObj = {}, auditorReport = {}, historyContex
   ];
 
   for (const item of buzzwordCleanups) {
-    const regex = new RegExp(`\\b${escapeRegExp(item.word)}\\b`, "gi");
     let count = 0;
-    promptText = promptText.replace(regex, (match) => {
-      count++;
-      if (count > item.max) {
-        changes.push(`Removed redundant word "${item.word}" (exceeded ${item.max} instance limit).`);
-        return "";
+    const isComplex = item.word.includes("-") || item.word.includes(" ");
+
+    if (isComplex) {
+      // Fix J-5: \b word-boundary doesn't work across hyphens or spaces in JS regex.
+      // Use a case-insensitive split/rejoin to count and trim excess occurrences.
+      const lowerPrompt = promptText.toLowerCase();
+      let searchFrom = 0;
+      const positions = [];
+      while (true) {
+        const idx = lowerPrompt.indexOf(item.word, searchFrom);
+        if (idx === -1) break;
+        positions.push(idx);
+        searchFrom = idx + item.word.length;
       }
-      return match;
-    });
+      // Remove occurrences beyond item.max (from last to first to preserve indices)
+      const toRemove = positions.slice(item.max);
+      for (let pi = toRemove.length - 1; pi >= 0; pi--) {
+        const pos = toRemove[pi];
+        promptText = promptText.slice(0, pos) + promptText.slice(pos + item.word.length);
+        changes.push(`Removed redundant word "${item.word}" (exceeded ${item.max} instance limit).`);
+      }
+    } else {
+      const regex = new RegExp(`\\b${escapeRegExp(item.word)}\\b`, "gi");
+      promptText = promptText.replace(regex, (match) => {
+        count++;
+        if (count > item.max) {
+          changes.push(`Removed redundant word "${item.word}" (exceeded ${item.max} instance limit).`);
+          return "";
+        }
+        return match;
+      });
+    }
   }
 
   // Clean up double spaces or double commas left by word removal

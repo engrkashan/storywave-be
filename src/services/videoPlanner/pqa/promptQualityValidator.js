@@ -46,8 +46,13 @@ export function validatePromptStructure(promptObj = {}) {
   }
 
   // 5. Scene/Location existence check
-  if (!promptText.includes("Location:")) {
-    errors.push("Missing scene location environment specification.");
+  // Fix J-3: Old check passed vacuously — 'Location: Scene Location' (generic) satisfied it.
+  // New check verifies Location: is present AND the value is not empty or the known generic placeholder.
+  const locationMatch = promptText.match(/Location:\s*([^\n.]+)/i);
+  const locationValue = locationMatch ? locationMatch[1].trim() : "";
+  const isGenericLocation = !locationValue || /^scene\s*location$/i.test(locationValue) || locationValue.length < 3;
+  if (isGenericLocation) {
+    errors.push("Missing or generic scene location specification (Location: must have a real location name).");
   }
 
   // 6. Stopping boundary check

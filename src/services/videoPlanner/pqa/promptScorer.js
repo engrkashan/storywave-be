@@ -63,11 +63,12 @@ export function calculatePromptScore(categories = {}, issues = []) {
 function mapIssueTypeToCategory(issueType = "") {
   const t = issueType.toLowerCase();
   if (t.includes("dialogue") || t.includes("speech")) return "dialogue";
-  if (t.includes("action")) return "action";
+  if (t.includes("action") || t.includes("conflicting")) return "action";
   if (t.includes("camera") || t.includes("motion") || t.includes("transition")) return "camera";
   if (t.includes("scene") || t.includes("environment") || t.includes("lighting") || t.includes("wardrobe") || t.includes("identity")) return "scene";
   if (t.includes("continuity") || t.includes("pose") || t.includes("scenestate") || t.includes("boundary") || t.includes("conversation")) return "continuity";
-  if (t.includes("length") || t.includes("short") || t.includes("long") || t.includes("overload")) return "length";
-  if (t.includes("verbosity") || t.includes("adjective") || t.includes("cinematic") || t.includes("repetition")) return "readability";
-  return "continuity";
+  // Fix J-4: Explicit mappings for issue types previously falling through to 'continuity'
+  if (t.includes("too short") || t.includes("too long")) return "length";
+  if (t.includes("verbosity") || t.includes("adjective") || t.includes("cinematic") || t.includes("repetition") || t.includes("repeated cinematic")) return "readability";
+  return "continuity"; // True default for unknown types
 }

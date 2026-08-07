@@ -48,31 +48,39 @@ export function auditPrompt(promptObj = {}, historyContext = {}) {
       });
     }
 
-    // Check B: Cross-Beat Repetition Detector — Dialogue duplicated from previous beats
+    // Check B: Cross-Beat Repetition Detector — Dialogue duplicated from previous beats.
+    // Fix J-2: Old logic used substring containment which caused false positives when a short
+    // earlier phrase appeared inside a longer current line (e.g. "He walked" ⊂ "He walked quickly").
+    // New logic requires shared text ≥ 20 chars AND similarity ratio > 0.7.
     if (historyContext.previousDialogues && historyContext.previousDialogues.length > 0) {
       const normalizedCurrentSpoken = normalizeText(spokenText);
       const isPrevDuplicate = historyContext.previousDialogues.some((prevText) => {
         const normPrev = normalizeText(prevText);
-        return normPrev && (normPrev === normalizedCurrentSpoken || (normPrev.length > 10 && normalizedCurrentSpoken.includes(normPrev)));
+        if (!normPrev || normPrev.length < 20) return false; // Skip very short history entries
+        if (normPrev === normalizedCurrentSpoken) return true; // Exact match — always a duplicate
+        // Similarity ratio: overlap length / max length must exceed 0.7
+        const similarity = dialogueSimilarityRatio(normalizedCurrentSpoken, normPrev);
+        return similarity > 0.7;
       });
 
       if (isPrevDuplicate) {
         issues.push({
           type: "Repeated Dialogue",
           severity: "High",
-          description: `Dialogue "${truncateText(spokenText, 30)}" is identical or duplicated from previous beat.`,
+          description: `Dialogue "${truncateText(spokenText, 30)}" is highly similar to or identical to a recent previous beat.`,
         });
       }
     }
 
-    // Check C: Dialogue longer than allocated duration (speech window vs word count)
+    // Check C: Dialogue longer than allocated duration (speech window vs word count).
+    // Fix J-2b: Old constant 3.2 words/sec was too high; realistic TTS is ~2.8 words/sec.
     const wordCount = spokenText.trim().split(/\s+/).length;
-    const maxWordsForDuration = Math.ceil(clipDuration * 3.2); // ~3.2 words/sec max speak rate
+    const maxWordsForDuration = Math.ceil(clipDuration * 2.8); // ~2.8 words/sec realistic TTS rate
     if (wordCount > maxWordsForDuration) {
       issues.push({
         type: "Dialogue Length Exceeded",
         severity: "Medium",
-        description: `Dialogue contains ${wordCount} words for allocated clip duration of ${clipDuration.toFixed(1)}s (max recommended: ${maxWordsForDuration} words).`,
+        description: `Dialogue contains ${wordCount} words for allocated clip duration of ${clipDuration.toFixed(1)}s (max recommended: ${maxWordsForDuration} words at 2.8 words/sec).`,
       });
     }
 
@@ -296,4 +304,35 @@ function isSubstantialMatch(normA, normB) {
     return normA.includes(normB) || normB.includes(normA);
   }
   return false;
+}
+
+/**
+ * Fix J-2: Compute a similarity ratio between two normalized strings.
+ * Uses longest common substring length as a proxy for semantic similarity.
+ * Returns 0.0 (no overlap) to 1.0 (identical).
+ *
+ * @param {string} a - Normalized string A
+ * @param {string} b - Normalized string B
+ * @returns {number} Similarity ratio 0.0–1.0
+ */
+function dialogueSimilarityRatio(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1.0;
+
+  const longer = a.length >= b.length ? a : b;
+  const shorter = a.length < b.length ? a : b;
+
+  // Count how many characters of the shorter string appear in the longer one
+  // using a sliding-window longest common substring approach (simple O(n²) version)
+  let maxCommon = 0;
+  for (let i = 0; i < shorter.length; i++) {
+    for (let j = i + 1; j <= shorter.length; j++) {
+      const sub = shorter.slice(i, j);
+      if (longer.includes(sub) && sub.length > maxCommon) {
+        maxCommon = sub.length;
+      }
+    }
+  }
+
+  return maxCommon / longer.length;
 }

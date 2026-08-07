@@ -91,10 +91,18 @@ export function buildStateBasedPrompt(beat = {}, sceneState = {}, nextBeat = nul
   const nextActionText = nextBeat ? (nextBeat.action || nextBeat.narrative || "next scene movement") : "natural conclusion";
   const stoppingBoundaryText = `ACTION CONTINUITY & BOUNDARY: Perform ONLY current action (${currentAction}) starting from initial pose (${startingPose}). Conclude clip smoothly at t=${clipDurationSec.toFixed(1)}s in a natural posture ready for ${nextActionText}. Do NOT repeat past actions.`;
 
-  // 4. Combine Story Director specs + State boundaries into final Gemini Omni Flash prompt
+  // 4. Aspect Ratio & Composition Directives
+  const targetRatio = options.aspectRatio || "16:9";
+  const isVerticalRatio = targetRatio === "9:16" || targetRatio === "9/16" || targetRatio === "vertical";
+  const aspectRatioBoundary = isVerticalRatio
+    ? "FRAME ASPECT RATIO & COMPOSITION: Generate natively in VERTICAL 9:16 orientation. Frame all key characters, faces, and main actions strictly centered within vertical 9:16 bounds. Do not place essential subjects at outer horizontal edges."
+    : "FRAME ASPECT RATIO & COMPOSITION: Generate natively in HORIZONTAL 16:9 widescreen orientation.";
+
+  // 5. Combine Story Director specs + State boundaries into final Gemini Omni Flash prompt
   const promptParts = [
     `SCENE VISUALS: ${directorObj.cameraPlan.shotSize}, ${directorObj.cameraPlan.angle}. ${charName} (${identityLock}, wearing ${costume}). Location: ${locName}${locDetails ? ` (${locDetails})` : ""}. Lighting: ${lighting}.`,
     `CINEMATOGRAPHY: Lens ${directorObj.cameraPlan.lens}, Movement: ${directorObj.cameraPlan.rig}, Focus: ${directorObj.cameraPlan.depthOfField}.`,
+    aspectRatioBoundary,
     `STARTING POSE: ${charName} begins in starting pose: ${startingPose}.`,
     `COMPLETE ACTION VISUALS: ${charName} performs complete continuous action: ${currentAction}.`,
     speechBoundary,

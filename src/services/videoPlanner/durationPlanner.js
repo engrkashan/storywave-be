@@ -77,10 +77,12 @@ function estimateSingleBeatDuration(beat) {
   const wordsInSpoken = spokenText.split(/\s+/).filter(Boolean).length;
   const wordsInAction = actionText.split(/\s+/).filter(Boolean).length;
 
-  // Base calculation: spoken dialogue (~0.5s per word) or physical action (~0.4s per word)
+  // Fix I-6: spoken rate 0.35s/word ≈ 2.85 words/sec (realistic for TTS).
+  // Old value 0.5s/word caused 10-word lines to reach the 5.0s max and split unnecessarily.
+  // Physical action rate unchanged at 0.4s/word.
   let duration = wordsInSpoken > 0
-    ? Math.max(3.5, wordsInSpoken * 0.5)
-    : Math.max(3.5, wordsInAction * 0.4);
+    ? Math.max(3.0, wordsInSpoken * 0.35)
+    : Math.max(3.0, wordsInAction * 0.4);
 
   // Complexity modifiers
   if (/run|jump|sprint|dash|leap|fight|chase/i.test(actionText)) duration += 0.5;

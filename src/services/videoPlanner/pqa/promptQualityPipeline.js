@@ -79,6 +79,8 @@ export function processSinglePromptPqa(beatNumber, initialPromptObj, historyCont
     }
 
     // 2. Check if score already meets threshold & structure is valid
+    // Fix J-6: validationResult is now derived AFTER the audit (not before the loop),
+    // so the first check uses real audit data instead of a pre-audit structural guess.
     validationResult = validatePromptStructure(currentPromptObj);
 
     if (finalReport.score >= PASSING_SCORE_THRESHOLD && validationResult.valid) {

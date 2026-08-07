@@ -45,10 +45,12 @@ export class PromptHistoryTracker {
     const prevRecord = this.records.get(currentIndex - 1) || null;
     const historyRecords = Array.from(this.records.values()).sort((a, b) => a.beatIndex - b.beatIndex);
 
-    const previousDialogues = historyRecords.map(r => r.spokenText).filter(Boolean);
-    const previousActions = historyRecords.map(r => r.action).filter(Boolean);
-    const previousCameras = historyRecords.map(r => r.camera).filter(Boolean);
-    const previousEnvironments = historyRecords.map(r => r.environment).filter(Boolean);
+    // Fix J-1: Cap to last 3 beats only — unbounded history caused false "Repeated Dialogue/Action"
+    // flags when a common phrase from beat 1 reappeared in beat 12+.
+    const previousDialogues = historyRecords.slice(-3).map(r => r.spokenText).filter(Boolean);
+    const previousActions = historyRecords.slice(-3).map(r => r.action).filter(Boolean);
+    const previousCameras = historyRecords.slice(-3).map(r => r.camera).filter(Boolean);
+    const previousEnvironments = historyRecords.slice(-3).map(r => r.environment).filter(Boolean);
 
     return {
       previousBeat: prevRecord,
