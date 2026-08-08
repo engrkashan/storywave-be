@@ -181,6 +181,8 @@ export async function mixCinematicSoundscape({
       return reject(new Error(`Narration file missing: ${narrationFile}`));
     }
 
+    const bgVolume = parseFloat(process.env.BG_MUSIC_VOLUME || "0.04");
+
     if (!soundscapeAssets || soundscapeAssets.length === 0) {
       if (backgroundMusicFile && fs.existsSync(backgroundMusicFile)) {
         // Simple narration + music mix
@@ -188,7 +190,7 @@ export async function mixCinematicSoundscape({
           .input(narrationFile)
           .input(backgroundMusicFile)
           .inputOptions(["-stream_loop -1"])
-          .complexFilter(`[1:a]volume=0.15[bg];[0:a][bg]amix=inputs=2:duration=first:normalize=0,alimiter=limit=-0.5dB`)
+          .complexFilter(`[1:a]volume=${bgVolume}[bg];[0:a][bg]amix=inputs=2:duration=first:normalize=0,alimiter=limit=-0.5dB`)
           .save(outputFile)
           .on("end", () => resolve(outputFile))
           .on("error", reject);
@@ -235,9 +237,9 @@ export async function mixCinematicSoundscape({
       filterComplex += `${sfxOutputs[0]}anull[mixed_soundscape];`;
     }
 
-    // Final mix with narration & optional music (soft ambient music at volume=0.08)
+    // Final mix with narration & optional music (soft background music at bgVolume)
     if (hasMusic) {
-      filterComplex += `[1:a]volume=0.08[bg_music];[bg_music][0:a]sidechaincompress=threshold=0.03:ratio=5:attack=20:release=300[ducked_music];[0:a][ducked_music][mixed_soundscape]amix=inputs=3:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-0.5dB`;
+      filterComplex += `[1:a]volume=${bgVolume}[bg_music];[bg_music][0:a]sidechaincompress=threshold=0.03:ratio=5:attack=20:release=300[ducked_music];[0:a][ducked_music][mixed_soundscape]amix=inputs=3:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-0.5dB`;
     } else {
       filterComplex += `[0:a][mixed_soundscape]amix=inputs=2:duration=first:dropout_transition=2:normalize=0,alimiter=limit=-0.5dB`;
     }

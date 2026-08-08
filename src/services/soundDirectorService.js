@@ -72,7 +72,7 @@ ${wordsPreview.slice(0, 10000)}
 
 DESIGN INSTRUCTIONS & RULES:
 1. NARRATIVE & SCENE ANALYSIS: Analyze the story step-by-step for actions, objects, environment, emotional state, tension level, camera perspective, and pacing.
-2. AMBIENT LAYERS: Identify AT MOST ONE single subtle continuous background ambience layer for the entire story (e.g. quiet room tone or soft wind draft). Do NOT create multiple ambient tracks. Ambient volume must be soft and unobtrusive (0.10 - 0.18).
+2. AMBIENT LAYERS: Identify AT MOST ONE single subtle continuous background ambience layer for the entire story (e.g. quiet room tone or soft wind draft). Do NOT create multiple ambient tracks. Ambient volume must be soft and unobtrusive (0.04 - 0.08).
 3. FOLEY & SOUND EVENTS (MAX 1 OR 2 TOTAL FOR A 3-MINUTE STORY):
    - BE EXTREMELY SPARING AND MINIMAL. Most narration sentences MUST NOT produce any sound effects.
    - For stories under 3 minutes (< 180s), select AT MOST 1 sound event TOTAL for the ENTIRE story (only the single climax moment like a gunshot).
@@ -105,7 +105,7 @@ Return STRICT VALID JSON in this format:
       "prompt": "Eerie quiet room tone inside an old creaky wooden house with subtle low wind draft",
       "startWord": "It",
       "endWord": "silence",
-      "volume": 0.12,
+      "volume": 0.06,
       "fadeInSec": 1.0,
       "fadeOutSec": 1.5,
       "layer": "background_ambience"
@@ -214,7 +214,7 @@ export async function buildSoundscapeAssets({ soundscapePlan, words, tempDir }) 
           file: ambPath,
           delayMs: startSec * 1000,
           targetDurationSec: dur,
-          volume: Math.min(0.20, amb.volume || 0.15),
+          volume: Math.min(0.08, amb.volume || 0.05),
           fadeInSec: amb.fadeInSec || 1.0,
           fadeOutSec: amb.fadeOutSec || 1.0,
           layer: "background_ambience",

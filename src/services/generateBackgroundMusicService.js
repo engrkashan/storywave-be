@@ -135,11 +135,13 @@ export async function mixAudioWithBackground(voicePath, musicPath, outputPath) {
     return;
   }
 
+  const bgVolume = parseFloat(process.env.BG_MUSIC_VOLUME || "0.04");
+
   const cmd = [
     `ffmpeg -y`,
     `-i "${voicePath}"`,
     `-stream_loop -1 -i "${musicPath}"`,
-    `-filter_complex "[1:a]volume=0.12[bg]; [bg][0:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=200[ducked]; [0:a][ducked]amix=inputs=2:duration=first[a]"`,
+    `-filter_complex "[1:a]volume=${bgVolume}[bg]; [bg][0:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=200[ducked]; [0:a][ducked]amix=inputs=2:duration=first[a]"`,
     `-map "[a]" -c:a libmp3lame -b:a 192k`,
     `"${outputPath}"`,
   ].join(" ");
