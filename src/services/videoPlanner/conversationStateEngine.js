@@ -18,13 +18,17 @@ const logger = createLogger("ConversationStateEngine");
  */
 export function initializeConversationState(storyBible = {}, initialBeat = {}) {
   const characters = storyBible?.characters || [];
-  const mainChar = characters[0]?.name || initialBeat.characterName || "Speaker 1";
-  const secondaryChar = characters[1]?.name || "Speaker 2";
+  const mainChar = characters[0]?.name || initialBeat.characterName || "Subject";
+  const hasMultipleCharacters = characters.length > 1;
+  const secondaryChar = hasMultipleCharacters ? characters[1].name : null;
 
   const initialText = initialBeat.spokenText || initialBeat.narrationText || "";
   const initialSpeaker = initialBeat.characterName || mainChar;
 
+  const conversationType = hasMultipleCharacters ? "dialogue" : "monologue";
+
   return {
+    conversationType,
     currentSpeaker: initialSpeaker,
     previousSpeaker: null,
     conversationPhase: determineConversationPhase(0, 10, initialBeat.emotion),
@@ -32,7 +36,7 @@ export function initializeConversationState(storyBible = {}, initialBeat = {}) {
     currentEmotion: initialBeat.emotion || "cinematic focus",
     dialogueContext: storyBible.synopsis || "Story dialogue",
     lastSpokenWords: initialText || "",
-    nextExpectedSpeaker: secondaryChar !== initialSpeaker ? secondaryChar : null,
+    nextExpectedSpeaker: (hasMultipleCharacters && secondaryChar !== initialSpeaker) ? secondaryChar : null,
     conversationHistory: initialText
       ? [{ speaker: initialSpeaker, text: initialText, timestamp: 0.0 }]
       : [],
@@ -50,11 +54,13 @@ export function initializeConversationState(storyBible = {}, initialBeat = {}) {
  * @returns {object} Updated ConversationState object
  */
 export function updateConversationState(currentState = {}, executedBeat = {}, nextBeat = null, beatIndex = 0, totalBeats = 10) {
-  const speaker = executedBeat.characterName || currentState.currentSpeaker || "Speaker";
+  const isMonologue = currentState.conversationType === "monologue";
+  const speaker = executedBeat.characterName || currentState.currentSpeaker || "Subject";
   const spokenText = executedBeat.spokenText || executedBeat.speechAllocation?.spokenText || "";
 
   const prevSpeaker = currentState.currentSpeaker !== speaker ? currentState.currentSpeaker : currentState.previousSpeaker;
-  const nextSpeaker = nextBeat?.characterName || (speaker === prevSpeaker ? null : prevSpeaker);
+  const rawNextSpeaker = nextBeat?.characterName || null;
+  const nextSpeaker = (!isMonologue && rawNextSpeaker && rawNextSpeaker !== speaker) ? rawNextSpeaker : null;
 
   const updatedHistory = [...(currentState.conversationHistory || [])];
   if (spokenText) {
@@ -65,18 +71,19 @@ export function updateConversationState(currentState = {}, executedBeat = {}, ne
     });
   }
 
-  const pendingReply = Boolean(nextBeat && nextBeat.spokenText && nextSpeaker && nextSpeaker !== speaker);
+  const pendingReply = Boolean(!isMonologue && nextBeat && nextBeat.spokenText && nextSpeaker && nextSpeaker !== speaker);
 
   return {
+    ...currentState,
     currentSpeaker: speaker,
-    previousSpeaker: prevSpeaker,
+    previousSpeaker: isMonologue ? null : prevSpeaker,
     conversationPhase: determineConversationPhase(beatIndex + 1, totalBeats, executedBeat.emotion),
     pendingReply,
     currentEmotion: executedBeat.emotion || currentState.currentEmotion || "cinematic focus",
     dialogueContext: executedBeat.narrative || currentState.dialogueContext,
     lastSpokenWords: spokenText || currentState.lastSpokenWords,
     nextExpectedSpeaker: nextSpeaker,
-    conversationHistory: updatedHistory.slice(-5), // Maintain rolling 5-turn history window
+    conversationHistory: updatedHistory.slice(-5),
   };
 }
 

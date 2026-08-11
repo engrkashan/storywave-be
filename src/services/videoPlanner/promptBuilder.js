@@ -2,7 +2,7 @@
  * promptBuilder.js — State-Based Prompt Builder for Video Planner
  *
  * Replaces chunk-based prompt generation with state-based prompt synthesis for VIDEO ONLY.
- * Uses persistent SceneState to define exact starting pose, current action, and explicit stopping boundaries.
+ * Uses persistent SceneState to define exact starting pose, physical visual action, and explicit stopping boundaries.
  */
 
 import { buildCinematicSceneDirectorObject } from "../prompt/videoPromptBuilder.js";
@@ -12,7 +12,74 @@ import { createLogger } from "../../utils/logger.js";
 const logger = createLogger("StateBasedPromptBuilder");
 
 /**
- * Builds a state-based prompt object for Gemini Omni Flash combining Story Director specifications
+ * Determines the visual purpose for a beat based on narrative content and beat index.
+ */
+export function determineVisualPurpose(beat = {}, beatIndex = 0, totalBeats = 5) {
+  const text = (beat.narrative || beat.action || beat.spokenText || "").toLowerCase();
+
+  if (beatIndex === 0 || text.includes("tired of") || text.includes("ever wonder") || text.includes("stop")) return "HOOK";
+  if (text.includes("problem") || text.includes("dry") || text.includes("missing") || text.includes("scalp")) return "PROBLEM / SCALP DIAGNOSIS";
+  if (text.includes("oil") || text.includes("formula") || text.includes("rosemary") || text.includes("product")) return "PRODUCT INTRODUCTION";
+  if (text.includes("ingredients") || text.includes("jojoba") || text.includes("castor")) return "INGREDIENT REVEAL & DEMONSTRATION";
+  if (text.includes("moisture") || text.includes("nourish") || text.includes("spread")) return "BENEFIT DEMONSTRATION";
+  if (beatIndex === totalBeats - 1 || text.includes("try") || text.includes("get") || text.includes("order")) return "CALL TO ACTION / HERO PRODUCT";
+
+  return "NARRATIVE PROGRESSION";
+}
+
+/**
+ * Generates a distinct physical visual action appropriate for the beat, separating dialogue from physical movement.
+ */
+export function derivePhysicalVisualAction(beat = {}, charName = "Subject", visualPurpose = "NARRATIVE PROGRESSION") {
+  const rawAction = beat.action || "";
+  const rawNarrative = beat.narrative || "";
+
+  // If rawAction is already a physical visual action (not raw dialogue/narration), use it
+  if (rawAction && !rawAction.includes("?") && !rawAction.includes('"') && rawAction.split(" ").length > 3) {
+    return rawAction;
+  }
+
+  // Derive visual physical action based on purpose
+  switch (visualPurpose) {
+    case "HOOK":
+      return `${charName} examines her scalp closely in a bathroom mirror, noticing dryness, then turns toward the camera with an expressive, engaging look.`;
+    case "PROBLEM / SCALP DIAGNOSIS":
+      return `${charName} gently touches her scalp near the hairline, inspecting her hair roots with a reflective, authentic expression.`;
+    case "PRODUCT INTRODUCTION":
+      return `${charName} holds up a sleek glass bottle of hair scalp oil at chest height, rotating it subtly to capture the ambient lighting.`;
+    case "INGREDIENT REVEAL & DEMONSTRATION":
+      return `${charName} dispenses a drop of golden scalp oil onto her fingertips, demonstrating its smooth, non-greasy texture.`;
+    case "BENEFIT DEMONSTRATION":
+      return `${charName} applies a small amount of oil onto her scalp part and gently massages it in using soft circular fingertip motions.`;
+    case "CALL TO ACTION / HERO PRODUCT":
+      return `${charName} presents the scalp oil bottle toward the camera with a confident, radiant smile against warm cinematic lighting.`;
+    default:
+      return `${charName} performs a natural, fluid gesture while interacting with the scene environment.`;
+  }
+}
+
+/**
+ * Selects camera movement and shot size based on visual purpose.
+ */
+export function determineCameraIntent(visualPurpose = "NARRATIVE PROGRESSION", isCharacterTalk = false) {
+  switch (visualPurpose) {
+    case "HOOK":
+      return { shotSize: "Medium Close-Up", angle: "Eye Level", movement: "Subtle slow push-in" };
+    case "PRODUCT INTRODUCTION":
+      return { shotSize: "Medium Shot", angle: "Slight Low Angle", movement: "Smooth tracking arc" };
+    case "INGREDIENT REVEAL & DEMONSTRATION":
+      return { shotSize: "Close-Up Insert", angle: "High Angle Focus", movement: "Slow macro focus tracking" };
+    case "BENEFIT DEMONSTRATION":
+      return { shotSize: "Medium Close-Up", angle: "Eye Level", movement: "Handheld organic movement" };
+    case "CALL TO ACTION / HERO PRODUCT":
+      return { shotSize: "Medium Hero Shot", angle: "Eye Level", movement: "Gentle pedestal camera pull-back" };
+    default:
+      return { shotSize: isCharacterTalk ? "Medium Close-Up" : "Medium Shot", angle: "Eye Level", movement: "Smooth steady tracking motion" };
+  }
+}
+
+/**
+ * Builds a state-based prompt object combining Story Director specifications
  * with state-based starting poses and stopping boundaries.
  *
  * @param {object} beat         - Current atomic beat object
@@ -29,21 +96,30 @@ export function buildStateBasedPrompt(beat = {}, sceneState = {}, nextBeat = nul
   const speechAlloc = beat.speechAllocation || {};
   const convState = sceneState.conversationState || {};
 
-  // 1. Construct base scene payload for Story Director Engine
+  const totalBeatsCount = options.totalBeatsCount || 5;
+  const beatIdx = beat.beatIndex || 0;
+
+  const visualPurpose = determineVisualPurpose(beat, beatIdx, totalBeatsCount);
+  const charInfo = sceneState.activeCharacter || {};
+  const charName = speechAlloc.speaker || charInfo.name || beat.characterName || "Subject";
+  const physicalAction = derivePhysicalVisualAction(beat, charName, visualPurpose);
+  const cameraIntent = determineCameraIntent(visualPurpose, isCharacterTalk);
+
+  // 1. Base scene payload for Story Director Engine
   const baseScene = {
-    sceneIndex: beat.beatIndex || 0,
+    sceneIndex: beatIdx,
     narrative: {
-      beatSummary: beat.narrative || beat.action,
+      beatSummary: beat.narrative || physicalAction,
       narrationText: spokenText,
-      emotionalTone: beat.emotion || sceneState.emotion || "cinematic",
+      emotionalTone: beat.emotion || sceneState.emotion || "cinematic focus",
     },
     characters: [
       {
-        id: speechAlloc.speakerId || sceneState.activeCharacter?.id || "char_1",
-        name: speechAlloc.speaker || sceneState.activeCharacter?.name || beat.characterName || "Subject",
-        identityLock: sceneState.activeCharacter?.identityLock || "Cinematic subject",
-        costumeState: sceneState.activeCharacter?.costumeState || "standard wardrobe",
-        currentAction: beat.action || "perform beat action",
+        id: speechAlloc.speakerId || charInfo.id || "char_1",
+        name: charName,
+        identityLock: charInfo.identityLock || "Cinematic subject",
+        costumeState: charInfo.costumeState || "standard wardrobe",
+        currentAction: physicalAction,
       }
     ],
     environment: {
@@ -52,20 +128,17 @@ export function buildStateBasedPrompt(beat = {}, sceneState = {}, nextBeat = nul
       lighting: sceneState.environment || "volumetric cinematic lighting",
     },
     camera: {
-      shotSize: isCharacterTalk ? "Medium Close-Up Shot" : (sceneState.camera?.shotSize || "Medium Tracking Shot"),
-      angle: isCharacterTalk ? "Eye Level Facing Camera" : (sceneState.camera?.angle || "Eye Level"),
+      shotSize: cameraIntent.shotSize,
+      angle: cameraIntent.angle,
       lens: "35mm Anamorphic T1.9",
-      movement: sceneState.camera?.movement || "Smooth steady tracking motion",
+      movement: cameraIntent.movement,
     },
     timing: beat.timing || { durationSec: 5.0 },
     characterTalk: isCharacterTalk,
   };
 
-  // 2. Generate Cinematic Scene Director Object
   const directorObj = buildCinematicSceneDirectorObject(baseScene, storyBible, commonPrompt, options);
 
-  const charInfo = sceneState.activeCharacter || {};
-  const charName = speechAlloc.speaker || charInfo.name || beat.characterName || "Subject";
   const identityLock = charInfo.identityLock || "Cinematic subject";
   const costume = charInfo.costumeState || "standard wardrobe";
   const locName = sceneState.currentLocation || beat.location || "Scene Location";
@@ -73,53 +146,44 @@ export function buildStateBasedPrompt(beat = {}, sceneState = {}, nextBeat = nul
   const lighting = sceneState.environment || "cinematic lighting";
 
   const startingPose = sceneState.currentPose || "Standing in natural posture";
-  const currentAction = beat.action || beat.narrative || "Perform scene action";
-  const stoppingBoundary = nextBeat ? (nextBeat.action || nextBeat.narrative || "Stop action") : "Conclude scene";
-  const nextDialoguePreview = nextBeat?.speechAllocation?.spokenText || nextBeat?.spokenText || "";
-
-  // 3. Precise Boundaries (Visual, Speech, Conversation, Stopping)
   const clipDurationSec = beat.timing?.durationSec || 5.0;
 
-  const speechBoundary = (isCharacterTalk && spokenText)
-    ? `CHARACTER SPOKEN DIALOGUE: ${charName} starts speaking out loud immediately at t=0.0s and reads these exact lines: "${spokenText}" (Local clip speech window: t=0.0s to t=${clipDurationSec.toFixed(1)}s). Synchronize lip movement and facial expression precisely to this speech window.`
-    : "";
+  const speechBoundary = spokenText
+    ? `SPOKEN DIALOGUE: ${charName} speaks out loud: "${spokenText}" (Timing: t=0.0s to t=${clipDurationSec.toFixed(1)}s). Synchronize facial expression and lip movement to dialogue.`
+    : "SPOKEN DIALOGUE: Silent action without dialogue.";
 
-  const conversationBoundary = (convState.currentSpeaker && convState.nextExpectedSpeaker)
-    ? `CONVERSATION FLOW: ${charName} is actively engaging with ${convState.nextExpectedSpeaker}. Maintain direct eyeline and body orientation.`
-    : "";
+  const nextActionText = nextBeat ? derivePhysicalVisualAction(nextBeat, charName, determineVisualPurpose(nextBeat, beatIdx + 1, totalBeatsCount)) : "natural resolution";
+  const stoppingBoundaryText = `ACTION CONTINUITY & BOUNDARY: Perform physical action starting from pose (${startingPose}). Conclude clip smoothly at t=${clipDurationSec.toFixed(1)}s in posture ready for (${nextActionText}).`;
 
-  const nextActionText = nextBeat ? (nextBeat.action || nextBeat.narrative || "next scene movement") : "natural conclusion";
-  const stoppingBoundaryText = `ACTION CONTINUITY & BOUNDARY: Perform ONLY current action (${currentAction}) starting from initial pose (${startingPose}). Conclude clip smoothly at t=${clipDurationSec.toFixed(1)}s in a natural posture ready for ${nextActionText}. Do NOT repeat past actions.`;
-
-  // 4. Aspect Ratio & Composition Directives
   const targetRatio = options.aspectRatio || "16:9";
   const isVerticalRatio = targetRatio === "9:16" || targetRatio === "9/16" || targetRatio === "vertical";
   const aspectRatioBoundary = isVerticalRatio
-    ? "FRAME ASPECT RATIO & COMPOSITION: Generate natively in VERTICAL 9:16 orientation. Frame all key characters, faces, and main actions strictly centered within vertical 9:16 bounds. Do not place essential subjects at outer horizontal edges."
-    : "FRAME ASPECT RATIO & COMPOSITION: Generate natively in HORIZONTAL 16:9 widescreen orientation.";
+    ? "FRAME ASPECT RATIO: Native VERTICAL 9:16 orientation. Frame all key subjects centered within 9:16 bounds."
+    : "FRAME ASPECT RATIO: Native HORIZONTAL 16:9 widescreen composition.";
 
-  // 5. Combine Story Director specs + State boundaries into final Gemini Omni Flash prompt
   const promptParts = [
-    `SCENE VISUALS: ${directorObj.cameraPlan.shotSize}, ${directorObj.cameraPlan.angle}. ${charName} (${identityLock}, wearing ${costume}). Location: ${locName}${locDetails ? ` (${locDetails})` : ""}. Lighting: ${lighting}.`,
-    `CINEMATOGRAPHY: Lens ${directorObj.cameraPlan.lens}, Movement: ${directorObj.cameraPlan.rig}, Focus: ${directorObj.cameraPlan.depthOfField}.`,
+    `SCENE PURPOSE: ${visualPurpose}`,
+    `VISUAL SCENE: ${cameraIntent.shotSize}, ${cameraIntent.angle}. ${charName} (${identityLock}, wearing ${costume}). Location: ${locName}${locDetails ? ` (${locDetails})` : ""}. Lighting: ${lighting}.`,
+    `CINEMATOGRAPHY: Lens 35mm Anamorphic T1.9, Movement: ${cameraIntent.movement}.`,
     aspectRatioBoundary,
-    `STARTING POSE: ${charName} begins in starting pose: ${startingPose}.`,
-    `COMPLETE ACTION VISUALS: ${charName} performs complete continuous action: ${currentAction}.`,
+    `STARTING POSE: ${charName} begins in pose: ${startingPose}.`,
+    `PHYSICAL VISUAL ACTION: ${physicalAction}`,
     speechBoundary,
     stoppingBoundaryText,
-    conversationBoundary,
     commonPrompt ? `VISUAL STYLE: ${commonPrompt}` : "VISUAL STYLE: Photorealistic 8k ultra-detailed cinematic film quality, natural continuous physics, smooth motion.",
   ].filter(Boolean);
 
   const veoPrompt = promptParts.join("\n\n").trim();
 
   return {
-    sceneId: beat.sceneId || `scene_${String((beat.beatIndex || 0) + 1).padStart(3, "0")}`,
-    sceneIndex: beat.beatIndex || 0,
+    sceneId: beat.sceneId || `scene_${String(beatIdx + 1).padStart(3, "0")}`,
+    sceneIndex: beatIdx,
     prompt: veoPrompt,
     charactersInScene: (speechAlloc.speakerId || charInfo.id) ? [speechAlloc.speakerId || charInfo.id] : [],
-    durationSec: beat.timing?.durationSec || 5.0,
+    durationSec: clipDurationSec,
     narration: spokenText,
+    physicalAction,
+    visualPurpose,
     speechAllocation: speechAlloc,
     conversationState: convState,
     _beat: beat,
@@ -127,3 +191,4 @@ export function buildStateBasedPrompt(beat = {}, sceneState = {}, nextBeat = nul
     _directorObject: directorObj,
   };
 }
+

@@ -266,10 +266,37 @@ export function auditPrompt(promptObj = {}, historyContext = {}) {
 
   const { score, categories: scoredCategories } = calculatePromptScore(categories, issues);
 
+  // ── 7. Hard Failures Gate ──────────────────────────────────────────────────
+  const hardFailures = [];
+
+  // Check A: Physical Action is raw dialogue/narration or empty
+  const physicalAction = promptObj.physicalAction || beat.action || "";
+  if (!physicalAction || physicalAction.trim().length === 0) {
+    hardFailures.push("Physical visual action is completely empty.");
+  } else if (physicalAction.startsWith('"') || (spokenText && physicalAction.toLowerCase().includes(spokenText.toLowerCase()) && spokenText.split(" ").length > 3)) {
+    hardFailures.push(`Physical visual action ("${physicalAction.slice(0, 40)}...") is raw dialogue text instead of a physical action.`);
+  }
+
+  // Check B: Missing STARTING POSE or BOUNDARY
+  if (!promptText.includes("STARTING POSE:")) {
+    hardFailures.push("Missing STARTING POSE specification.");
+  }
+  if (!promptText.includes("ACTION CONTINUITY & BOUNDARY:") && !promptText.includes("Conclude clip smoothly")) {
+    hardFailures.push("Missing ACTION CONTINUITY & BOUNDARY specification.");
+  }
+
+  // Check C: Contradictory camera instructions
+  const hasPanLeft = /pan(ning)?\s+left/i.test(promptText);
+  const hasPanRight = /pan(ning)?\s+right/i.test(promptText);
+  if (hasPanLeft && hasPanRight) {
+    hardFailures.push("Contradictory camera instructions (simultaneous pan left and right).");
+  }
+
   return {
     score,
     categories: scoredCategories,
     issues,
+    hardFailures,
     promptLength: len,
   };
 }

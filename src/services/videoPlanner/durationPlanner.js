@@ -1,9 +1,8 @@
 /**
  * durationPlanner.js — Dynamic Duration Planner for Video Planner
  *
- * Estimates beat duration based on action complexity, dialogue length, and movement.
- * Replaces fixed word-chunk duration logic for VIDEO ONLY.
- * Clamps output per beat to valid Gemini Omni Flash clip boundaries (3.0s to 5.0s).
+ * Derives beat duration mathematically from authoritative speech timeline and scene boundaries.
+ * Enforces durationSec = endSec - startSec strictly without arbitrary conflicting calculations.
  */
 
 import { createLogger } from "../../utils/logger.js";
@@ -14,61 +13,66 @@ const OMNI_MIN_CLIP_DURATION = 3.0;
 const OMNI_MAX_CLIP_DURATION = 5.0;
 
 /**
- * Plans durations for each atomic beat and handles natural splits if a complex beat exceeds 5s.
+ * Plans durations for each beat based on authoritative speech timeline boundaries.
  *
  * @param {Array<object>} atomicBeats - List of atomic beats
- * @returns {Array<object>} Beats with calculated durationSec and timing metadata
+ * @param {number} targetSceneCount - Target scene count
+ * @param {number} targetTotalDuration - Target total narration duration
+ * @returns {Array<object>} Beats with mathematically strict durationSec and timing metadata
  */
 export function planBeatDurations(atomicBeats = [], targetSceneCount = null, targetTotalDuration = null) {
-  logger.info(`⏱️ [Duration Planner] Estimating durations for ${atomicBeats.length} atomic beats (Target Scenes: ${targetSceneCount || "Auto"})...`);
+  logger.info(`⏱️ [Duration Planner] Deriving timing for ${atomicBeats.length} beats (Target Scenes: ${targetSceneCount || "Auto"})...`);
 
   const durationPlannedBeats = [];
   let currentStartSec = 0;
   let beatCounter = 0;
 
-  const allowBeatSplitting = !targetSceneCount || targetSceneCount <= 0 || atomicBeats.length < targetSceneCount;
-
   for (let i = 0; i < atomicBeats.length; i++) {
     const beat = atomicBeats[i];
-    const estimatedDuration = estimateSingleBeatDuration(beat);
+    const speechAlloc = beat.speechAllocation || {};
 
-    if (estimatedDuration > OMNI_MAX_CLIP_DURATION && allowBeatSplitting) {
-      // Split beat naturally across micro-movement phases
-      logger.info(`✂️ Beat ${i + 1} estimated duration ${estimatedDuration.toFixed(1)}s exceeds 5s max — splitting naturally...`);
-      const microBeats = splitOverlongBeat(beat, estimatedDuration);
-      
-      microBeats.forEach((mb) => {
-        const durationSec = OMNI_MAX_CLIP_DURATION;
-        const startSec = currentStartSec;
-        const endSec = startSec + durationSec;
-        currentStartSec = endSec;
+    let startSec = currentStartSec;
+    let endSec = currentStartSec + 5.0;
 
-        durationPlannedBeats.push({
-          ...mb,
-          beatIndex: beatCounter++,
-          timing: { startSec, endSec, durationSec },
-        });
-      });
+    if (speechAlloc.speechStartSec !== undefined && speechAlloc.speechEndSec !== undefined && speechAlloc.speechEndSec > speechAlloc.speechStartSec) {
+      startSec = speechAlloc.speechStartSec;
+      endSec = speechAlloc.speechEndSec;
+    } else if (beat.timing?.startSec !== undefined && beat.timing?.endSec !== undefined && beat.timing.endSec > beat.timing.startSec) {
+      startSec = beat.timing.startSec;
+      endSec = beat.timing.endSec;
     } else {
-      const durationSec = Math.max(OMNI_MIN_CLIP_DURATION, Math.min(OMNI_MAX_CLIP_DURATION, estimatedDuration));
-      const startSec = currentStartSec;
-      const endSec = startSec + durationSec;
-      currentStartSec = endSec;
-
-      durationPlannedBeats.push({
-        ...beat,
-        beatIndex: beatCounter++,
-        timing: { startSec, endSec, durationSec },
-      });
+      const estimated = estimateSingleBeatDuration(beat);
+      endSec = startSec + estimated;
     }
+
+    // Ensure contiguity
+    if (startSec < currentStartSec) {
+      startSec = currentStartSec;
+    }
+    if (endSec <= startSec) {
+      endSec = startSec + 5.0;
+    }
+
+    const durationSec = Number((endSec - startSec).toFixed(3));
+    currentStartSec = endSec;
+
+    durationPlannedBeats.push({
+      ...beat,
+      beatIndex: beatCounter++,
+      timing: {
+        startSec: Number(startSec.toFixed(3)),
+        endSec: Number(endSec.toFixed(3)),
+        durationSec,
+      },
+    });
   }
 
-  logger.info(`✅ [Duration Planner] Planned ${durationPlannedBeats.length} beats with total estimated duration: ${currentStartSec.toFixed(1)}s.`);
+  logger.info(`✅ [Duration Planner] Planned ${durationPlannedBeats.length} beats mathematically (Total Duration: ${currentStartSec.toFixed(1)}s).`);
   return durationPlannedBeats;
 }
 
 /**
- * Estimates duration in seconds based on action, word count, and movement complexity.
+ * Fallback duration estimation when speech timeline is unallocated.
  */
 function estimateSingleBeatDuration(beat) {
   const actionText = beat.action || beat.narrative || "";
@@ -77,43 +81,13 @@ function estimateSingleBeatDuration(beat) {
   const wordsInSpoken = spokenText.split(/\s+/).filter(Boolean).length;
   const wordsInAction = actionText.split(/\s+/).filter(Boolean).length;
 
-  // Fix I-6: spoken rate 0.35s/word ≈ 2.85 words/sec (realistic for TTS).
-  // Old value 0.5s/word caused 10-word lines to reach the 5.0s max and split unnecessarily.
-  // Physical action rate unchanged at 0.4s/word.
   let duration = wordsInSpoken > 0
     ? Math.max(3.0, wordsInSpoken * 0.35)
     : Math.max(3.0, wordsInAction * 0.4);
 
-  // Complexity modifiers
   if (/run|jump|sprint|dash|leap|fight|chase/i.test(actionText)) duration += 0.5;
   if (/slowly|turns|scans|hesitates|whispers/i.test(actionText)) duration += 0.5;
 
-  return duration;
+  return Math.min(5.0, Math.max(3.0, duration));
 }
 
-/**
- * Splits a beat exceeding 5s into natural micro-movement phases.
- * (e.g. "Climb ladder" -> "Hands grab ladder" -> "Reach top")
- */
-function splitOverlongBeat(beat, totalEstimatedDuration) {
-  const numSplits = Math.ceil(totalEstimatedDuration / OMNI_MAX_CLIP_DURATION);
-  const microBeats = [];
-
-  for (let s = 0; s < numSplits; s++) {
-    let phaseText = beat.action;
-    if (s === 0) phaseText = `${beat.action} (Initial phase & approach)`;
-    else if (s === numSplits - 1) phaseText = `${beat.action} (Completion phase & arrival)`;
-    else phaseText = `${beat.action} (Mid-action continuation)`;
-
-    microBeats.push({
-      ...beat,
-      action: phaseText,
-      narrative: phaseText,
-      spokenText: s === 0 ? beat.spokenText : "", // Keep spoken dialogue on first phase
-      isSplitPhase: true,
-      phaseIndex: s,
-    });
-  }
-
-  return microBeats;
-}

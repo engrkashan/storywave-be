@@ -12,6 +12,21 @@ import { createLogger } from "../../utils/logger.js";
 const logger = createLogger("SpeechTimelineService");
 
 /**
+ * Builds a Global Word Ledger mapping every word in the raw script to a contiguous index [0..N-1].
+ *
+ * @param {string} script - Full narrative script text
+ * @returns {Array<{ index: number, word: string, normalized: string }>} Word ledger array
+ */
+export function buildGlobalWordLedger(script = "") {
+  const rawWords = script.split(/\s+/).filter(Boolean);
+  return rawWords.map((w, idx) => ({
+    index: idx,
+    word: w,
+    normalized: w.toLowerCase().replace(/[^a-z0-9]/g, ""),
+  }));
+}
+
+/**
  * Builds a Unified Speech Timeline object from script and optional Whisper word timestamps.
  *
  * @param {string} script        - Narrative script text
@@ -21,8 +36,9 @@ const logger = createLogger("SpeechTimelineService");
  * @returns {object} Unified Speech Timeline object
  */
 export function buildUnifiedSpeechTimeline(script, whisperWords = null, storyBible = {}, options = {}) {
-  logger.info("🎙️ [Speech Timeline] Building Unified Speech Timeline...");
+  logger.info("🎙️ [Speech Timeline] Building Unified Speech Timeline & Global Word Ledger...");
 
+  const globalLedger = buildGlobalWordLedger(script);
   const characters = storyBible?.characters || [];
   const mainChar = characters[0] || { name: "Speaker 1", id: "char_1" };
 
@@ -35,10 +51,28 @@ export function buildUnifiedSpeechTimeline(script, whisperWords = null, storyBib
 
     let currentSegmentWords = [];
     let segIdx = 0;
+    let ledgerCursor = 0;
 
     for (let i = 0; i < whisperWords.length; i++) {
       const w = whisperWords[i];
-      currentSegmentWords.push(w);
+      const normW = w.word.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      // Match with global ledger
+      let matchedLedgerIdx = ledgerCursor;
+      for (let l = ledgerCursor; l < Math.min(ledgerCursor + 5, globalLedger.length); l++) {
+        if (globalLedger[l].normalized === normW) {
+          matchedLedgerIdx = l;
+          ledgerCursor = l + 1;
+          break;
+        }
+      }
+
+      currentSegmentWords.push({
+        word: w.word.trim(),
+        start: w.start,
+        end: w.end,
+        globalIndex: matchedLedgerIdx,
+      });
 
       const isLast = i === whisperWords.length - 1;
       const nextW = whisperWords[i + 1];
@@ -51,17 +85,20 @@ export function buildUnifiedSpeechTimeline(script, whisperWords = null, storyBib
       if (shouldCut && currentSegmentWords.length > 0) {
         const segStart = currentSegmentWords[0].start;
         const segEnd = currentSegmentWords[currentSegmentWords.length - 1].end;
-        const segText = currentSegmentWords.map((cw) => cw.word.trim()).join(" ");
-
-        // Determine speaker by matching text cues or character names
+        const segText = currentSegmentWords.map((cw) => cw.word).join(" ");
         const activeSpeaker = resolveSpeakerForText(segText, characters, mainChar);
+
+        const wordIndices = currentSegmentWords.map((cw) => cw.globalIndex);
+        const startIndex = Math.min(...wordIndices);
+        const endIndex = Math.max(...wordIndices) + 1;
 
         segments.push({
           segmentId: `speech_seg_${String(segIdx).padStart(3, "0")}`,
           speaker: activeSpeaker.name,
           speakerId: activeSpeaker.id,
           text: segText,
-          words: currentSegmentWords.map((cw) => ({ word: cw.word.trim(), start: cw.start, end: cw.end })),
+          words: currentSegmentWords,
+          wordRange: { startIndex, endIndex },
           startSec: segStart,
           endSec: segEnd,
           durationSec: Math.max(0.1, segEnd - segStart),
@@ -81,17 +118,27 @@ export function buildUnifiedSpeechTimeline(script, whisperWords = null, storyBib
     const scriptChunks = intelligentVideoScriptChunker(script);
 
     let currentTime = 0;
+    let globalWordIdx = 0;
+
     scriptChunks.forEach((chunkText, segIdx) => {
       const wordsInChunk = chunkText.split(/\s+/).filter(Boolean);
       const chunkDuration = 5.0; // Standard Omni clip duration
       const secPerWord = chunkDuration / Math.max(1, wordsInChunk.length);
 
-      const wordObjects = wordsInChunk.map((w, wIdx) => ({
-        word: w,
-        start: currentTime + wIdx * secPerWord,
-        end: currentTime + (wIdx + 1) * secPerWord,
-      }));
+      const startIndex = globalWordIdx;
 
+      const wordObjects = wordsInChunk.map((w, wIdx) => {
+        const item = {
+          word: w,
+          start: currentTime + wIdx * secPerWord,
+          end: currentTime + (wIdx + 1) * secPerWord,
+          globalIndex: globalWordIdx,
+        };
+        globalWordIdx++;
+        return item;
+      });
+
+      const endIndex = globalWordIdx;
       const activeSpeaker = resolveSpeakerForText(chunkText, characters, mainChar);
 
       segments.push({
@@ -100,6 +147,7 @@ export function buildUnifiedSpeechTimeline(script, whisperWords = null, storyBib
         speakerId: activeSpeaker.id,
         text: chunkText,
         words: wordObjects,
+        wordRange: { startIndex, endIndex },
         startSec: currentTime,
         endSec: currentTime + chunkDuration,
         durationSec: chunkDuration,
@@ -116,18 +164,26 @@ export function buildUnifiedSpeechTimeline(script, whisperWords = null, storyBib
   const speechTimeline = {
     version: 1,
     generatedAt: new Date().toISOString(),
+    globalWordLedger: globalLedger,
     totalDuration,
-    totalWords: segments.reduce((sum, s) => sum + s.words.length, 0),
+    totalWords: globalLedger.length,
     segments,
   };
 
-  logger.info(`✅ [Speech Timeline] Created ${segments.length} unified speech segments (Total Speech Duration: ${totalDuration.toFixed(1)}s).`);
+  logger.info(`✅ [Speech Timeline] Created ${segments.length} unified speech segments across ${globalLedger.length} total words (Duration: ${totalDuration.toFixed(1)}s).`);
+
+  // Run hard validation gate
+  const valRes = validateWordLedger(script, speechTimeline);
+  if (!valRes.valid) {
+    logger.warn(`⚠️ [Speech Timeline Validation Warning]: Missing ${valRes.missingWords.length} words, Duplicate ${valRes.duplicateWords.length} words.`);
+  }
+
   return speechTimeline;
 }
 
 /**
  * Phase 2: Speech Allocation Engine
- * Allocates speech segments to beats strictly without word skips or overlaps.
+ * Allocates speech segments to beats strictly preserving sentence ownership and global word ranges.
  *
  * @param {Array<object>} beats           - Array of planned beats
  * @param {object} speechTimeline        - Unified Speech Timeline object
@@ -155,7 +211,6 @@ export function allocateSpeechToBeats(beats = [], speechTimeline = {}) {
     }));
   }
 
-  let globalWordCounter = 0;
   const usedSegmentIds = new Set();
 
   return beats.map((beat, bIdx) => {
@@ -171,28 +226,30 @@ export function allocateSpeechToBeats(beats = [], speechTimeline = {}) {
 
     // Direct 1-to-1 index mapping for unused segments — never repeat an already used segment!
     const fallbackSeg = unusedSegments.find((s) => segments.indexOf(s) === bIdx) || null;
-    const activeSeg = matchingSegments[0] || fallbackSeg;
+    const activeSegs = matchingSegments.length > 0 ? matchingSegments : (fallbackSeg ? [fallbackSeg] : []);
 
-    if (activeSeg) {
-      usedSegmentIds.add(activeSeg.segmentId);
-    }
+    activeSegs.forEach((s) => usedSegmentIds.add(s.segmentId));
 
-    const wordsInSeg = activeSeg ? activeSeg.words.map((w) => w.word) : [];
-    const startIndex = globalWordCounter;
-    globalWordCounter += wordsInSeg.length;
-    const endIndex = globalWordCounter;
+    const combinedWords = activeSegs.flatMap((s) => s.words.map((w) => w.word));
+    const combinedText = activeSegs.map((s) => s.text).join(" ");
+
+    const minStartIdx = activeSegs.length > 0 ? Math.min(...activeSegs.map((s) => s.wordRange.startIndex)) : 0;
+    const maxEndIdx = activeSegs.length > 0 ? Math.max(...activeSegs.map((s) => s.wordRange.endIndex)) : 0;
+
+    const firstSeg = activeSegs[0];
+    const lastSeg = activeSegs[activeSegs.length - 1];
 
     const speechAlloc = {
-      speaker: activeSeg?.speaker || beat.characterName || "Subject",
-      speakerId: activeSeg?.speakerId || beat.characterId || "char_1",
-      spokenText: activeSeg ? (activeSeg.text || "") : "",
-      expectedWords: wordsInSeg,
-      wordRange: { startIndex, endIndex },
-      speechStartSec: activeSeg?.startSec ?? beatStart,
-      speechEndSec: activeSeg?.endSec ?? beatEnd,
-      expectedDurationSec: activeSeg?.durationSec ?? (beatEnd - beatStart),
-      emotion: activeSeg?.emotion || beat.emotion || "cinematic focus",
-      hasSpeech: Boolean(activeSeg && activeSeg.text && activeSeg.text.trim().length > 0),
+      speaker: firstSeg?.speaker || beat.characterName || "Subject",
+      speakerId: firstSeg?.speakerId || beat.characterId || "char_1",
+      spokenText: combinedText,
+      expectedWords: combinedWords,
+      wordRange: { startIndex: minStartIdx, endIndex: maxEndIdx },
+      speechStartSec: firstSeg?.startSec ?? beatStart,
+      speechEndSec: lastSeg?.endSec ?? beatEnd,
+      expectedDurationSec: lastSeg && firstSeg ? (lastSeg.endSec - firstSeg.startSec) : (beatEnd - beatStart),
+      emotion: firstSeg?.emotion || beat.emotion || "cinematic focus",
+      hasSpeech: Boolean(combinedText && combinedText.trim().length > 0),
     };
 
     return {
@@ -203,6 +260,61 @@ export function allocateSpeechToBeats(beats = [], speechTimeline = {}) {
       speechAllocation: speechAlloc,
     };
   });
+}
+
+/**
+ * Validates global word ledger integrity across the speech timeline.
+ * Ensures NO missing words, NO duplicate word assignments, and NO out-of-order words.
+ *
+ * @param {string} script           - Original script text
+ * @param {object} speechTimeline   - Generated Speech Timeline
+ * @returns {{ valid: boolean, missingWords: Array, duplicateWords: Array, outOfOrderWords: Array }}
+ */
+export function validateWordLedger(script = "", speechTimeline = {}) {
+  const globalLedger = speechTimeline.globalWordLedger || buildGlobalWordLedger(script);
+  const segments = speechTimeline.segments || [];
+
+  const assignedIndices = new Map();
+  const duplicateWords = [];
+  const outOfOrderWords = [];
+
+  let lastIndex = -1;
+
+  segments.forEach((seg) => {
+    (seg.words || []).forEach((w) => {
+      const idx = w.globalIndex;
+      if (idx !== undefined && idx !== null) {
+        if (assignedIndices.has(idx)) {
+          duplicateWords.push({ index: idx, word: w.word, previousSeg: assignedIndices.get(idx) });
+        } else {
+          assignedIndices.set(idx, seg.segmentId);
+        }
+
+        if (idx < lastIndex) {
+          outOfOrderWords.push({ index: idx, word: w.word, lastIndex });
+        }
+        lastIndex = idx;
+      }
+    });
+  });
+
+  const missingWords = [];
+  globalLedger.forEach((item) => {
+    if (!assignedIndices.has(item.index)) {
+      missingWords.push(item);
+    }
+  });
+
+  const valid = missingWords.length === 0 && duplicateWords.length === 0 && outOfOrderWords.length === 0;
+
+  return {
+    valid,
+    missingWords,
+    duplicateWords,
+    outOfOrderWords,
+    totalLedgerWords: globalLedger.length,
+    totalAssignedWords: assignedIndices.size,
+  };
 }
 
 /**
@@ -227,3 +339,4 @@ function resolveSpeakerForText(text = "", characters = [], defaultChar = { name:
 function isDialogueText(text = "") {
   return /["'“]/.test(text) || /^(he|she|they|[a-z]+) (said|asked|shouted|whispered|exclaimed)/i.test(text);
 }
+

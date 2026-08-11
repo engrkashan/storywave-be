@@ -1245,7 +1245,8 @@ async function _runWorkflow({
           logger.info("Scene Prompts:", scenePrompts);
 
           if (mediaType === "video") {
-            const stopVideoClipsTimer = perf?.start("video", `Generate AI Video Clips (${scenePrompts.length} clips)`);
+            const videoProvider = workflow.inputData?.videoProvider || process.env.VIDEO_PROVIDER || "veo";
+            const stopVideoClipsTimer = perf?.start("video", `Generate AI Video Clips (${scenePrompts.length} clips) [${videoProvider}]`);
             const clips = await generateVideoClips(
               scenePrompts,
               ratioDir,
@@ -1253,6 +1254,7 @@ async function _runWorkflow({
               characterReferences,
               commonPrompt,
               () => checkCancelled(workflow.id),
+              videoProvider
             );
             stopVideoClipsTimer?.();
             mediaItems = clips.filter((c) => c.filePath).map((c) => c.filePath);

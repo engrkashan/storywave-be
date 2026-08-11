@@ -83,13 +83,15 @@ export function processSinglePromptPqa(beatNumber, initialPromptObj, historyCont
     // so the first check uses real audit data instead of a pre-audit structural guess.
     validationResult = validatePromptStructure(currentPromptObj);
 
-    if (finalReport.score >= PASSING_SCORE_THRESHOLD && validationResult.valid) {
+    const hasNoHardFailures = (finalReport.hardFailures || []).length === 0;
+
+    if (finalReport.score >= PASSING_SCORE_THRESHOLD && validationResult.valid && hasNoHardFailures) {
       approved = true;
       break;
     }
 
     // 3. Prompt Optimizer (Phase 2 + Phase 6 Diff)
-    logger.info(`🔧 [PQA Pipeline] Beat ${beatNumber}: Iteration ${iteration} optimization (Score: ${finalReport.score}, Issues: ${finalReport.issues.length})...`);
+    logger.info(`🔧 [PQA Pipeline] Beat ${beatNumber}: Iteration ${iteration} optimization (Score: ${finalReport.score}, Issues: ${finalReport.issues.length}, Hard Failures: ${finalReport.hardFailures?.length || 0})...`);
     currentPromptObj = optimizePrompt(currentPromptObj, finalReport, historyContext);
 
     // 4. Prompt Validator (Phase 3)
@@ -97,7 +99,8 @@ export function processSinglePromptPqa(beatNumber, initialPromptObj, historyCont
 
     // Re-audit optimized prompt for updated score
     finalReport = auditPrompt(currentPromptObj, historyContext);
-    if (finalReport.score >= PASSING_SCORE_THRESHOLD && validationResult.valid) {
+    const hasNoHardFailuresReaudit = (finalReport.hardFailures || []).length === 0;
+    if (finalReport.score >= PASSING_SCORE_THRESHOLD && validationResult.valid && hasNoHardFailuresReaudit) {
       approved = true;
     }
   }

@@ -468,7 +468,12 @@ export async function extractAudioFromClip(clipPath, outputPath) {
   });
 }
 
-export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = [], commonPrompt = null, onCheckCancelled = null) {
+
+
+/**
+ * Generate video clips using Gemini Veo 3.1
+ */
+export async function generateVeoVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = [], commonPrompt = null, onCheckCancelled = null) {
   const results = [];
   let previousClipLastFrame = null;
 
@@ -646,6 +651,22 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
     }
   }
   return results;
+}
+
+/**
+ * Main video clip generation entry point (Google Veo 3.1 / gemini-omni-flash-preview)
+ */
+export async function generateVideoClips(
+  prompts,
+  tempDir,
+  aspectRatio = "16:9",
+  characterAssets = [],
+  commonPrompt = null,
+  onCheckCancelled = null,
+  videoProvider = null
+) {
+  logger.info("🎬 [Video Engine] Selected Provider: Google Veo 3.1 (gemini-omni-flash-preview)");
+  return await generateVeoVideoClips(prompts, tempDir, aspectRatio, characterAssets, commonPrompt, onCheckCancelled);
 }
 
 /**

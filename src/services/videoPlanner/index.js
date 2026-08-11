@@ -9,9 +9,9 @@ import { generateNarrativeTimeline } from "./narrativeTimelineService.js";
 import { planAtomicBeats } from "./atomicBeatPlanner.js";
 import { planBeatDurations } from "./durationPlanner.js";
 import { initializeSceneState, updateSceneState } from "./sceneStateEngine.js";
-import { validateBeatContinuity } from "./promptValidator.js";
+import { validateBeatContinuity, validateTimelineContinuity, validateSceneTiming, validateSpeechNarrativeAlignment } from "./promptValidator.js";
 import { buildStateBasedPrompt } from "./promptBuilder.js";
-import { buildUnifiedSpeechTimeline, allocateSpeechToBeats } from "./speechTimelineService.js";
+import { buildUnifiedSpeechTimeline, allocateSpeechToBeats, validateWordLedger } from "./speechTimelineService.js";
 import { runPromptQualityPipeline } from "./pqa/promptQualityPipeline.js";
 import { createLogger } from "../../utils/logger.js";
 
@@ -26,13 +26,16 @@ const logger = createLogger("VideoPlannerOrchestrator");
  * @returns {Promise<{ scenePrompts: Array<object>, videoTimeline: object, speechTimeline: object }>} Planned scene prompts and timeline metadata
  */
 export async function planDedicatedVideoPipeline(script, storyBible = {}, options = {}) {
-  // 1. Unified Speech Timeline Generator (Phase 1)
+  // 1. Unified Speech Timeline Generator & Global Word Ledger (Phase 1)
   const speechTimeline = buildUnifiedSpeechTimeline(script, options.whisperWords || null, storyBible, options);
 
-  const effectiveTargetCount = options.targetSceneCount || (speechTimeline.segments.length > 0 ? speechTimeline.segments.length : Math.max(1, Math.ceil((options.narrationDuration || 15) / 5)));
-  const narrationDuration = options.narrationDuration || (effectiveTargetCount * 5.0);
+  const wordLedgerVal = validateWordLedger(script, speechTimeline);
+  logger.info(`📖 [Word Ledger Audit] Total Script Words: ${wordLedgerVal.totalLedgerWords}, Assigned: ${wordLedgerVal.totalAssignedWords}, Missing: ${wordLedgerVal.missingWords.length}, Duplicates: ${wordLedgerVal.duplicateWords.length}`);
 
-  logger.info(`🚀 [Video Planner] Starting dedicated state-based video planning pipeline (Target Scene Count: ${effectiveTargetCount}, Narration Duration: ${narrationDuration.toFixed(1)}s)...`);
+  const effectiveTargetCount = options.targetSceneCount || (speechTimeline.segments.length > 0 ? speechTimeline.segments.length : Math.max(1, Math.ceil((options.narrationDuration || 15) / 5)));
+  const narrationDuration = speechTimeline.totalDuration > 0 ? speechTimeline.totalDuration : (options.narrationDuration || (effectiveTargetCount * 5.0));
+
+  logger.info(`🚀 [Video Planner] Starting dedicated state-based video planning pipeline (Target Scene Count: ${effectiveTargetCount}, Authoritative Speech Duration: ${narrationDuration.toFixed(1)}s)...`);
 
   // 2. Narrative Timeline Generator: Analyze entire script into chronological beats constrained by effectiveTargetCount
   const rawNarrativeBeats = await generateNarrativeTimeline(script, storyBible, effectiveTargetCount);
@@ -40,19 +43,25 @@ export async function planDedicatedVideoPipeline(script, storyBible = {}, option
   // 3. Atomic Beat Planner: Atomize compound beats only if below effectiveTargetCount
   const atomicBeats = planAtomicBeats(rawNarrativeBeats, effectiveTargetCount);
 
-  // 4. Dynamic Duration Planner: Estimate durations & split overlong beats naturally
-  const durationPlannedBeats = planBeatDurations(atomicBeats, effectiveTargetCount, narrationDuration);
+  // 4. Speech Allocation Engine: Allocate speech segments to beats strictly preserving sentence ownership
+  const speechAllocatedBeats = allocateSpeechToBeats(atomicBeats, speechTimeline);
 
-  // 5. Speech Allocation Engine: Allocate speech segments to beats strictly (Phase 2)
-  const speechAllocatedBeats = allocateSpeechToBeats(durationPlannedBeats, speechTimeline);
+  // 5. Dynamic Duration Planner: Derive timing mathematically from speech bounds
+  const durationPlannedBeats = planBeatDurations(speechAllocatedBeats, effectiveTargetCount, narrationDuration);
 
-  // 6. Prompt Validator: Auto-detect missing transitions and insert bridge beats only if below effectiveTargetCount
-  let validatedBeats = validateBeatContinuity(speechAllocatedBeats, effectiveTargetCount);
+  // 6. Prompt Validator: Auto-detect missing transitions and validate continuity & timing
+  let validatedBeats = validateBeatContinuity(durationPlannedBeats, effectiveTargetCount);
 
   // Hard Cap Safety: Ensure validatedBeats does not exceed effectiveTargetCount
   if (effectiveTargetCount && effectiveTargetCount > 0 && validatedBeats.length > effectiveTargetCount) {
     logger.info(`✂️ Hard capping final beats from ${validatedBeats.length} to target scene count (${effectiveTargetCount})...`);
     validatedBeats = validatedBeats.slice(0, effectiveTargetCount);
+  }
+
+  // Run Hard Timeline Validation
+  const contVal = validateTimelineContinuity(validatedBeats);
+  if (!contVal.valid) {
+    logger.warn(`⚠️ [Timeline Continuity Warning]: ${contVal.errors.join(" | ")}`);
   }
 
   // 7. Scene State Engine + State-Based Prompt Builder
@@ -64,31 +73,44 @@ export async function planDedicatedVideoPipeline(script, storyBible = {}, option
     const currentBeat = validatedBeats[i];
     const nextBeat = validatedBeats[i + 1] || null;
 
-    const promptObj = buildStateBasedPrompt(currentBeat, currentState, nextBeat, storyBible, options);
+    // Validate beat timing mathematically
+    const timingVal = validateSceneTiming(currentBeat);
+    if (!timingVal.valid) {
+      logger.warn(`⚠️ Beat ${i + 1} timing validation error: ${timingVal.errors.join(" | ")}`);
+    }
+
+    const alignmentVal = validateSpeechNarrativeAlignment(currentBeat);
+    if (!alignmentVal.valid) {
+      logger.warn(`⚠️ Beat ${i + 1} speech-narrative alignment error: ${alignmentVal.errors.join(" | ")}`);
+    }
+
+    const promptObj = buildStateBasedPrompt(currentBeat, currentState, nextBeat, storyBible, { ...options, totalBeatsCount });
     stateBasedPrompts.push(promptObj);
 
-    // Advance SceneState & ConversationState for the next beat (Phase 3)
+    // Advance SceneState & ConversationState for the next beat
     currentState = updateSceneState(currentState, currentBeat, nextBeat, i, totalBeatsCount);
   }
 
-  // 7.5 Dedicated Prompt Quality Assurance (PQA) Pipeline (Video Only)
+  // 7.5 Dedicated Prompt Quality Assurance (PQA) Pipeline with Hard Failure Gate
   const auditedAndOptimizedPrompts = runPromptQualityPipeline(stateBasedPrompts, validatedBeats, storyBible, options);
 
   // 8. Build Master Timeline format compatible with videoService concat & timeline structures
   let totalDuration = 0;
   const scenes = validatedBeats.map((b, idx) => {
-    const startSec = totalDuration;
+    const startSec = b.timing?.startSec !== undefined ? b.timing.startSec : totalDuration;
     const durationSec = b.timing?.durationSec || 5.0;
-    totalDuration += durationSec;
+    const endSec = b.timing?.endSec !== undefined ? b.timing.endSec : startSec + durationSec;
+    totalDuration = Math.max(totalDuration, endSec);
+
     return {
       index: idx,
       startSec,
-      endSec: totalDuration,
+      endSec,
       durationSec,
     };
   });
 
-  logger.info(`✅ [Video Planner] Pipeline complete: ${auditedAndOptimizedPrompts.length} audited & action-continuous video prompts generated (Total Video Duration: ${totalDuration.toFixed(1)}s).`);
+  logger.info(`✅ [Video Planner] Pipeline complete: ${auditedAndOptimizedPrompts.length} audited & continuous video prompts generated (Total Master Video Duration: ${totalDuration.toFixed(1)}s vs Speech Duration: ${narrationDuration.toFixed(1)}s).`);
 
   return {
     scenePrompts: auditedAndOptimizedPrompts,

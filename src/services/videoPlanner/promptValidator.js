@@ -112,3 +112,110 @@ function detectMissingTransition(currentBeat, nextBeat) {
 
   return null;
 }
+
+/**
+ * Validates scene timing mathematically.
+ *
+ * @param {object} scene - Scene or beat object
+ * @returns {{ valid: boolean, errors: Array<string> }}
+ */
+export function validateSceneTiming(scene = {}) {
+  const errors = [];
+  const timing = scene.timing || {};
+  const startSec = timing.startSec ?? scene.startSec;
+  const endSec = timing.endSec ?? scene.endSec;
+  const durationSec = timing.durationSec ?? scene.durationSec;
+
+  if (startSec === undefined || endSec === undefined || durationSec === undefined) {
+    errors.push("Scene timing metadata missing startSec, endSec, or durationSec.");
+    return { valid: false, errors };
+  }
+
+  if (startSec < 0) {
+    errors.push(`Scene startSec (${startSec}) cannot be negative.`);
+  }
+
+  if (endSec <= startSec) {
+    errors.push(`Scene endSec (${endSec}) must be strictly greater than startSec (${startSec}).`);
+  }
+
+  const calculatedDuration = Number((endSec - startSec).toFixed(3));
+  if (Math.abs(calculatedDuration - durationSec) > 0.05) {
+    errors.push(`Scene durationSec (${durationSec}s) does not match endSec - startSec (${calculatedDuration}s).`);
+  }
+
+  // Validate speech allocation fit inside scene window
+  const speechAlloc = scene.speechAllocation || {};
+  if (speechAlloc.hasSpeech) {
+    const speechStart = speechAlloc.speechStartSec ?? startSec;
+    const speechEnd = speechAlloc.speechEndSec ?? endSec;
+
+    if (speechStart < startSec - 0.1 || speechEnd > endSec + 0.1) {
+      errors.push(`Speech window [${speechStart}s - ${speechEnd}s] exceeds scene window [${startSec}s - ${endSec}s].`);
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+/**
+ * Validates contiguity across an ordered list of scenes.
+ *
+ * @param {Array<object>} scenes - List of scenes or beats
+ * @returns {{ valid: boolean, errors: Array<string>, gaps: Array<object> }}
+ */
+export function validateTimelineContinuity(scenes = []) {
+  const errors = [];
+  const gaps = [];
+
+  for (let i = 0; i < scenes.length - 1; i++) {
+    const current = scenes[i];
+    const next = scenes[i + 1];
+
+    const currentEnd = current.timing?.endSec ?? current.endSec ?? 0;
+    const nextStart = next.timing?.startSec ?? next.startSec ?? 0;
+
+    const diff = Math.abs(nextStart - currentEnd);
+    if (diff > 0.1) {
+      const isGap = nextStart > currentEnd;
+      const msg = isGap
+        ? `Timeline gap of ${(nextStart - currentEnd).toFixed(2)}s detected between Scene ${i + 1} (${currentEnd}s) and Scene ${i + 2} (${nextStart}s).`
+        : `Timeline overlap of ${(currentEnd - nextStart).toFixed(2)}s detected between Scene ${i + 1} (${currentEnd}s) and Scene ${i + 2} (${nextStart}s).`;
+
+      errors.push(msg);
+      gaps.push({ sceneIndex: i, currentEnd, nextStart, diff: nextStart - currentEnd });
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    gaps,
+  };
+}
+
+/**
+ * Validates alignment between speech allocation and narrative beat.
+ *
+ * @param {object} beat - Beat object with speechAllocation
+ * @returns {{ valid: boolean, errors: Array<string> }}
+ */
+export function validateSpeechNarrativeAlignment(beat = {}) {
+  const errors = [];
+  const spokenText = beat.spokenText || beat.speechAllocation?.spokenText || "";
+  const physicalAction = beat.physicalAction || beat.action || "";
+
+  // Check if raw dialogue sentence fragment is incorrectly used as physical visual action
+  if (physicalAction && (physicalAction.startsWith('"') || (spokenText && physicalAction.toLowerCase().includes(spokenText.toLowerCase()) && spokenText.split(" ").length > 3))) {
+    errors.push(`Physical visual action ("${physicalAction.slice(0, 40)}...") is raw dialogue text instead of a physical movement.`);
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
