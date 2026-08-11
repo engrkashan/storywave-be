@@ -19,35 +19,39 @@ export async function generateBackgroundMusic({
   };
 
   let musicStyle = customMusicStyle?.trim();
+  let genreKey = "bg_general.mp3";
+
+  if (storyType?.toLowerCase().includes("true_crime")) {
+    genreKey = "bg_true_crime.mp3";
+    if (!musicStyle) musicStyle = "slow dark ambient, suspenseful, minimalistic, cinematic tension";
+  } else if (storyType?.toLowerCase().includes("storytelling") || storyType?.toLowerCase().includes("cinematic")) {
+    genreKey = "bg_cinematic.mp3";
+    if (!musicStyle) musicStyle = "slow cinematic ambient, emotional strings, soft piano, atmospheric";
+  } else if (storyType?.toLowerCase().includes("documentary") || storyType?.toLowerCase().includes("history")) {
+    genreKey = "bg_documentary.mp3";
+    if (!musicStyle) musicStyle = "slow documentary ambient, thoughtful, gentle piano and pads";
+  } else if (storyType?.toLowerCase().includes("howto") || storyType?.toLowerCase().includes("education")) {
+    genreKey = "bg_howto.mp3";
+    if (!musicStyle) musicStyle = "slow calm lo-fi, gentle background, motivational yet relaxed";
+  } else if (storyType?.toLowerCase().includes("advertisement") || storyType?.toLowerCase().includes("ad")) {
+    genreKey = "bg_ad.mp3";
+    if (!musicStyle) musicStyle = "upbeat corporate commercial background music, energetic, modern, high production value";
+  }
 
   if (!musicStyle) {
     musicStyle = "slow ambient background music, calm, emotional, cinematic";
+  }
 
-    if (storyType?.toLowerCase().includes("true_crime")) {
-      musicStyle =
-        "slow dark ambient, suspenseful, minimalistic, cinematic tension";
-    } else if (
-      storyType?.toLowerCase().includes("storytelling") ||
-      storyType?.toLowerCase().includes("cinematic")
-    ) {
-      musicStyle =
-        "slow cinematic ambient, emotional strings, soft piano, atmospheric";
-    } else if (
-      storyType?.toLowerCase().includes("documentary") ||
-      storyType?.toLowerCase().includes("history")
-    ) {
-      musicStyle = "slow documentary ambient, thoughtful, gentle piano and pads";
-    } else if (
-      storyType?.toLowerCase().includes("howto") ||
-      storyType?.toLowerCase().includes("education")
-    ) {
-      musicStyle = "slow calm lo-fi, gentle background, motivational yet relaxed";
-    } else if (
-      storyType?.toLowerCase().includes("advertisement") ||
-      storyType?.toLowerCase().includes("ad")
-    ) {
-      musicStyle = "upbeat corporate commercial background music, energetic, modern, high production value";
-    }
+  // ⚡ Strategy 4: Check local BGM cache before calling Suno API
+  const bgCacheDir = path.join(process.cwd(), "public", "bg_music_cache");
+  fs.mkdirSync(bgCacheDir, { recursive: true });
+  const bgCachePath = path.join(bgCacheDir, genreKey);
+
+  if (fs.existsSync(bgCachePath)) {
+    const cachedDest = path.join(tempDir, `bg-music-${Date.now()}.mp3`);
+    fs.copyFileSync(bgCachePath, cachedDest);
+    logger.info(`🎵 [Background Music Strategy 4 Hit] Using cached BGM track for genre "${storyType || "general"}" -> ${cachedDest}`);
+    return cachedDest;
   }
 
   const body = {
@@ -124,6 +128,12 @@ export async function generateBackgroundMusic({
       responseType: "arraybuffer",
     });
     fs.writeFileSync(musicPath, Buffer.from(downloadRes.data));
+    try {
+      fs.copyFileSync(musicPath, bgCachePath);
+      logger.info(`[Background Music] Cached for future Strategy 4 reuse: ${bgCachePath}`);
+    } catch (e) {
+      logger.warn(`Failed to copy to BGM cache: ${e.message}`);
+    }
 
     logger.info(`[Background Music] Saved: ${musicPath}`);
     return musicPath;
