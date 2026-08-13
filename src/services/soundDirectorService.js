@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import { createLogger } from "../utils/logger.js";
+import { config } from "../config/workflow.config.js";
 import { getAudioDuration } from "./audioService.js";
 import { sfxElevenLabs } from "./generateVoiceoverService.js";
 
@@ -150,7 +151,7 @@ Return STRICT VALID JSON in this format:
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-5.6",
+      model: config.ai.openai.complexAnalysisModel,
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
     });

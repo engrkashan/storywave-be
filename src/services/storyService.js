@@ -2,6 +2,7 @@ import { extractFromUrl, transcribeVideo } from "./inputService.js";
 import { createLogger } from "../utils/logger.js";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
+import { config } from "../config/workflow.config.js";
 import { SCENE_PROMPT_VERSION_ONE, SCENE_PROMPT_VERSION_TWO } from "./promptService.js";
 
 
@@ -130,8 +131,16 @@ Style Mode: HOWTO_FIELD_MANUAL
 Chapter Template:
 Hook (one-line job + win) → Scope → Safety → Tools/Materials → Setup → Steps (4–8) → Verify → Common fails + fixes → Document → Recap (three bullets).
 Sentence Patterns for Audio:
-“You’ll need… Then… Finally…”
-“Set the meter to volts A C. Confirm zero at the panel.”
+“You’ll need… Then… Finally…`,
+  advertisement: `
+Style Mode: High_Impact_Commercial_Advertisement (persuasive, punchy, high-energy).
+* Voice: compelling, benefit-focused, dynamic. Short, high-retention hook in first 3 seconds.
+* Pacing: fast-paced, high visual impact, clear value proposition and call to action (CTA).
+* Structure:
+    * Beat 1 – The Hook: Grab attention with a relatable problem or bold visual statement.
+    * Beat 2 – The Solution & Key Features: Showcase the product/service benefits dynamically.
+    * Beat 3 – Social Proof & Value: Build trust with transformation or strong results.
+    * Beat 4 – Call to Action (CTA): Clear, urgent next step (visit site, buy now, try today).
   `,
   // Default fallback if storyType not matched
   default: `
@@ -181,7 +190,7 @@ Extract the following in STRICT JSON format:
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-5.6",
+      model: config.ai.openai.complexAnalysisModel,
       messages: [{ role: "user", content: prompt }],
 
       response_format: { type: "json_object" },
@@ -251,7 +260,7 @@ async function generateIntro({
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await openai.chat.completions.create({
-        model: "gpt-5.6",
+        model: config.ai.openai.complexAnalysisModel,
         messages: [{ role: "user", content: prompt }],
 
       });
@@ -326,7 +335,7 @@ async function generateBodyPart({
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await openai.chat.completions.create({
-        model: "gpt-5.6",
+        model: config.ai.openai.complexAnalysisModel,
         messages: [{ role: "user", content: prompt }],
 
       });
@@ -401,7 +410,7 @@ async function generateClosing({
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await openai.chat.completions.create({
-        model: "gpt-5.6",
+        model: config.ai.openai.complexAnalysisModel,
         messages: [{ role: "user", content: prompt }],
 
       });
@@ -609,7 +618,7 @@ Return STRICT valid JSON:
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-5.6", // Upgraded to gpt-5.6 as requested for advanced contextual understanding
+      model: config.ai.openai.promptCreationModel,
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
     });
@@ -627,6 +636,82 @@ Return STRICT valid JSON:
       charactersInScene: [],
       visualContext: ""
     };
+  }
+}
+
+/**
+ * Strategy 2 — Batched Scene Prompt Generation
+ * Generates all standalone image prompts in 1 single API call for maximum speed and token efficiency.
+ */
+async function generateBatchScenePrompts({
+  segments,
+  storyBible,
+  visualSuggestions,
+  characterReferences,
+}) {
+  logger.info(`⚡ [Strategy 2 Batched Engine] Generating ${segments.length} scene prompts in 1 batched API call...`);
+
+  const artStyle = storyBible?.artStyle || "Cinematic Film Still";
+  const castGuide = storyBible?.characters
+    ? JSON.stringify(storyBible.characters, null, 2)
+    : "No cast guide provided.";
+
+  const segmentsFormatted = segments
+    .map((seg, idx) => `BEAT ${idx + 1} (Start: ${seg.startSec}s, End: ${seg.endSec}s):\n"${seg.text}"`)
+    .join("\n\n");
+
+  const prompt = `You are a Hollywood Visual Director, Master Cinematographer, and Character Continuity Lead.
+Generate standalone cinematic keyframe image prompts for ALL ${segments.length} narration beats listed below in a single unified sequence.
+
+ART STYLE / VISUAL THEME: ${artStyle}
+VISUAL SUGGESTIONS: ${visualSuggestions || "None"}
+
+MATERIALIZED CAST GUIDE (CHARACTER IDENTITY & WARDROBE LOCK):
+${castGuide}
+
+NARRATION BEATS TO PROCESS:
+${segmentsFormatted}
+
+CRITICAL DIRECTORIAL RULES:
+1. STEP-BY-STEP CINEMATIC STORYTELLING: Treat each beat as a keyframe beat in a realistic movie sequence.
+2. CHARACTER IDENTITY & WARDROBE LOCK: For every character present, specify locked facial features and story-derived wardrobe. Maintain strict continuity across beats.
+3. NO TEXT IN IMAGES: Ensure no text, labels, or captions appear in the visual prompt.
+
+Return STRICT valid JSON in this exact structure:
+{
+  "scenes": [
+    {
+      "beatIndex": 0,
+      "characters_present": ["ID of characters present"],
+      "visual_prompt": "Cinematic visual prompt specifying character appearance, wardrobe, location, lighting, camera framing, action..."
+    }
+  ]
+}`;
+
+  try {
+    const res = await openai.chat.completions.create({
+      model: config.ai.openai.promptCreationModel,
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+    });
+
+    const parsed = JSON.parse(res.choices[0].message.content.trim());
+    if (parsed.scenes && Array.isArray(parsed.scenes) && parsed.scenes.length === segments.length) {
+      logger.info(`✅ [Strategy 2 Batched Engine] Successfully generated all ${segments.length} scene prompts in 1 API call!`);
+      return parsed.scenes.map((s, i) => ({
+        prompt: s.visual_prompt,
+        charactersInScene: s.characters_present || [],
+        narration: segments[i].text,
+        _startSec: segments[i].startSec,
+        _endSec: segments[i].endSec,
+        _negativePrompt: "",
+        _globalNegativePrompt: storyBible?.globalNegativePrompt || ""
+      }));
+    }
+    throw new Error("Batched response did not contain expected number of scenes");
+  } catch (err) {
+    logger.warn(`⚠️ [Strategy 2 Batched Engine] Batched call failed (${err.message}). Falling back to sequential chunk generation...`);
+    return null;
   }
 }
 
@@ -651,6 +736,19 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
     }));
   }
 
+  // ⚡ Strategy 2: Attempt batched prompt generation first (1 API call instead of N)
+  const batchedPrompts = await generateBatchScenePrompts({
+    segments,
+    storyBible,
+    visualSuggestions,
+    characterReferences,
+  });
+
+  if (batchedPrompts && batchedPrompts.length === segments.length) {
+    return { scenePrompts: batchedPrompts, castBible: storyBible?._preGeneratedBibles?.MATERIALIZED_CAST_BIBLE || null };
+  }
+
+  // Fallback to sequential chunk generation if batch call returns null
   const scenePrompts = [];
   let prevVisualContext = null;
   let prevChunkText = null;
@@ -695,7 +793,7 @@ async function summarizeText(text) {
     15000
   )}`;
   const result = await openai.chat.completions.create({
-    model: "gpt-5.6",
+    model: config.ai.openai.simpleTaskModel,
     messages: [{ role: "user", content: summaryPrompt }],
 
   });
@@ -725,7 +823,7 @@ ${script}
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-5.6",
+      model: config.ai.openai.simpleTaskModel,
       messages: [{ role: "user", content: prompt }],
     });
     return res.choices[0].message.content.trim() || script;
@@ -757,7 +855,7 @@ ${narrationChunk}
 
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-5.6",
+      model: config.ai.openai.simpleTaskModel,
       messages: [{ role: "user", content: prompt }],
     });
     return res.choices[0].message.content.trim() || narrationChunk;

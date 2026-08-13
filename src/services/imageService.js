@@ -467,6 +467,9 @@ async function generateWithGemini({
   onCheckCancelled = null,
   stickyTierRef = null,           // B5: optional { tier: "PRO"|"FLASH" } shared across a batch
 }) {
+  const isVerticalRatio = aspectRatio === "9:16" || aspectRatio === "9/16" || aspectRatio === "vertical";
+  const normalizedAspectRatio = isVerticalRatio ? "9:16" : (aspectRatio === "1:1" ? "1:1" : "16:9");
+
   await ensureDir(tempDir);
 
   const sceneId = `scene_${String(index).padStart(3, "0")}`;

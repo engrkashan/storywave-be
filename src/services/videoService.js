@@ -8,6 +8,7 @@ import { config } from "../config/workflow.config.js";
 import { enqueueRender, enqueueSegmentRender } from "../utils/renderQueue.js";
 import { getPerfSession } from "../utils/perfLogger.js";
 import { buildSubtitleGroups } from "./timelineService.js";
+import { validateClipSpeech } from "./videoPlanner/speechValidator.js";
 
 const logger = createLogger("VideoService");
 
@@ -431,7 +432,48 @@ export async function extractLastFrame(videoPath, outputPath) {
   });
 }
 
-export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = [], commonPrompt = null, onCheckCancelled = null) {
+/**
+ * Extracts 16kHz mono WAV audio track from a video clip for Whisper transcription
+ */
+export async function extractAudioFromClip(clipPath, outputPath) {
+  return await enqueueRender(async () => {
+    try {
+      await new Promise((resolve, reject) => {
+        const ff = spawn("ffmpeg", [
+          "-y",
+          "-loglevel", "error",
+          "-i", clipPath,
+          "-vn",
+          "-acodec", "pcm_s16le",
+          "-ar", "16000",
+          "-ac", "1",
+          outputPath
+        ]);
+
+        let errorLog = "";
+        ff.stderr.on("data", (data) => errorLog += data.toString());
+
+        ff.on("close", (code) => {
+          if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100) resolve();
+          else reject(new Error(errorLog || `FFmpeg audio extraction exited with code ${code}`));
+        });
+
+        ff.on("error", (err) => reject(err));
+      });
+      return outputPath;
+    } catch (err) {
+      logger.error(`❌ Failed to extract audio from video clip: ${err.message}`);
+      return null;
+    }
+  });
+}
+
+
+
+/**
+ * Generate video clips using Gemini Veo 3.1
+ */
+export async function generateVeoVideoClips(prompts, tempDir, aspectRatio = "16:9", characterAssets = [], commonPrompt = null, onCheckCancelled = null) {
   const results = [];
   let previousClipLastFrame = null;
 
@@ -464,66 +506,127 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
         const promptObj = prompts[i];
         const uniquePrompt = typeof promptObj === "object" ? promptObj.prompt : promptObj;
         const sceneCharacters = typeof promptObj === "object" ? promptObj.charactersInScene || [] : [];
-        const finalPrompt = commonPrompt ? `${commonPrompt} UNIQUE SCENE DETAIL: ${uniquePrompt}` : uniquePrompt;
 
-        logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}) using Veo 3.1 Fast...`);
+        const isVerticalRatio = aspectRatio === "9:16" || aspectRatio === "9/16" || aspectRatio === "vertical";
+        const formattedRatio = isVerticalRatio ? "9:16" : "16:9";
+        const ratioPromptSuffix = isVerticalRatio
+          ? "\n\nFRAME ASPECT RATIO: Native 9:16 vertical video composition. Frame all main action and characters centered vertically within 9:16 bounds."
+          : "\n\nFRAME ASPECT RATIO: Native 16:9 horizontal widescreen video composition.";
 
-        const videoConfig = {
-          model: "veo-3.1-generate-preview",
-          prompt: finalPrompt,
-          config: {
-            aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9"
-          }
-        };
+        const finalPrompt = (commonPrompt && !uniquePrompt.includes("STYLE & TONAL ENVELOPE"))
+          ? `${uniquePrompt}${ratioPromptSuffix}\n\nSTYLE & ATMOSPHERE: ${commonPrompt}`
+          : `${uniquePrompt}${ratioPromptSuffix}`;
 
-        // Add character references for identity lock based on characters in scene
+        logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}, Aspect Ratio: ${formattedRatio}) using Gemini Omni Flash (gemini-omni-flash-preview)...`);
+
         const activeReferences = [];
         for (const charId of sceneCharacters) {
           if (fetchedReferences[charId]) activeReferences.push(fetchedReferences[charId]);
         }
-        // Fallback for single character mode
         if (activeReferences.length === 0 && characterAssets.length > 0 && fetchedReferences[characterAssets[0].id]) {
           activeReferences.push(fetchedReferences[characterAssets[0].id]);
         }
 
-        if (activeReferences.length > 0) {
-          videoConfig.referenceImages = activeReferences;
+        let previousFrameData = null;
+        if (previousClipLastFrame && fs.existsSync(previousClipLastFrame)) {
+          previousFrameData = fs.readFileSync(previousClipLastFrame).toString("base64");
         }
 
-        // Add bridge logic: use last frame of previous clip as starting point
-        if (previousClipLastFrame) {
-          const lastFrameData = fs.readFileSync(previousClipLastFrame).toString("base64");
-          videoConfig.image = {
-            imageBytes: lastFrameData,
-            mimeType: "image/png"
-          };
-        }
+        let apiInput = finalPrompt;
+        const inputParts = [{ type: "text", text: finalPrompt }];
+        let hasMediaInput = false;
 
-        // 📺 Start the video generation operation
-        let operation = await ai.models.generateVideos(videoConfig);
-
-        // ⏳ Poll the operation status until the video is ready
-        while (!operation.done) {
-          logger.info(`⏳ Clip ${i + 1}: Waiting for video generation...`);
-          await new Promise((resolve) => setTimeout(resolve, 10000));
-          // ✅ Check cancellation on every poll tick (every 10s)
-          if (onCheckCancelled) await onCheckCancelled();
-
-          operation = await ai.operations.getVideosOperation({
-            operation: operation,
+        if (previousFrameData) {
+          inputParts.push({
+            type: "image",
+            data: previousFrameData,
+            mime_type: "image/png",
           });
+          hasMediaInput = true;
+          logger.info(`🌉 [Video Clip ${i + 1}] Attached previous clip's last frame as bridge image for motion continuity.`);
+        }
+
+        for (const ref of activeReferences) {
+          if (ref && ref.imageBytes) {
+            inputParts.push({
+              type: "image",
+              data: ref.imageBytes,
+              mime_type: ref.mimeType || "image/png",
+            });
+            hasMediaInput = true;
+          }
+        }
+        if (activeReferences.length > 0) {
+          logger.info(`👤 [Video Clip ${i + 1}] Attached ${activeReferences.length} character reference image(s) for identity lock.`);
+        }
+
+        if (hasMediaInput) {
+          apiInput = inputParts;
+        }
+
+        let videoBuffer = null;
+        const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+        const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${apiKey}`;
+
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Api-Revision": "2026-05-20",
+          },
+          body: JSON.stringify({
+            model: "gemini-omni-flash-preview",
+            input: apiInput,
+          }),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`Gemini Omni Flash API error (${res.status}): ${errText}`);
+        }
+
+        const json = await res.json();
+        if (json.steps && Array.isArray(json.steps)) {
+          for (const step of json.steps) {
+            if (step.type === "model_output" && Array.isArray(step.content)) {
+              for (const item of step.content) {
+                if (item.type === "video" && item.data) {
+                  videoBuffer = Buffer.from(item.data, "base64");
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        if (!videoBuffer) {
+          throw new Error("No video output received from Gemini Omni Flash model.");
         }
 
         const clipFilename = `clip_${String(i).padStart(3, "0")}.mp4`;
         const filePath = path.join(tempDir, clipFilename);
-
-        // 💾 Download the generated video
-        await ai.files.download({
-          file: operation.response.generatedVideos[0].video,
-          downloadPath: filePath
-        });
+        fs.writeFileSync(filePath, videoBuffer);
 
         logger.info(`✅ Clip ${i + 1} saved to ${filePath}`);
+
+        // Phase 5 & 8: Perform Speech Validation & Detailed Audit Logging
+        if (promptObj && typeof promptObj === "object" && promptObj.speechAllocation) {
+          const valRes = await validateClipSpeech(filePath, promptObj.speechAllocation, {
+            sceneId: promptObj.sceneId || `scene_${String(i + 1).padStart(3, "0")}`,
+            beatIndex: i,
+            durationSec: promptObj.durationSec || 5.0,
+            action: promptObj.prompt?.slice(0, 60) || "Action",
+            conversationState: promptObj.conversationState || {},
+            attempt,
+          });
+
+          if (!valRes.passed && attempt < MAX_RETRIES) {
+            logger.warn(`⚠️ Speech validation failed for clip ${i + 1} (${valRes.accuracyPct}% accuracy). Retrying clip ${i + 1} (Attempt ${attempt + 1}/${MAX_RETRIES})...`);
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            continue; // Selective retry ONLY this failed clip
+          }
+        }
+
         results.push({ filePath, error: null });
 
         // Extract last frame for the next clip's "bridge"
@@ -539,15 +642,31 @@ export async function generateVideoClips(prompts, tempDir, aspectRatio = "16:9",
         const isQuotaError = err.message.toLowerCase().includes("quota") || err.message.includes("429");
         if (isQuotaError || attempt >= MAX_RETRIES) {
           logger.error(`❌ Video generation failed for clip ${i + 1} (Attempt ${attempt}):`, err.message);
-          results.push({ filePath: null, error: err });
+          results.push({ filePath: null, error: err.message });
           break; // Stop retrying
         }
-        logger.warn(`⚠️ Video generation failed for clip ${i + 1} (Attempt ${attempt}). Retrying in 5s...`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        logger.warn(`⚠️ Video clip ${i + 1} attempt ${attempt} failed: ${err.message}. Retrying...`);
+        await new Promise((resolve) => setTimeout(resolve, 3000));
       }
     }
   }
   return results;
+}
+
+/**
+ * Main video clip generation entry point (Google Veo 3.1 / gemini-omni-flash-preview)
+ */
+export async function generateVideoClips(
+  prompts,
+  tempDir,
+  aspectRatio = "16:9",
+  characterAssets = [],
+  commonPrompt = null,
+  onCheckCancelled = null,
+  videoProvider = null
+) {
+  logger.info("🎬 [Video Engine] Selected Provider: Google Veo 3.1 (gemini-omni-flash-preview)");
+  return await generateVeoVideoClips(prompts, tempDir, aspectRatio, characterAssets, commonPrompt, onCheckCancelled);
 }
 
 /**
@@ -580,9 +699,13 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
       "-y", "-loglevel", "error",
       "-threads", String(config.workflow.ffmpegThreads),
       "-i", itemPath,
+      "-map", "0:v",
+      "-map", "0:a?",
       "-vf", `${commonScale},fps=30${trimFilter}${subFilter}`,
+      "-af", "aresample=async=1",
       "-t", String(duration),
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-b:a", "192k",
       outputPath
     ];
   } else {
@@ -644,7 +767,7 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
  * Merges pre-rendered segments into a single video, synchronized with audio.
  * Phase 5 Safe Disk Cleanup is implemented here.
  */
-export async function concatSegments(segmentFiles, audioPath, outputPath, audioDuration, assPathToRemove) {
+export async function concatSegments(segmentFiles, audioPath, outputPath, audioDuration, assPathToRemove, options = {}) {
   const SEGMENT_TEMP_DIR = path.dirname(outputPath);
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -656,25 +779,63 @@ export async function concatSegments(segmentFiles, audioPath, outputPath, audioD
 
   logger.info(`✅ Segments ready. Starting final merge pass (copy-stream)...`);
 
-  // Final merge: concat demuxer + audio mix.
-  // -c:v copy — NO re-encode. Segments already carry burned subtitles.
-  // -c:a aac  — encode the audio track (always a stream transcode needed).
-  const mergeArgs = [
-    "-y",
-    "-loglevel", "error",
-    "-f", "concat",
-    "-safe", "0",
-    "-i", segmentsListPath,
-    "-i", audioPath,
-    "-map", "0:v",
-    "-map", "1:a",
-    "-c:v", "copy",         // ✅ Bitstream copy — no re-encode, instant
-    "-c:a", "aac",
-    "-b:a", "192k",
-    "-t", String(audioDuration),
-    "-threads", String(config.workflow.ffmpegThreads),
-    outputPath
-  ];
+  const hasAudioPath = audioPath && fs.existsSync(audioPath);
+
+  let mergeArgs = [];
+  if (!hasAudioPath || options.useSegmentAudioOnly) {
+    // Character Talk without external TTS: Use the segment native audio tracks
+    mergeArgs = [
+      "-y",
+      "-loglevel", "error",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", segmentsListPath,
+      "-map", "0:v",
+      "-map", "0:a?",
+      "-c:v", "copy",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-threads", String(config.workflow.ffmpegThreads),
+      outputPath
+    ];
+  } else if (options.mixSegmentAudio && hasAudioPath) {
+    // Character Talk WITH external TTS / BGM: Mix segment native audio (0:a) with ducked background music (1:a)
+    mergeArgs = [
+      "-y",
+      "-loglevel", "error",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", segmentsListPath,
+      "-i", audioPath,
+      "-filter_complex", "[1:a]volume=0.15[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+      "-map", "0:v",
+      "-map", "[aout]",
+      "-c:v", "copy",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-t", String(audioDuration),
+      "-threads", String(config.workflow.ffmpegThreads),
+      outputPath
+    ];
+  } else {
+    // Standard mapping: video from segments, audio from external narration track
+    mergeArgs = [
+      "-y",
+      "-loglevel", "error",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", segmentsListPath,
+      "-i", audioPath,
+      "-map", "0:v",
+      "-map", "1:a",
+      "-c:v", "copy",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-t", String(audioDuration),
+      "-threads", String(config.workflow.ffmpegThreads),
+      outputPath
+    ];
+  }
 
   try {
     await enqueueRender(async () => {

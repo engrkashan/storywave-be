@@ -18,10 +18,18 @@ export const config = {
     password: process.env.REDIS_PASSWORD || undefined,
   },
 
-  // ─── AI Image Model Configuration ─────────────────────────────────────────
+  // ─── AI Model Configurations ─────────────────────────────────────────────
   // Store all model IDs here so upgrades are a single-line change.
   // Never scatter model strings throughout the codebase.
   ai: {
+    openai: {
+      // Tier A — Complex Script Analysis & World Building: highest intelligence
+      complexAnalysisModel: process.env.OPENAI_COMPLEX_MODEL || "gpt-5.6-terra",
+      // Tier B — Prompt & Guideline Creation: precise cinematic prompt instruction following
+      promptCreationModel: process.env.OPENAI_PROMPT_MODEL || "gpt-5.6-terra",
+      // Tier C — Simple Rewriting, Formatting, Tagging, & Text Extraction: high speed, cost-optimized
+      simpleTaskModel: process.env.OPENAI_SIMPLE_MODEL || "gpt-5.6-luna",
+    },
     image: {
       // Tier 1 — Primary: best quality, multimodal, supports reference images
       primaryModel: process.env.GEMINI_IMAGE_PRIMARY_MODEL || "gemini-3-pro-image",
@@ -30,7 +38,8 @@ export const config = {
       // Text model used exclusively for intelligent safety prompt repair
       repairModel: process.env.GEMINI_REPAIR_MODEL || "gemini-2.5-flash",
       // OpenAI model used as fallback for prompt repair when Gemini repair model is unavailable
-      openaiRepairModel: process.env.OPENAI_REPAIR_MODEL || "gpt-5.6",
+      openaiRepairModel: process.env.OPENAI_REPAIR_MODEL || "gpt-5.6-luna",
     },
   },
 };
+

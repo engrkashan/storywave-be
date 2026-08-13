@@ -108,34 +108,65 @@ async function ttsElevenLabs(text, voiceId) {
 
 export async function sfxElevenLabs(text) {
   try {
-    const slug = (text || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .substring(0, 50);
+    const rawLower = (text || "").toLowerCase().trim();
+    
+    // Canonical sound key normalization for Strategy 4 local stock bank / caching
+    let canonicalSlug = "sfx";
+    if (rawLower.includes("gunshot") || rawLower.includes("shot") || rawLower.includes("gunfire")) {
+      canonicalSlug = "gunshot";
+    } else if (rawLower.includes("door") || rawLower.includes("creak") || rawLower.includes("slam")) {
+      canonicalSlug = "door_creak";
+    } else if (rawLower.includes("footstep") || rawLower.includes("step") || rawLower.includes("walking")) {
+      canonicalSlug = "footsteps";
+    } else if (rawLower.includes("thunder") || rawLower.includes("lightning") || rawLower.includes("storm")) {
+      canonicalSlug = "thunder";
+    } else if (rawLower.includes("phone") || rawLower.includes("buzz") || rawLower.includes("vibrat")) {
+      canonicalSlug = "phone_vibration";
+    } else if (rawLower.includes("whisper") || rawLower.includes("eerie")) {
+      canonicalSlug = "whisper";
+    } else if (rawLower.includes("glass") || rawLower.includes("shatter") || rawLower.includes("smash")) {
+      canonicalSlug = "glass_shatter";
+    } else if (rawLower.includes("wind") || rawLower.includes("howl") || rawLower.includes("breeze")) {
+      canonicalSlug = "wind_howl";
+    } else if (rawLower.includes("clock") || rawLower.includes("tick") || rawLower.includes("ticking")) {
+      canonicalSlug = "clock_ticking";
+    } else if (rawLower.includes("explosion") || rawLower.includes("boom") || rawLower.includes("blast")) {
+      canonicalSlug = "explosion";
+    } else {
+      canonicalSlug = rawLower
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .substring(0, 40) || "sfx";
+    }
 
     const cacheDir = path.join(process.cwd(), "public", "sfx_cache");
     fs.mkdirSync(cacheDir, { recursive: true });
 
-    const cachePath = path.join(cacheDir, `${slug || "sfx"}.mp3`);
+    const canonicalCachePath = path.join(cacheDir, `${canonicalSlug}.mp3`);
+    const rawSlug = rawLower.replace(/[^a-z0-9]+/g, "_").substring(0, 50);
+    const rawCachePath = path.join(cacheDir, `${rawSlug}.mp3`);
 
-    if (fs.existsSync(cachePath)) {
-      logger.info(`[SFX Cache Hit] Using cached SFX for "${text}" -> ${cachePath}`);
-      return fs.readFileSync(cachePath);
+    // Check canonical cache hit
+    if (fs.existsSync(canonicalCachePath)) {
+      logger.info(`[SFX Strategy 4 Hit] Using cached canonical SFX "${canonicalSlug}" for "${text}" -> ${canonicalCachePath}`);
+      return fs.readFileSync(canonicalCachePath);
+    }
+    if (fs.existsSync(rawCachePath)) {
+      logger.info(`[SFX Cache Hit] Using cached SFX for "${text}" -> ${rawCachePath}`);
+      return fs.readFileSync(rawCachePath);
     }
 
     // Dynamic duration depending on SFX type
     let durationSeconds = 3;
-    const lower = (text || "").toLowerCase();
-    if (lower.includes("gunshot") || lower.includes("shot") || lower.includes("buzz") || lower.includes("click") || lower.includes("beep") || lower.includes("slam")) {
+    if (canonicalSlug === "gunshot" || canonicalSlug === "phone_vibration" || canonicalSlug === "glass_shatter") {
       durationSeconds = 2;
-    } else if (lower.includes("footstep") || lower.includes("steps") || lower.includes("door") || lower.includes("creak") || lower.includes("whisper")) {
+    } else if (canonicalSlug === "footsteps" || canonicalSlug === "door_creak" || canonicalSlug === "whisper" || canonicalSlug === "clock_ticking") {
       durationSeconds = 3.5;
-    } else if (lower.includes("thunder") || lower.includes("explosion") || lower.includes("storm") || lower.includes("wind")) {
+    } else if (canonicalSlug === "thunder" || canonicalSlug === "wind_howl" || canonicalSlug === "explosion") {
       durationSeconds = 4;
     }
 
-    logger.info(`[ElevenLabs SFX] Generating from API: "${text}" (${durationSeconds}s)`);
+    logger.info(`[ElevenLabs SFX] Generating from API: "${text}" [key: ${canonicalSlug}] (${durationSeconds}s)`);
     const audioStream = await elevenlabs.textToSoundEffects.convert({
       text,
       duration_seconds: durationSeconds,
@@ -147,8 +178,11 @@ export async function sfxElevenLabs(text) {
     }
     const buffer = Buffer.concat(chunks);
     if (buffer && buffer.length > 0) {
-      fs.writeFileSync(cachePath, buffer);
-      logger.info(`[SFX Cached] Saved to cache: ${cachePath}`);
+      fs.writeFileSync(canonicalCachePath, buffer);
+      if (canonicalCachePath !== rawCachePath) {
+        fs.writeFileSync(rawCachePath, buffer);
+      }
+      logger.info(`[SFX Cached] Saved to Strategy 4 local cache: ${canonicalCachePath}`);
     }
     return buffer;
   } catch (error) {
