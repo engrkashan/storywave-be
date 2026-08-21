@@ -1,8 +1,9 @@
-// Dotenv is loaded in index.js entry file
 import { Worker } from "bullmq";
 import Redis from "ioredis";
 import { config } from "../config/workflow.config.js";
 import { runWorkflow } from "../services/workflowService.js";
+import { regenerateScene } from "../services/sceneRegenService.js";
+import { runFinalAssembly } from "../services/finalAssemblyService.js";
 import { createLogger } from "../utils/logger.js";
 import { startAdaptiveController, stopAdaptiveController } from "../utils/adaptiveController.js";
 import { segmentSemaphore } from "../utils/renderQueue.js";
@@ -21,19 +22,33 @@ logger.info(`Starting BullMQ Worker with concurrency: ${config.workflow.maxWorke
 const worker = new Worker(
   "workflow-queue",
   async (job) => {
-    logger.info(`🚀 Starting job ${job.id} for workflow: ${job.data.title}`);
+    logger.info(`🚀 Starting job ${job.id} (type: ${job.name})`);
     try {
-      // runWorkflow executes the full pipeline
+      if (job.name === "regenerate-scene") {
+        logger.info(`🎨 Processing scene regeneration for scene ${job.data.sceneId} (workflow: ${job.data.workflowId})`);
+        const result = await regenerateScene(job.data);
+        logger.info(`✅ Scene regen job ${job.id} completed successfully`);
+        return result;
+      }
+
+      if (job.name === "merge-workflow") {
+        logger.info(`🔀 Processing merge & final assembly for workflow: ${job.data.workflowId}`);
+        const result = await runFinalAssembly(job.data.workflowId);
+        logger.info(`✅ Merge job ${job.id} completed successfully`);
+        return result;
+      }
+
+      // Default: "process-workflow" executes the full story generation pipeline
+      logger.info(`🎬 Processing full workflow: "${job.data.title}"`);
       const result = await runWorkflow(job.data);
-      // If the workflow was cancelled, result.cancelled === true — return cleanly (no retry)
       if (result?.cancelled) {
         logger.info(`🚫 Job ${job.id} was cancelled by user — skipping retries`);
         return result;
       }
-      logger.info(`✅ Job ${job.id} completed successfully`);
+      logger.info(`✅ Workflow job ${job.id} completed successfully`);
       return result;
     } catch (err) {
-      logger.error(`❌ Job ${job.id} failed: ${err.message}`);
+      logger.error(`❌ Job ${job.id} (${job.name}) failed: ${err.message}`);
       throw err; // Let BullMQ handle retries/failure state
     }
   },

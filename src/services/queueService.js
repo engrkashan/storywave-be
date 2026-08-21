@@ -22,7 +22,7 @@ export const workflowQueue = new Queue("workflow-queue", {
   connection: redisConnection,
 });
 
-// 3. Helper function to add a job to the queue
+// 3. Helper function to add a workflow job to the queue
 export async function addWorkflowJob(payload) {
   try {
     const job = await workflowQueue.add("process-workflow", payload, {
@@ -70,3 +70,44 @@ export async function cancelWorkflowJob(bullJobId) {
     throw err;
   }
 }
+
+// ─── Storywave Editor: Scene Regeneration Job ─────────────────────────────────
+/**
+ * Dispatch a scene regeneration job.
+ * @param {{ workflowId: string, sceneId: string }} payload
+ */
+export async function addSceneRegenJob(payload) {
+  try {
+    const job = await workflowQueue.add("regenerate-scene", payload, {
+      removeOnComplete: true,
+      removeOnFail: false,
+      attempts: 1,           // No automatic retries — caller retries via UI
+    });
+    logger.info(`✅ Added scene-regen job ${job.id} for scene ${payload.sceneId} (workflow ${payload.workflowId})`);
+    return job;
+  } catch (err) {
+    logger.error(`❌ Failed to add scene-regen job: ${err.message}`);
+    throw err;
+  }
+}
+
+// ─── Storywave Editor: Merge & Continue Job ────────────────────────────────────
+/**
+ * Dispatch a merge-workflow (final assembly) job.
+ * @param {{ workflowId: string }} payload
+ */
+export async function addMergeJob(payload) {
+  try {
+    const job = await workflowQueue.add("merge-workflow", payload, {
+      removeOnComplete: true,
+      removeOnFail: false,
+      attempts: 1,
+    });
+    logger.info(`✅ Added merge-workflow job ${job.id} for workflow ${payload.workflowId}`);
+    return job;
+  } catch (err) {
+    logger.error(`❌ Failed to add merge job: ${err.message}`);
+    throw err;
+  }
+}
+
