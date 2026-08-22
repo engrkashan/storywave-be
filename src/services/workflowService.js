@@ -1521,7 +1521,7 @@ async function _runWorkflow({
       // ── EDITOR: Check how many Scene records were created ─────────────
       // multi_image and video modes (including characterTalk) pause for Editor review.
       // single_image (only 1 scene, no per-scene review needed) completes normally.
-      const sceneCount = await prisma.scene.count({ where: { workflowId: workflow.id } });
+      const sceneCount = (await prisma.scene?.count({ where: { workflowId: workflow.id } })) || 0;
       const isEditorEligible = (mediaType === "multi_image" || mediaType === "video")
         && sceneCount > 0 && shouldGenerateImage;
 
@@ -1603,7 +1603,7 @@ async function _runWorkflow({
     // Editor-eligible workflows (multi_image or video modes) pause
     // at USER_CONFIRMATION_REQUIRED. All other modes (single_image, podcast)
     // complete immediately.
-    const sceneCountFinal = await prisma.scene.count({ where: { workflowId: workflow.id } });
+    const sceneCountFinal = (await prisma.scene?.count({ where: { workflowId: workflow.id } })) || 0;
     const pauseForEditor = (mediaType === "multi_image" || mediaType === "video")
       && sceneCountFinal > 0 && shouldGenerateImage;
 
