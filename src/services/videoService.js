@@ -480,19 +480,26 @@ export async function generateVeoVideoClips(prompts, tempDir, aspectRatio = "16:
   // Pre-fetch all available character references
   const fetchedReferences = {};
   for (const asset of characterAssets) {
+    if (!asset) continue;
+    let dataObj = null;
     if (asset?.url) {
       try {
         const res = await fetch(asset.url);
         const buffer = Buffer.from(await res.arrayBuffer());
         const mimeType = res.headers.get("content-type") || "image/png";
-        const refKey = asset.id || asset.name || asset.url;
-        fetchedReferences[refKey] = { imageBytes: buffer.toString("base64"), mimeType };
+        dataObj = { imageBytes: buffer.toString("base64"), mimeType, isCustomOverride: Boolean(asset.isCustomOverride) };
       } catch (err) {
         logger.warn(`Could not fetch video character reference: ${err.message}`);
       }
     } else if (asset?.base64) {
-      const refKey = asset.id || asset.name || `ref_${Date.now()}`;
-      fetchedReferences[refKey] = { imageBytes: asset.base64, mimeType: asset.mimeType || "image/png" };
+      dataObj = { imageBytes: asset.base64, mimeType: asset.mimeType || "image/png", isCustomOverride: Boolean(asset.isCustomOverride) };
+    }
+
+    if (dataObj) {
+      if (asset.id) fetchedReferences[asset.id] = dataObj;
+      if (asset.name) fetchedReferences[asset.name] = dataObj;
+      if (asset.url) fetchedReferences[asset.url] = dataObj;
+      fetchedReferences[`idx_${Object.keys(fetchedReferences).length}`] = dataObj;
     }
   }
 
@@ -524,8 +531,17 @@ export async function generateVeoVideoClips(prompts, tempDir, aspectRatio = "16:
         logger.info(`🎬 Generating video clip ${i + 1}/${prompts.length} (Attempt ${attempt}, Aspect Ratio: ${formattedRatio}) using Gemini Omni Flash (gemini-omni-flash-preview)...`);
 
         const activeReferences = [];
-        for (const charId of sceneCharacters) {
-          if (fetchedReferences[charId]) activeReferences.push(fetchedReferences[charId]);
+        const customAssets = (characterAssets || []).filter(a => a && (a.isCustomOverride || a.id?.startsWith?.("custom_ref_") || a.id?.startsWith?.("char_ref_")));
+        if (customAssets.length > 0) {
+          for (const ca of customAssets) {
+            const key = ca.id || ca.name || ca.url;
+            if (fetchedReferences[key]) activeReferences.push(fetchedReferences[key]);
+          }
+        }
+        if (activeReferences.length === 0) {
+          for (const charId of sceneCharacters) {
+            if (fetchedReferences[charId]) activeReferences.push(fetchedReferences[charId]);
+          }
         }
         if (activeReferences.length === 0 && characterAssets.length > 0) {
           for (const key of Object.keys(fetchedReferences)) {

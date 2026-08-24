@@ -120,20 +120,23 @@ export async function regenerateScene({ workflowId, sceneId, prompt, characterRe
     let characterReferences = meta.characterReferences || meta.uploadedCharacterReferences || meta._characterReferences || [];
     
     // If a custom character reference is attached to this request, merge it into references
+    let customRef = null;
     if (characterReference) {
-      const customRef = typeof characterReference === "string"
-        ? { id: `custom_ref_${Date.now()}`, name: "Character Ref", url: characterReference }
+      customRef = typeof characterReference === "string"
+        ? { id: `custom_ref_${Date.now()}`, name: "Character Ref", url: characterReference, isCustomOverride: true, isExplicit: true }
         : {
             id: characterReference.id || `custom_ref_${Date.now()}`,
             name: characterReference.name || "Character Ref",
             url: characterReference.url || characterReference.secureUrl || characterReference.imageUrl,
             base64: characterReference.base64,
             mimeType: characterReference.mimeType,
+            isCustomOverride: true,
+            isExplicit: true,
           };
 
       if (customRef.url || customRef.base64) {
         // Prepend custom ref so it has highest priority
-        characterReferences = [customRef, ...characterReferences.filter(r => r.id !== customRef.id)];
+        characterReferences = [customRef, ...characterReferences.filter(r => r.id !== customRef.id && r.url !== customRef.url)];
         logger.info(`👤 [Regen] Attached custom character reference: ${customRef.name || customRef.id} (${customRef.url ? "URL" : "Base64"})`);
       }
     }
@@ -152,6 +155,11 @@ export async function regenerateScene({ workflowId, sceneId, prompt, characterRe
       const assetType = isVideoGeneration ? "video" : "image";
       const generationType = generateAsVideo ? "veo_video" : (isVideoGeneration ? "video_regen" : "regen");
 
+      // Merge scene characters with custom character reference name if present
+      const sceneCharacters = customRef
+        ? [customRef.name || customRef.id || "Character Ref", ...(sc.charactersInScene || [])]
+        : (sc.charactersInScene || []);
+
       if (isVideoGeneration) {
         // Video regeneration with Google Veo 3
         // If an existing image asset exists on the scene, pass it as sourceImageUrl for image-to-video motion synthesis!
@@ -159,13 +167,14 @@ export async function regenerateScene({ workflowId, sceneId, prompt, characterRe
         
         const scenePromptObj = {
           prompt: activePrompt,
-          charactersInScene: sc.charactersInScene || [],
+          charactersInScene,
           sourceImageUrl: existingFrameUrl && sc.assetType !== "video" ? existingFrameUrl : null,
+          selectedRefs: characterReferences,
           _compiledState: sc.compiledState || null,
           _directorDecision: sc.directorDecision || null,
         };
 
-        logger.info(`🎬 [Regen] Dispatching Veo 3 Video Clip generation for Scene ${sc.index + 1} [${currentRatio}] (sourceImage: ${scenePromptObj.sourceImageUrl ? "Yes" : "No"})...`);
+        logger.info(`🎬 [Regen] Dispatching Veo 3 Video Clip generation for Scene ${sc.index + 1} [${currentRatio}] (sourceImage: ${scenePromptObj.sourceImageUrl ? "Yes" : "No"}, charRefs: ${characterReferences.length})...`);
 
         const clips = await generateVideoClips(
           [scenePromptObj],
@@ -185,7 +194,8 @@ export async function regenerateScene({ workflowId, sceneId, prompt, characterRe
         // Image regeneration (multi_image or single_image)
         const scenePromptObj = {
           prompt: activePrompt,
-          charactersInScene: sc.charactersInScene || [],
+          charactersInScene,
+          selectedRefs: characterReferences,
           _compiledState: sc.compiledState || null,
           _directorDecision: sc.directorDecision || null,
         };
