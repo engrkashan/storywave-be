@@ -9,6 +9,8 @@ import {
   updateScenePrompt,
   revertSceneVersion,
   requestSceneRegen,
+  replaceSceneFrame,
+  uploadCharacterReferenceAsset,
   validateMergeEligibility,
   requestWorkflowMerge,
 } from "../services/editorService.js";
@@ -66,15 +68,83 @@ export async function updatePrompt(req, res) {
   }
 }
 
+export async function replaceFrameHandler(req, res) {
+  try {
+    const { userId } = extractUser(req);
+    const { workflowId, sceneId } = req.params;
+    const { imageUrl, imageBase64 } = req.body;
+    const file = req.file;
+
+    const result = await replaceSceneFrame({
+      workflowId,
+      sceneId,
+      file,
+      imageUrl,
+      imageBase64,
+      userId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Scene frame replaced successfully",
+      data: result,
+    });
+  } catch (err) {
+    logger.error(`replaceFrameHandler error: ${err.message}`);
+    return res.status(400).json({ success: false, error: err.message });
+  }
+}
+
+export async function uploadRefHandler(req, res) {
+  try {
+    const { userId } = extractUser(req);
+    const { workflowId, sceneId } = req.params;
+    const { imageUrl, imageBase64, name } = req.body;
+    const file = req.file;
+
+    const result = await uploadCharacterReferenceAsset({
+      workflowId,
+      sceneId,
+      file,
+      imageUrl,
+      imageBase64,
+      name,
+      userId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Character reference uploaded successfully",
+      data: result,
+    });
+  } catch (err) {
+    logger.error(`uploadRefHandler error: ${err.message}`);
+    return res.status(400).json({ success: false, error: err.message });
+  }
+}
+
 export async function regenerateSceneHandler(req, res) {
   try {
     const { userId } = extractUser(req);
     const { workflowId, sceneId } = req.params;
+    const { prompt, characterReference, generateAsVideo, mediaType } = req.body;
 
-    const result = await requestSceneRegen({ workflowId, sceneId, userId });
+    const shouldGenerateAsVideo = Boolean(generateAsVideo) || mediaType === "video";
+
+    const result = await requestSceneRegen({
+      workflowId,
+      sceneId,
+      prompt,
+      characterReference,
+      generateAsVideo: shouldGenerateAsVideo,
+      userId,
+    });
+
     return res.status(200).json({
       success: true,
-      message: "Scene regeneration job queued",
+      message: shouldGenerateAsVideo
+        ? "Veo 3 video scene generation queued"
+        : "Scene regeneration job queued",
       data: result,
     });
   } catch (err) {

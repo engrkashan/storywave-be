@@ -4,6 +4,7 @@
  */
 
 import prisma from "../config/prisma.client.js";
+import { cloudinary } from "../config/cloudinary.config.js";
 import { addSceneRegenJob, addMergeJob } from "./queueService.js";
 import { createLogger } from "../utils/logger.js";
 
@@ -244,9 +245,180 @@ export async function revertSceneVersion({ workflowId, sceneId, version, userId 
 }
 
 /**
- * Dispatch scene regeneration job.
+ * Directly replace a scene frame with a custom uploaded image.
+ * Creates a new SceneVersion record and sets status to GENERATED.
  */
-export async function requestSceneRegen({ workflowId, sceneId, userId }) {
+export async function replaceSceneFrame({ workflowId, sceneId, file, imageUrl, imageBase64, userId }) {
+  const scene = await prisma.scene.findFirst({
+    where: { id: sceneId, workflowId },
+    include: { workflow: true, versions: true },
+  });
+
+  if (!scene || scene.workflow.userId !== userId) {
+    throw new Error("Scene not found or unauthorized");
+  }
+
+  if (scene.workflow.status !== "USER_CONFIRMATION_REQUIRED") {
+    throw new Error("Workflow is not currently in review state");
+  }
+
+  let finalImageUrl = imageUrl;
+  let finalPublicId = null;
+
+  // 1. If file uploaded via Multer Cloudinary storage
+  if (file && (file.path || file.secure_url)) {
+    finalImageUrl = file.path || file.secure_url;
+    finalPublicId = file.filename || file.public_id || null;
+  } else if (file && file.buffer) {
+    // In-memory buffer upload
+    const base64Data = `data:${file.mimetype || "image/png"};base64,${file.buffer.toString("base64")}`;
+    const uploadRes = await cloudinary.uploader.upload(base64Data, {
+      folder: `scenes/${workflowId}/scene_${String(scene.index).padStart(3, "0")}`,
+      resource_type: "image",
+      overwrite: true,
+    });
+    finalImageUrl = uploadRes.secure_url;
+    finalPublicId = uploadRes.public_id;
+  } else if (imageBase64) {
+    // Base64 direct upload
+    const uploadRes = await cloudinary.uploader.upload(imageBase64, {
+      folder: `scenes/${workflowId}/scene_${String(scene.index).padStart(3, "0")}`,
+      resource_type: "image",
+      overwrite: true,
+    });
+    finalImageUrl = uploadRes.secure_url;
+    finalPublicId = uploadRes.public_id;
+  } else if (imageUrl && !imageUrl.includes("res.cloudinary.com")) {
+    // Remote non-cloudinary URL -> mirror to Cloudinary
+    const uploadRes = await cloudinary.uploader.upload(imageUrl, {
+      folder: `scenes/${workflowId}/scene_${String(scene.index).padStart(3, "0")}`,
+      resource_type: "image",
+      overwrite: true,
+    });
+    finalImageUrl = uploadRes.secure_url;
+    finalPublicId = uploadRes.public_id;
+  }
+
+  if (!finalImageUrl) {
+    throw new Error("No valid image file or URL provided for frame replacement");
+  }
+
+  const nextVersion = (scene.activeVersion || 1) + 1;
+
+  // Create new SceneVersion
+  const newVersionRecord = await prisma.sceneVersion.create({
+    data: {
+      sceneId: scene.id,
+      version: nextVersion,
+      assetUrl: finalImageUrl,
+      assetPublicId: finalPublicId,
+      assetType: "image",
+      prompt: scene.activePrompt || scene.originalPrompt || "Manual frame replacement",
+      ratio: scene.ratio,
+      generationType: "user_upload",
+      metadata: {
+        source: "user_upload",
+        originalFilename: file?.originalname || null,
+        durationSec: scene.durationSec,
+        startSec: scene.startSec,
+        endSec: scene.endSec,
+      },
+    },
+  });
+
+  // Atomically update Scene record
+  const updatedScene = await prisma.scene.update({
+    where: { id: scene.id },
+    data: {
+      activeVersion: nextVersion,
+      assetUrl: finalImageUrl,
+      assetPublicId: finalPublicId,
+      assetType: "image",
+      mediaType: "multi_image",
+      status: "GENERATED",
+    },
+  });
+
+  logger.info(`EDITOR_SCENE_FRAME_REPLACED workflowId=${workflowId} sceneId=${sceneId} version=${nextVersion} url=${finalImageUrl}`);
+
+  return {
+    success: true,
+    sceneId,
+    activeVersion: nextVersion,
+    assetUrl: finalImageUrl,
+    assetPublicId: finalPublicId,
+    assetType: "image",
+    version: newVersionRecord,
+  };
+}
+
+/**
+ * Upload a character reference image to Cloudinary.
+ */
+export async function uploadCharacterReferenceAsset({ workflowId, sceneId, file, imageBase64, imageUrl, name, userId }) {
+  const scene = await prisma.scene.findFirst({
+    where: { id: sceneId, workflowId },
+    include: { workflow: true },
+  });
+
+  if (!scene || scene.workflow.userId !== userId) {
+    throw new Error("Scene not found or unauthorized");
+  }
+
+  let finalUrl = imageUrl;
+  let finalPublicId = null;
+
+  if (file && (file.path || file.secure_url)) {
+    finalUrl = file.path || file.secure_url;
+    finalPublicId = file.filename || file.public_id || null;
+  } else if (file && file.buffer) {
+    const base64Data = `data:${file.mimetype || "image/png"};base64,${file.buffer.toString("base64")}`;
+    const uploadRes = await cloudinary.uploader.upload(base64Data, {
+      folder: `characters/${workflowId}`,
+      resource_type: "image",
+    });
+    finalUrl = uploadRes.secure_url;
+    finalPublicId = uploadRes.public_id;
+  } else if (imageBase64) {
+    const uploadRes = await cloudinary.uploader.upload(imageBase64, {
+      folder: `characters/${workflowId}`,
+      resource_type: "image",
+    });
+    finalUrl = uploadRes.secure_url;
+    finalPublicId = uploadRes.public_id;
+  } else if (imageUrl) {
+    const uploadRes = await cloudinary.uploader.upload(imageUrl, {
+      folder: `characters/${workflowId}`,
+      resource_type: "image",
+    });
+    finalUrl = uploadRes.secure_url;
+    finalPublicId = uploadRes.public_id;
+  }
+
+  if (!finalUrl) {
+    throw new Error("No valid character image provided");
+  }
+
+  const charRef = {
+    id: `char_ref_${Date.now()}`,
+    name: name || "Character",
+    url: finalUrl,
+    publicId: finalPublicId,
+  };
+
+  logger.info(`EDITOR_CHAR_REF_UPLOADED workflowId=${workflowId} sceneId=${sceneId} url=${finalUrl}`);
+
+  return {
+    success: true,
+    characterReference: charRef,
+  };
+}
+
+/**
+ * Dispatch scene regeneration job.
+ * Supports custom prompt, character reference image, and generateAsVideo (Veo 3).
+ */
+export async function requestSceneRegen({ workflowId, sceneId, prompt, characterReference, generateAsVideo, userId }) {
   const scene = await prisma.scene.findFirst({
     where: { id: sceneId, workflowId },
     include: { workflow: true },
@@ -264,14 +436,48 @@ export async function requestSceneRegen({ workflowId, sceneId, userId }) {
     throw new Error("Scene is already regenerating");
   }
 
-  // Add BullMQ job
-  const job = await addSceneRegenJob({ workflowId, sceneId });
+  // If a new prompt is supplied, update scene prompt immediately
+  if (prompt && typeof prompt === "string" && prompt.trim()) {
+    await prisma.scene.update({
+      where: { id: sceneId },
+      data: {
+        userEditedPrompt: prompt.trim(),
+        activePrompt: prompt.trim(),
+      },
+    });
+  }
+
+  // If custom character reference is attached, save it into scene's selectedRefs
+  if (characterReference) {
+    const existingRefs = Array.isArray(scene.selectedRefs) ? scene.selectedRefs : [];
+    const updatedRefs = [characterReference, ...existingRefs.filter(r => r.url !== characterReference.url)];
+    await prisma.scene.update({
+      where: { id: sceneId },
+      data: {
+        selectedRefs: updatedRefs,
+      },
+    });
+  }
+
+  // Add BullMQ job with custom params
+  const job = await addSceneRegenJob({
+    workflowId,
+    sceneId,
+    prompt: prompt || scene.activePrompt || scene.originalPrompt,
+    characterReference,
+    generateAsVideo: Boolean(generateAsVideo),
+  });
 
   // Update scene status to REGENERATING
   await prisma.scene.update({
     where: { id: sceneId },
-    data: { status: "REGENERATING" },
+    data: {
+      status: "REGENERATING",
+      ...(generateAsVideo ? { mediaType: "video" } : {}),
+    },
   });
+
+  logger.info(`EDITOR_SCENE_REGEN_REQUESTED workflowId=${workflowId} sceneId=${sceneId} jobId=${job.id} generateAsVideo=${Boolean(generateAsVideo)}`);
 
   return { success: true, jobId: job.id, sceneId };
 }

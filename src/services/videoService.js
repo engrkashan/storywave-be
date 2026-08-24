@@ -480,15 +480,19 @@ export async function generateVeoVideoClips(prompts, tempDir, aspectRatio = "16:
   // Pre-fetch all available character references
   const fetchedReferences = {};
   for (const asset of characterAssets) {
-    if (asset.url) {
+    if (asset?.url) {
       try {
         const res = await fetch(asset.url);
         const buffer = Buffer.from(await res.arrayBuffer());
         const mimeType = res.headers.get("content-type") || "image/png";
-        fetchedReferences[asset.id] = { imageBytes: buffer.toString("base64"), mimeType };
+        const refKey = asset.id || asset.name || asset.url;
+        fetchedReferences[refKey] = { imageBytes: buffer.toString("base64"), mimeType };
       } catch (err) {
         logger.warn(`Could not fetch video character reference: ${err.message}`);
       }
+    } else if (asset?.base64) {
+      const refKey = asset.id || asset.name || `ref_${Date.now()}`;
+      fetchedReferences[refKey] = { imageBytes: asset.base64, mimeType: asset.mimeType || "image/png" };
     }
   }
 
@@ -523,8 +527,10 @@ export async function generateVeoVideoClips(prompts, tempDir, aspectRatio = "16:
         for (const charId of sceneCharacters) {
           if (fetchedReferences[charId]) activeReferences.push(fetchedReferences[charId]);
         }
-        if (activeReferences.length === 0 && characterAssets.length > 0 && fetchedReferences[characterAssets[0].id]) {
-          activeReferences.push(fetchedReferences[characterAssets[0].id]);
+        if (activeReferences.length === 0 && characterAssets.length > 0) {
+          for (const key of Object.keys(fetchedReferences)) {
+            activeReferences.push(fetchedReferences[key]);
+          }
         }
 
         let previousFrameData = null;
@@ -536,6 +542,36 @@ export async function generateVeoVideoClips(prompts, tempDir, aspectRatio = "16:
         const inputParts = [{ type: "text", text: finalPrompt }];
         let hasMediaInput = false;
 
+        // 1. If an explicit source frame / image is provided (e.g. animating an existing scene image with Veo 3)
+        if (promptObj && typeof promptObj === "object" && promptObj.sourceImageUrl) {
+          try {
+            const res = await fetch(promptObj.sourceImageUrl);
+            if (res.ok) {
+              const buffer = Buffer.from(await res.arrayBuffer());
+              const mimeType = res.headers.get("content-type") || "image/jpeg";
+              inputParts.push({
+                type: "image",
+                data: buffer.toString("base64"),
+                mime_type: mimeType,
+              });
+              hasMediaInput = true;
+              logger.info(`🖼️ [Video Clip ${i + 1}] Attached source scene frame image as visual motion anchor for Veo 3.`);
+            }
+          } catch (err) {
+            logger.warn(`Could not fetch source frame image: ${err.message}`);
+          }
+        } else if (promptObj && typeof promptObj === "object" && promptObj.initialFrame && fs.existsSync(promptObj.initialFrame)) {
+          const buffer = fs.readFileSync(promptObj.initialFrame);
+          inputParts.push({
+            type: "image",
+            data: buffer.toString("base64"),
+            mime_type: "image/png",
+          });
+          hasMediaInput = true;
+          logger.info(`🖼️ [Video Clip ${i + 1}] Attached local initial frame as visual motion anchor for Veo 3.`);
+        }
+
+        // 2. Previous clip bridge frame (for multi-clip continuity)
         if (previousFrameData) {
           inputParts.push({
             type: "image",
@@ -546,6 +582,7 @@ export async function generateVeoVideoClips(prompts, tempDir, aspectRatio = "16:
           logger.info(`🌉 [Video Clip ${i + 1}] Attached previous clip's last frame as bridge image for motion continuity.`);
         }
 
+        // 3. Character likeness reference images
         for (const ref of activeReferences) {
           if (ref && ref.imageBytes) {
             inputParts.push({
