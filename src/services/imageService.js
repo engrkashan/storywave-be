@@ -530,14 +530,24 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
   });
 
   // ── Pre-fetch character reference images as base64 (fetched ONCE, never reloaded) ──
-  // Resolution strategy (three tiers):
-  //   Tier 1 — Exact ID match: sceneCharacters IDs match characterReferences[].id
-  //   Tier 2 — Fallback all:   IDs present but none resolved (MGE char_1 vs storyMetadata ID mismatch)
-  //                             → inject ALL refs (user preference: always inject all on mismatch)
-  //   Tier 3 — No sceneChars:  no character list provided → inject ALL refs for max consistency
+  // Resolution strategy:
+  //   1. Explicit custom override (e.g. user attached reference in scene editor) → ALWAYS injected first!
+  //   2. Tier 1 — Exact ID/Name match with sceneCharacters
+  //   3. Tier 2 — Fallback all: If characterReferences exist and matchedRefs is empty, inject all character references
+  //   4. Tier 3 — No sceneChars: inject all character references
   let inlineImages = [];
   try {
-    if (sceneCharacters && sceneCharacters.length > 0) {
+    let refsToUse = [];
+
+    // Check for explicit custom reference overrides (from scene editor upload/selection)
+    const customRefs = (characterReferences || []).filter(
+      (r) => r && (r.isCustomOverride || r.isExplicit || r.id?.startsWith("custom_ref_") || r.id?.startsWith("char_ref_"))
+    );
+
+    if (customRefs.length > 0) {
+      refsToUse = customRefs;
+      logger.info(`👤 [GenWithGemini] ${sceneId} — Using ${customRefs.length} explicit/custom character reference(s) for scene generation.`);
+    } else if (sceneCharacters && sceneCharacters.length > 0) {
       const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       let matchedRefs = sceneCharacters
         .map((charItem) => {
@@ -555,39 +565,42 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
       // Deduplicate
       matchedRefs = Array.from(new Set(matchedRefs));
 
-      // Fallback: if single character reference exists and scene characters were provided but fuzzy match missed, use it
-      if (matchedRefs.length === 0 && characterReferences.length === 1) {
-        matchedRefs = [...characterReferences];
-      }
-
-      const refsToUse = matchedRefs;
-
+      // Fallback: if characterReferences exist and match missed, use all provided characterReferences
       if (matchedRefs.length === 0 && characterReferences.length > 0) {
-        logger.warn(`⚠️ [GenWithGemini] ${sceneId} — No characterReferences matched scene IDs [${sceneCharacters.join(", ")}]. Generating WITHOUT reference images (text-only) to avoid identity blending.`);
+        matchedRefs = [...characterReferences];
+        logger.info(`ℹ️ [GenWithGemini] ${sceneId} — Using all ${characterReferences.length} character reference(s) (name fuzzy match fallback).`);
       }
 
-      for (const ref of refsToUse) {
-        if (!ref?.url) continue;
-        try {
-          const charData = await fetchImageAsBase64(ref.url);
-          inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64, charId: ref.id, charName: ref.name });
-          debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url });
-        } catch (fetchErr) {
-          logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not fetch ref for "${ref.name || ref.id}": ${fetchErr.message}`);
-        }
-      }
+      refsToUse = matchedRefs;
     } else if (characterReferences.length > 0) {
-      // Tier 3: no sceneCharacters list → inject ALL refs
+      // Tier 3: no sceneCharacters specified → inject all character references
+      refsToUse = [...characterReferences];
       logger.info(`ℹ️ [GenWithGemini] ${sceneId} — No sceneCharacters specified. Injecting all ${characterReferences.length} character ref(s).`);
-      for (const ref of characterReferences) {
-        if (!ref?.url) continue;
-        try {
+    }
+
+    for (const ref of refsToUse) {
+      if (!ref) continue;
+      try {
+        if (ref.base64) {
+          inlineImages.push({
+            mimeType: ref.mimeType || "image/png",
+            base64: ref.base64,
+            charId: ref.id,
+            charName: ref.name,
+          });
+          debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url || "base64" });
+        } else if (ref.url) {
           const charData = await fetchImageAsBase64(ref.url);
-          inlineImages.push({ mimeType: charData.mimeType, base64: charData.base64, charId: ref.id, charName: ref.name });
+          inlineImages.push({
+            mimeType: charData.mimeType,
+            base64: charData.base64,
+            charId: ref.id,
+            charName: ref.name,
+          });
           debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url });
-        } catch (fetchErr) {
-          logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not fetch ref for "${ref.name || ref.id}": ${fetchErr.message}`);
         }
+      } catch (fetchErr) {
+        logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not fetch ref for "${ref.name || ref.id}": ${fetchErr.message}`);
       }
     }
   } catch (err) {

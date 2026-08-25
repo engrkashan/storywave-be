@@ -209,6 +209,133 @@ async function uploadVideoToCloud(videoPath, filename) {
 }
 
 /**
+ * Storywave Editor: Upload a single scene asset (image or video clip) to Cloudinary.
+ * Returns { secureUrl, publicId }.
+ * @param {string} localPath - Absolute local file path
+ * @param {string} workflowId
+ * @param {number} sceneIndex - 0-based
+ * @param {string} ratio - e.g. "16:9" or "9:16"
+ * @param {number} version - 1-based version number
+ * @param {string} assetType - "image" or "video"
+ */
+async function uploadSceneAsset(localPath, workflowId, sceneIndex, ratio, version, assetType) {
+  const ratioSlug = ratio.replace(":", "_");
+  const publicId = `scenes/${workflowId}/scene_${String(sceneIndex).padStart(3, "0")}/${ratioSlug}/v${version}_${Date.now()}`;
+  const resourceType = assetType === "video" ? "video" : "image";
+
+  let uploaded;
+  if (assetType === "video") {
+    uploaded = await uploadLargePromise(localPath, {
+      resource_type: resourceType,
+      public_id: publicId,
+      chunk_size: 10000000,
+      timeout: 600000,
+      overwrite: true,
+    });
+  } else {
+    uploaded = await cloudinary.uploader.upload(localPath, {
+      resource_type: resourceType,
+      public_id: publicId,
+      overwrite: true,
+    });
+  }
+
+  logger.info(`📸 [Editor] Scene ${sceneIndex} [${ratio}] v${version} uploaded: ${uploaded.secure_url}`);
+  return { secureUrl: uploaded.secure_url, publicId: uploaded.public_id };
+}
+
+/**
+ * Storywave Editor: Persist a Scene + initial SceneVersion record in the database.
+ * Called once per (sceneIndex, ratio) during the initial generation pipeline.
+ */
+async function persistScene({
+  workflowId,
+  index,
+  ratio,
+  mediaType,
+  startSec,
+  endSec,
+  durationSec,
+  narration,
+  prompt,
+  compiledState,
+  directorDecision,
+  prevExitState,
+  charactersInScene,
+  selectedRefs,
+  assetUrl,
+  assetPublicId,
+  assetType,
+}) {
+  let scene = await prisma.scene.findFirst({
+    where: { workflowId, index, ratio },
+  });
+
+  if (!scene) {
+    scene = await prisma.scene.create({
+      data: {
+        workflowId,
+        index,
+        ratio,
+        mediaType,
+        startSec,
+        endSec,
+        durationSec,
+        narration: narration || null,
+        originalPrompt: prompt || null,
+        activePrompt: prompt || null,
+        userEditedPrompt: null,
+        activeVersion: 1,
+        generationAttempts: 1,
+        assetUrl: assetUrl || null,
+        assetPublicId: assetPublicId || null,
+        assetType: assetUrl ? assetType : null,
+        compiledState: compiledState || null,
+        directorDecision: directorDecision || null,
+        prevExitState: prevExitState || null,
+        charactersInScene: Array.isArray(charactersInScene) ? charactersInScene : [],
+        selectedRefs: selectedRefs || null,
+        status: assetUrl ? "GENERATED" : "FAILED",
+      },
+    });
+  } else {
+    scene = await prisma.scene.update({
+      where: { id: scene.id },
+      data: {
+        assetUrl: assetUrl || scene.assetUrl,
+        assetPublicId: assetPublicId || scene.assetPublicId,
+        assetType: assetUrl ? assetType : scene.assetType,
+        status: assetUrl ? "GENERATED" : scene.status,
+      },
+    });
+  }
+
+  // Create the initial SceneVersion record if not already created
+  if (assetUrl) {
+    const existingVer = await prisma.sceneVersion.findFirst({
+      where: { sceneId: scene.id, version: 1 },
+    });
+    if (!existingVer) {
+      await prisma.sceneVersion.create({
+        data: {
+          sceneId: scene.id,
+          version: 1,
+          assetUrl,
+          assetPublicId: assetPublicId || null,
+          assetType: assetType || "image",
+          prompt: prompt || "",
+          ratio,
+          generationType: "initial",
+          metadata: { mediaType, startSec, endSec, durationSec },
+        },
+      });
+    }
+  }
+
+  return scene;
+}
+
+/**
  * Main workflow execution function
  * Supports podcast-only mode when shouldGenerateImage = false
  */
@@ -1259,158 +1386,79 @@ async function _runWorkflow({
             stopVideoClipsTimer?.();
             mediaItems = clips.filter((c) => c.filePath).map((c) => c.filePath);
 
-            if (mediaItems.length > 0) {
-              // Refine subtitle timestamps from actual spoken audio of native video clips
-              if (characterTalk === true && !hasVoiceSelected) {
-                logger.info("🎙️ [Character Talk] Refinement: Extracting audio & transcribing generated video clips for exact subtitle timestamp sync...");
-                try {
-                  const refinedWords = [];
-                  for (let i = 0; i < mediaItems.length; i++) {
-                    const clipPath = mediaItems[i];
-                    const scene = masterTimeline.scenes[i];
-                    if (!clipPath || !fs.existsSync(clipPath) || !scene) continue;
+            // Upload each video clip to Cloudinary and persist Scene records
+            for (let i = 0; i < mediaItems.length; i++) {
+              const clipPath = mediaItems[i];
+              const timelineScene = masterTimeline.scenes?.[i];
+              const narrationSeg = narrationSegments?.[i];
+              const videoScenePrompt = scenePrompts?.[i];
+              const duration = timelineScene?.durationSec || 5.0;
 
-                    const clipWavPath = path.join(workflowTempDir, `clip_audio_${i}_${Date.now()}.wav`);
-                    try {
-                      await extractAudioFromClip(clipPath, clipWavPath);
-                      const transcriptJsonStr = await transcribeWithTimestamps(clipWavPath);
-                      const { words: clipWords } = JSON.parse(transcriptJsonStr);
-
-                      if (Array.isArray(clipWords) && clipWords.length > 0) {
-                        for (const w of clipWords) {
-                          refinedWords.push({
-                            word: w.word,
-                            start: scene.startSec + (w.start || 0),
-                            end: scene.startSec + (w.end || 0),
-                          });
-                        }
-                      }
-                    } catch (clipErr) {
-                      logger.warn(`Could not transcribe native audio for clip ${i + 1}: ${clipErr.message}`);
-                    } finally {
-                      if (fs.existsSync(clipWavPath)) fs.unlinkSync(clipWavPath);
-                    }
-                  }
-
-                  if (refinedWords.length > 0) {
-                    masterTimeline.subtitleGroups = buildSubtitleGroups(refinedWords);
-                    const timelinePath = path.join(workflowTempDir, "timeline.json");
-                    saveMasterTimeline(masterTimeline, timelinePath);
-                    logger.info(`✅ [Character Talk] Subtitle timestamps refined from native video audio: ${masterTimeline.subtitleGroups.length} subtitle groups generated.`);
-                  }
-                } catch (refineErr) {
-                  logger.warn(`⚠️ Character Talk timestamp refinement warning: ${refineErr.message}`);
-                }
+              try {
+                const { secureUrl, publicId } = await uploadSceneAsset(
+                  clipPath, workflow.id, i, currentRatio, 1, "video"
+                );
+                await persistScene({
+                  workflowId: workflow.id,
+                  index: i,
+                  ratio: currentRatio,
+                  mediaType: "video",
+                  startSec: timelineScene?.startSec ?? 0,
+                  endSec: timelineScene?.endSec ?? duration,
+                  durationSec: timelineScene?.durationSec ?? duration,
+                  narration: narrationSeg?.text || "",
+                  prompt: videoScenePrompt?.prompt || "",
+                  compiledState: videoScenePrompt?._compiledState || null,
+                  directorDecision: videoScenePrompt?._directorDecision || null,
+                  prevExitState: i > 0 ? (scenePrompts?.[i - 1]?._compiledState?.exit_state || null) : null,
+                  charactersInScene: videoScenePrompt?.charactersInScene || [],
+                  selectedRefs: videoScenePrompt?.selectedRefs || null,
+                  assetUrl: secureUrl,
+                  assetPublicId: publicId,
+                  assetType: "video",
+                });
+              } catch (uploadErr) {
+                logger.warn(`⚠️ [Editor] Video scene ${i} upload failed: ${uploadErr.message}`);
               }
-
-              const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${mediaItems.length} items)`);
-              const checkpointManager = new CheckpointManager(workflowTempDir);
-
-              const isVertical = currentRatio === "9:16";
-              const width = isVertical ? 1080 : 1920;
-              const height = isVertical ? 1920 : 1080;
-
-              const getSegmentRange = (index) => {
-                const scene = masterTimeline.scenes[index];
-                if (scene) return { startTime: scene.startSec, duration: scene.durationSec };
-                const approxDuration = masterTimeline.totalDuration / scenePrompts.length;
-                return { startTime: index * approxDuration, duration: approxDuration };
-              };
-
-              const segmentFiles = new Array(mediaItems.length).fill(null);
-              for (let i = 0; i < mediaItems.length; i++) {
-                const clipPath = mediaItems[i];
-                const sceneId = `scene_${String(i + 1).padStart(3, "0")}`;
-                const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
-                segmentFiles[i] = segmentPath;
-
-                if (checkpointManager.isRenderCompleted(sceneId) && fs.existsSync(segmentPath)) {
-                  logger.info(`⏩ [Segment ${i + 1}/${mediaItems.length}] Skipping render (Checkpoint)`);
-                  continue;
-                }
-
-                const { duration } = getSegmentRange(i);
-                const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
-                convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, i);
-                const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
-
-                checkpointManager.markRenderRunning(sceneId);
-                try {
-                  await renderMediaSegment(clipPath, segmentPath, duration, width, height, escapedSegmentAssPath);
-                  checkpointManager.markRenderCompleted(sceneId);
-                } catch (err) {
-                  checkpointManager.markRenderFailed(sceneId);
-                  throw err;
-                } finally {
-                  if (fs.existsSync(segmentAssPath)) {
-                    fs.unlinkSync(segmentAssPath);
-                  }
-                }
-              }
-
-              const validSegmentFiles = segmentFiles.filter(Boolean);
-              const useSegmentAudioOnly = characterTalk === true && !hasVoiceSelected && !musicPath;
-              const mixSegmentAudio = (characterTalk === true && hasVoiceSelected) || (characterTalk === true && !hasVoiceSelected && !!musicPath);
-              await concatSegments(validSegmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null, {
-                useSegmentAudioOnly,
-                mixSegmentAudio,
-              });
-              stopStitchTimer?.();
             }
+
           } else if (mediaType === "multi_image") {
-            // scenePrompts already set to preGeneratedScenePrompts in the block above
             const stopMultiImagesTimer = perf?.start("image", `Generate Multi Images (${scenePrompts.length} images)`);
-            const checkpointManager = new CheckpointManager(workflowTempDir);
 
-            const isVertical = currentRatio === "9:16";
-            const width = isVertical ? 1080 : 1920;
-            const height = isVertical ? 1920 : 1080;
-
-            // Scene boundary lookup from Master Timeline (replaces equal-division arithmetic)
-            const getSegmentRange = (index) => {
-              const scene = masterTimeline.scenes[index];
-              if (scene) return { startTime: scene.startSec, duration: scene.durationSec };
-              // Fallback for out-of-bounds (should not happen with clamped scenes)
-              const approxDuration = masterTimeline.totalDuration / scenePrompts.length;
-              return { startTime: index * approxDuration, duration: approxDuration };
-            };
-
-            const segmentFiles = new Array(scenePrompts.length).fill(null);
-            const segmentPromises = [];
-
+            // Callback when each image is generated: upload directly to Cloudinary & persist Scene record
             const onImageReady = async (imagePath, i) => {
-              const segmentPromise = (async () => {
-                const sceneId = `scene_${String(i + 1).padStart(3, "0")}`;
-                const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
-                segmentFiles[i] = segmentPath;
+              const sceneInfo = scenePrompts[i];
+              const timelineScene = masterTimeline.scenes?.[i];
+              const narrationSeg = narrationSegments?.[i];
+              const approxDuration = masterTimeline.totalDuration / scenePrompts.length;
+              const duration = timelineScene?.durationSec || approxDuration;
 
-                if (checkpointManager.isRenderCompleted(sceneId) && fs.existsSync(segmentPath)) {
-                  logger.info(`⏩ [Segment ${i + 1}/${scenePrompts.length}] Skipping render (Checkpoint)`);
-                  return;
-                }
-
-                const { startTime, duration } = getSegmentRange(i);
-
-                // Pass masterTimeline + sceneIndex → zero-drift subtitle generation
-                const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
-                convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, i);
-                const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
-
-                checkpointManager.markRenderRunning(sceneId);
-                try {
-                  await renderMediaSegment(imagePath, segmentPath, duration, width, height, escapedSegmentAssPath);
-                  checkpointManager.markRenderCompleted(sceneId);
-                } catch (err) {
-                  checkpointManager.markRenderFailed(sceneId);
-                  throw err;
-                } finally {
-                  if (fs.existsSync(segmentAssPath)) {
-                    fs.unlinkSync(segmentAssPath);
-                  }
-                }
-              })();
-
-              segmentPromises.push(segmentPromise);
+              try {
+                const { secureUrl, publicId } = await uploadSceneAsset(
+                  imagePath, workflow.id, i, currentRatio, 1, "image"
+                );
+                await persistScene({
+                  workflowId: workflow.id,
+                  index: i,
+                  ratio: currentRatio,
+                  mediaType: "multi_image",
+                  startSec: timelineScene?.startSec ?? (i * approxDuration),
+                  endSec: timelineScene?.endSec ?? ((i + 1) * approxDuration),
+                  durationSec: duration,
+                  narration: narrationSeg?.text || "",
+                  prompt: sceneInfo?.prompt || "",
+                  compiledState: sceneInfo?._compiledState || null,
+                  directorDecision: sceneInfo?._directorDecision || null,
+                  prevExitState: i > 0 ? (scenePrompts[i - 1]?._compiledState?.exit_state || null) : null,
+                  charactersInScene: sceneInfo?.charactersInScene || [],
+                  selectedRefs: sceneInfo?.selectedRefs || null,
+                  assetUrl: secureUrl,
+                  assetPublicId: publicId,
+                  assetType: "image",
+                });
+              } catch (uploadErr) {
+                logger.warn(`⚠️ [Editor] Scene ${i} upload failed: ${uploadErr.message}`);
+              }
             };
 
             const images = await generateMultiImages(
@@ -1422,84 +1470,14 @@ async function _runWorkflow({
               styleReferenceUrl,
               () => checkCancelled(workflow.id),
               onImageReady,
-              checkpointManager
+              null
             );
-
-            // Wait for all async segment renders to complete
-            await Promise.all(segmentPromises);
-
-            // Fallback for failed image segments to keep audio/video sync
-            const fallbackPromises = [];
-            for (let i = 0; i < scenePrompts.length; i++) {
-              if (!segmentFiles[i]) {
-                logger.warn(`⚠️ Segment ${i + 1} was not generated. Attempting to regenerate the image...`);
-
-                const fallbackPromise = (async () => {
-                  try {
-                    // Try to regenerate the single image that failed
-                    const imageResult = await generateImage(
-                      scenePrompts[i],
-                      i + 1,
-                      ratioDir,
-                      currentRatio,
-                      commonPrompt,
-                      characterReferences,
-                      styleReferenceUrl
-                    );
-
-                    // If the regenerated image is available, render the segment
-                    if (imageResult.imageUrl) {
-                      const sceneId = `scene_${String(i + 1).padStart(3, "0")}`;
-                      const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
-                      segmentFiles[i] = segmentPath;
-
-                      const { startTime, duration } = getSegmentRange(i);
-                      const segmentAssPath = path.join(workflowTempDir, `subs-${sceneId}-${Date.now()}.ass`);
-                      convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, i);
-                      const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
-
-                      try {
-                        await renderMediaSegment(imageResult.imageUrl, segmentPath, duration, width, height, escapedSegmentAssPath);
-                        logger.info(`✅ Regenerated segment ${i + 1} rendered successfully.`);
-                      } catch (err) {
-                        logger.error(`❌ Failed to render regenerated segment for scene ${i + 1}`, err);
-                        segmentFiles[i] = null;
-                      } finally {
-                        if (fs.existsSync(segmentAssPath)) fs.unlinkSync(segmentAssPath);
-                      }
-                    } else {
-                      // Regeneration also failed — leave segment null. Never reuse another image.
-                      logger.error(`❌ Scene ${i + 1} image generation permanently failed. Segment will be skipped from final video. No adjacent image will be substituted.`);
-                      segmentFiles[i] = null;
-                    }
-                  } catch (err) {
-                    logger.error(`❌ Error during regeneration for scene ${i + 1}:`, err);
-                    segmentFiles[i] = null;
-                  }
-                })();
-                fallbackPromises.push(fallbackPromise);
-              }
-            }
-
-            if (fallbackPromises.length > 0) {
-              await Promise.all(fallbackPromises);
-            }
 
             stopMultiImagesTimer?.();
             mediaItems = images.filter((img) => img.imageUrl).map((img) => img.imageUrl);
 
-            // Step 5: Final Concat
-            if (mediaItems.length > 0) {
-              logger.info(`Step 5: Stitching video for ${currentRatio}...`);
-
-              const validSegmentFiles = segmentFiles.filter(Boolean);
-              const stopStitchTimer = perf?.start("video", `Stitch Multi-media Video (${validSegmentFiles.length} items)`);
-              await concatSegments(validSegmentFiles, finalAudioLocalPath, videoPath, actualAudioDuration, null);
-              stopStitchTimer?.();
-            }
-
           } else {
-            // single_image: use timeline for full subtitle track (sceneIndex = null)
+            // single_image: create video directly
             const stopImageTimer = perf?.start("image", "Generate Single Image");
             const imageResult = await generateImage(
               scenePrompts[0],
@@ -1514,14 +1492,13 @@ async function _runWorkflow({
             if (imageResult.imageUrl) {
               mediaItems = [imageResult.imageUrl];
               const stopStitchTimer = perf?.start("video", "Stitch Single Image Video");
-              // For single image, pass the timeline with sceneIndex=null to use all subtitle groups
               await createVideoWithTimeline(mediaItems[0], finalAudioLocalPath, videoPath, masterTimeline, currentRatio, actualAudioDuration);
               stopStitchTimer?.();
             }
           }
         }
 
-        if (mediaItems.length > 0) {
+        if (fs.existsSync(videoPath)) {
           const stopVideoUploadTimer = perf?.start("upload", `Upload Final Video to Cloudinary: ${currentRatio}`);
           const currentVideoURL = await uploadVideoToCloud(
             videoPath,
@@ -1533,12 +1510,52 @@ async function _runWorkflow({
             items: mediaItems,
           };
 
-          if (!videoURL) videoURL = currentVideoURL; // Set primary for backward compatibility
-          if (mediaUrls.length === 0) mediaUrls = mediaItems;
+          if (!videoURL) videoURL = currentVideoURL;
+        }
+
+        if (mediaUrls.length === 0 && mediaItems.length > 0) {
+          mediaUrls = mediaItems;
         }
       }
 
-      if (Object.keys(videoResults).length > 0) {
+      // ── EDITOR: Check how many Scene records were created ─────────────
+      // multi_image and video modes (including characterTalk) pause for Editor review.
+      // single_image (only 1 scene, no per-scene review needed) completes normally.
+      const sceneCount = (await prisma.scene?.count({ where: { workflowId: workflow.id } })) || 0;
+      const isEditorEligible = (mediaType === "multi_image" || mediaType === "video")
+        && sceneCount > 0 && shouldGenerateImage;
+
+      if (isEditorEligible) {
+        // ── EDITOR PAUSE: Persist required data before temp cleanup ──────
+        // Store masterTimeline + generation params so Merge & Continue can
+        // reconstruct the final assembly from DB without relying on temp files.
+        const freshMeta = await prisma.workflow.findUnique({
+          where: { id: workflow.id },
+          select: { metadata: true },
+        });
+        const existingMeta = freshMeta?.metadata || {};
+        await prisma.workflow.update({
+          where: { id: workflow.id },
+          data: {
+            metadata: {
+              ...existingMeta,
+              dualPlatform,
+              // Frozen assembly data — Merge & Continue reads these:
+              _editorMasterTimeline: masterTimeline,
+              _editorFinalAudioUrl: mixedVoiceURL || null,
+              _editorActualAudioDuration: actualAudioDuration,
+              _editorAspectRatio: aspectRatio,
+              _editorCharacterTalk: characterTalk,
+              _editorHasVoiceSelected: hasVoiceSelected,
+              _editorMusicUsed: !!musicPath,
+              _editorTitle: title,
+              _editorUserId: userId,
+            },
+          },
+        });
+        logger.info(`✅ [Editor] masterTimeline and assembly params persisted for workflow ${workflow.id}. Pausing for user review.`);
+        isPodcast = false;
+      } else if (Object.keys(videoResults).length > 0) {
         const primaryVideo =
           videoResults[aspectRatio] || Object.values(videoResults)[0];
         videoURL = primaryVideo.url;
@@ -1547,24 +1564,19 @@ async function _runWorkflow({
         const videoRecord = await prisma.video.create({
           data: {
             title: dualPlatform ? `${title} (Dual Version)` : title,
-            fileURL: videoURL, // Fallback/Main
+            fileURL: videoURL,
             video_16_9: videoResults["16:9"]?.url,
             video_9_16: videoResults["9:16"]?.url,
             userId,
           },
         });
-
         await prisma.workflow.update({
           where: { id: workflow.id },
           data: {
             videoId: videoRecord.id,
-            metadata: {
-              ...(workflow.metadata || {}),
-              dualPlatform,
-            },
+            metadata: { ...(workflow.metadata || {}), dualPlatform },
           },
         });
-
         isPodcast = false;
       } else {
         logger.info(
@@ -1587,42 +1599,64 @@ async function _runWorkflow({
       },
     });
 
-    // Final update
+    // ── Determine final workflow status ──────────────────────────────────────
+    // Editor-eligible workflows (multi_image or video modes) pause
+    // at USER_CONFIRMATION_REQUIRED. All other modes (single_image, podcast)
+    // complete immediately.
+    const sceneCountFinal = (await prisma.scene?.count({ where: { workflowId: workflow.id } })) || 0;
+    const pauseForEditor = (mediaType === "multi_image" || mediaType === "video")
+      && sceneCountFinal > 0 && shouldGenerateImage;
+
+    const finalStatus = pauseForEditor ? "USER_CONFIRMATION_REQUIRED" : "COMPLETED";
+
+    const freshMetaFinal = (await prisma.workflow.findUnique({
+      where: { id: workflow.id },
+      select: { metadata: true },
+    }))?.metadata || {};
+
     await prisma.workflow.update({
       where: { id: workflow.id },
       data: {
-        status: "COMPLETED",
+        status: finalStatus,
         metadata: {
-          ...(workflow.metadata || {}),
+          ...freshMetaFinal,
           result: {
-            hasMedia: mediaUrls.length > 0,
+            hasMedia: mediaUrls.length > 0 || sceneCountFinal > 0,
             hasVideo: !!videoURL,
             isPodcast,
             mediaType,
+            pausedForEditor: pauseForEditor,
           },
         },
       },
     });
 
-    logger.info("🎉 Workflow completed successfully", "\x1b[32m");
+    if (pauseForEditor) {
+      logger.info(`⏸️  Workflow paused — USER_CONFIRMATION_REQUIRED (${sceneCountFinal} scenes ready for review)`);
+    } else {
+      logger.info("🎉 Workflow completed successfully", "\x1b[32m");
+    }
 
     // 🚀 Auto-publish to social media via Mallary.ai
-    try {
-      const autoPublishEnabled = process.env.MALLARY_AUTO_PUBLISH === "true" || workflow.metadata?.autoPublish === true;
-      if (autoPublishEnabled && videoURL && workflow.metadata?.autoPublish !== false) {
-        const freshStory = await prisma.story.findUnique({ where: { id: story.id } });
-        const { autoPublishStory } = await import("./socialPublishService.js");
-        await autoPublishStory(workflow.id, {
-          videoUrl: videoURL,
-          audioUrl: mixedVoiceURL,
-          story: freshStory,
-          aspectRatio: workflow.metadata?.aspectRatio,
-          delayMinutes: workflow.metadata?.autoPublishDelayMinutes,
-        });
-        logger.info("📡 Auto-publish to Mallary triggered successfully");
+    // Only fire when workflow completed (not paused for Editor review)
+    if (!pauseForEditor) {
+      try {
+        const autoPublishEnabled = process.env.MALLARY_AUTO_PUBLISH === "true" || workflow.metadata?.autoPublish === true;
+        if (autoPublishEnabled && videoURL && workflow.metadata?.autoPublish !== false) {
+          const freshStory = await prisma.story.findUnique({ where: { id: story.id } });
+          const { autoPublishStory } = await import("./socialPublishService.js");
+          await autoPublishStory(workflow.id, {
+            videoUrl: videoURL,
+            audioUrl: mixedVoiceURL,
+            story: freshStory,
+            aspectRatio: workflow.metadata?.aspectRatio,
+            delayMinutes: workflow.metadata?.autoPublishDelayMinutes,
+          });
+          logger.info("📡 Auto-publish to Mallary triggered successfully");
+        }
+      } catch (publishErr) {
+        logger.error(`⚠️ Auto-publish to Mallary failed (non-fatal): ${publishErr.message}`);
       }
-    } catch (publishErr) {
-      logger.error(`⚠️ Auto-publish to Mallary failed (non-fatal): ${publishErr.message}`);
     }
 
 
@@ -1633,6 +1667,8 @@ async function _runWorkflow({
     return {
       success: true,
       workflowId: workflow.id,
+      pausedForEditor: pauseForEditor,
+      status: finalStatus,
       story: {
         title: story.title,
         outline: story.outline,

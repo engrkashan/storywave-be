@@ -172,9 +172,20 @@ enum WorkflowStatus {
   SCHEDULED
   PROCESSING
   CANCELLATION_REQUESTED
+  USER_CONFIRMATION_REQUIRED
   COMPLETED
   FAILED
   CANCELLED
+}
+
+// ─── Storywave Editor: Scene Status ──────────────────────────────────────────
+enum SceneStatus {
+  PENDING
+  GENERATING
+  GENERATED
+  REGENERATING
+  REGEN_FAILED
+  FAILED
 }
 
 model Workflow {
@@ -196,6 +207,7 @@ model Workflow {
   media        Media[]
   tasks        Task[]
   socialPosts  SocialPost[]
+  scenes       Scene[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -204,6 +216,89 @@ model Workflow {
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([userId, status])
+}
+
+// ─── Storywave Editor: Per-Scene Record ──────────────────────────────────────
+// Each generated scene gets one Scene record per (workflowId, index, ratio).
+// Dual-platform stories produce two Scene records per index (16:9 and 9:16).
+model Scene {
+  id         String      @id @default(auto()) @map("_id") @db.ObjectId
+  status     SceneStatus @default(PENDING)
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowId String   @db.ObjectId
+
+  // Scene position
+  index Int     // 0-based within the story
+  ratio String  // e.g. "16:9" or "9:16"
+
+  // Timeline (locked at generation — never changed during regeneration)
+  startSec    Float
+  endSec      Float
+  durationSec Float
+
+  // Narration text for this scene's audio slot (from Whisper / buildNarrationSegments)
+  narration String?
+
+  // Media type for this scene's pipeline ("single_image" | "multi_image" | "video")
+  mediaType String?
+
+  // Prompts
+  originalPrompt   String? // MGE-generated prompt — immutable history
+  activePrompt     String? // Currently active prompt (= original or user-edited)
+  userEditedPrompt String? // The user's manual edits; null when unchanged
+
+  // Active version pointer
+  activeVersion     Int @default(1)
+  generationAttempts Int @default(0)
+
+  // Active asset (points to the SceneVersion at activeVersion)
+  assetUrl      String? // Cloudinary secure_url
+  assetPublicId String? // Cloudinary public_id
+  assetType     String? // "image" or "video"
+
+  // Continuity data for regeneration (serialized from MGE frame output)
+  compiledState    Json? // _compiledState from MGE frame loop
+  directorDecision Json? // _directorDecision from MGE frame loop
+  prevExitState    String? // exit_state of Scene N-1 (anchor for Scene N regen)
+
+  // Character context for regeneration
+  charactersInScene String[] // character ids/names active in this scene
+  selectedRefs      Json?    // [{ id, name, url }] — refs actually used
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions SceneVersion[]
+
+  @@index([workflowId, index])
+  @@index([workflowId, status])
+}
+
+// ─── Storywave Editor: Scene Version History ─────────────────────────────────
+model SceneVersion {
+  id      String @id @default(auto()) @map("_id") @db.ObjectId
+  version Int    // 1-based version counter
+
+  scene   Scene  @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  sceneId String @db.ObjectId
+
+  // Asset
+  assetUrl      String
+  assetPublicId String?
+  assetType     String  // "image" or "video"
+
+  // Prompt used for this version
+  prompt String
+
+  // Generation metadata
+  ratio          String? // "16:9" or "9:16"
+  generationType String? // "initial" or "regen"
+  metadata       Json?   // any extra params (model used, etc.)
+
+  createdAt DateTime @default(now())
+
+  @@index([sceneId, version])
 }
 
 model Creation {

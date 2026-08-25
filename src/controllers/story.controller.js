@@ -18,7 +18,7 @@ function generateRandomTitle(storyType = "Story") {
 export const createWorkflow = async (req, res) => {
   try {
     logger.info(`📥 Incoming POST /workflow request body size: ${JSON.stringify(req.body).length} bytes`);
-    const userId = req.user?.userId;
+    const userId = req.user?.userId || req.user?.id || req.user?._id;
 
     const {
       title,

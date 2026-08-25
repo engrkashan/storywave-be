@@ -40,10 +40,12 @@ import voiceRoutes from "./routes/voice.routes.js";
 import { runScheduledWorkflows } from "./services/workflowService.js";
 import { syncPostStatuses } from "./services/socialPublishService.js";
 import publishRoutes from "./routes/publish.routes.js";
+import editorRoutes from "./routes/editor.routes.js";
 // Start BullMQ worker in-process (REMOVED: runs in separate process now)
 
 app.use("/api/auth", authRoutes);
 app.use("/api/story", storyRoutes);
+app.use("/api/editor", editorRoutes);
 app.use("/api/overview", overviewRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/creations", creationsRoutes);
