@@ -50,24 +50,54 @@ async function ensureDir(dir) {
 }
 
 /* --------------------------------------------------
-   CHARACTER REF: Fetch remote image → base64 for Gemini multimodal
+   CHARACTER REF: Sanitizer & Remote image → base64
 -------------------------------------------------- */
+export function sanitizeBase64(str) {
+  if (!str || typeof str !== "string") return null;
+  // Remove data URI prefix if present: e.g. data:image/png;base64,
+  let clean = str.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, "").trim();
+  // Remove whitespace and newlines
+  clean = clean.replace(/[\r\n\s]+/g, "");
+  // Must be valid base64 with length > 20
+  if (!clean || clean.length < 20) return null;
+  return clean;
+}
+
 async function fetchImageAsBase64(url) {
-  // Already a base64 data URL from the frontend — parse directly
-  if (url.startsWith("data:image")) {
-    const match = url.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
-    if (match) {
-      return { mimeType: match[1], base64: match[2] };
-    }
+  if (!url || typeof url !== "string") return null;
+  const trimmed = url.trim();
+
+  // If already a data URI
+  if (trimmed.startsWith("data:image")) {
+    const mimeMatch = trimmed.match(/^data:([a-zA-Z0-9/+-]+);base64,/);
+    const mimeType = mimeMatch ? mimeMatch[1] : "image/png";
+    const base64 = sanitizeBase64(trimmed);
+    if (!base64) return null;
+    return { mimeType, base64 };
   }
-  // Cloudinary / remote URL
+
+  // If raw base64 string
+  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+    const base64 = sanitizeBase64(trimmed);
+    if (base64) {
+      return { mimeType: "image/png", base64 };
+    }
+    return null;
+  }
+
+  // Remote HTTP / HTTPS URL
   const { default: fetch } = await import("node-fetch");
-  const response = await fetch(url);
-  if (!response.ok)
-    throw new Error(`Failed to fetch character reference: ${response.statusText}`);
+  const response = await fetch(trimmed, { timeout: 15000 });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image (${response.status} ${response.statusText}): ${trimmed}`);
+  }
   const buffer = await response.buffer();
-  const mimeType = response.headers.get("content-type") || "image/jpeg";
-  return { base64: buffer.toString("base64"), mimeType };
+  if (!buffer || buffer.length === 0) {
+    throw new Error(`Empty image buffer received from: ${trimmed}`);
+  }
+  const mimeType = response.headers.get("content-type")?.split(";")[0] || "image/jpeg";
+  const base64 = buffer.toString("base64");
+  return { base64, mimeType };
 }
 
 /* --------------------------------------------------
@@ -402,8 +432,13 @@ async function callGeminiImageModel({
   // Character reference images (identity lock — always after prev-frame anchor)
   for (const inlineImg of inlineImages) {
     const charIdentifier = inlineImg.charName || inlineImg.charId || "Character";
+    const cleanData = sanitizeBase64(inlineImg.base64);
+    if (!cleanData) {
+      logger.warn(`⚠️ [${modelId}] Scene ${sceneId} — Skipping character ref for "${charIdentifier}" (invalid/empty base64)`);
+      continue;
+    }
     parts.push({ text: `\n[Reference Image for character: ${charIdentifier}]\n` });
-    parts.push({ inlineData: { mimeType: inlineImg.mimeType, data: inlineImg.base64 } });
+    parts.push({ inlineData: { mimeType: inlineImg.mimeType || "image/png", data: cleanData } });
   }
 
   if (inlineImages.length > 0) {
@@ -531,25 +566,26 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
 
   // ── Pre-fetch character reference images as base64 (fetched ONCE, never reloaded) ──
   // Resolution strategy:
-  //   1. Explicit custom override (e.g. user attached reference in scene editor) → ALWAYS injected first!
-  //   2. Tier 1 — Exact ID/Name match with sceneCharacters
-  //   3. Tier 2 — Fallback all: If characterReferences exist and matchedRefs is empty, inject all character references
-  //   4. Tier 3 — No sceneChars: inject all character references
+  //   1. Explicit custom override (e.g. user attached reference in scene editor) → MUST USE!
+  //   2. If sceneCharacters specified → only match those characters present in this scene.
+  //   3. If no sceneCharacters specified and no custom override → OPTIONAL, do NOT force-inject all cast references.
   let inlineImages = [];
   try {
     let refsToUse = [];
 
     // Check for explicit custom reference overrides (from scene editor upload/selection)
     const customRefs = (characterReferences || []).filter(
-      (r) => r && (r.isCustomOverride || r.isExplicit || r.id?.startsWith("custom_ref_") || r.id?.startsWith("char_ref_"))
+      (r) => r && (r.isCustomOverride || r.isExplicit || r.id?.startsWith?.("custom_ref_") || r.id?.startsWith?.("char_ref_"))
     );
 
     if (customRefs.length > 0) {
+      // User explicitly attached custom character reference: MUST USE!
       refsToUse = customRefs;
-      logger.info(`👤 [GenWithGemini] ${sceneId} — Using ${customRefs.length} explicit/custom character reference(s) for scene generation.`);
-    } else if (sceneCharacters && sceneCharacters.length > 0) {
+      logger.info(`👤 [GenWithGemini] ${sceneId} — MUST USE ${customRefs.length} explicit character reference(s): ${customRefs.map(r => r.name || r.id).join(", ")}`);
+    } else if (sceneCharacters && sceneCharacters.length > 0 && characterReferences.length > 0) {
+      // Scene has specific characters: only match those present in this scene
       const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      let matchedRefs = sceneCharacters
+      const matchedRefs = sceneCharacters
         .map((charItem) => {
           const charId = typeof charItem === "object" ? charItem.id || charItem.name : charItem;
           const target = norm(charId);
@@ -563,48 +599,50 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
         .filter(Boolean);
 
       // Deduplicate
-      matchedRefs = Array.from(new Set(matchedRefs));
-
-      // Fallback: if characterReferences exist and match missed, use all provided characterReferences
-      if (matchedRefs.length === 0 && characterReferences.length > 0) {
-        matchedRefs = [...characterReferences];
-        logger.info(`ℹ️ [GenWithGemini] ${sceneId} — Using all ${characterReferences.length} character reference(s) (name fuzzy match fallback).`);
+      refsToUse = Array.from(new Set(matchedRefs));
+      if (refsToUse.length > 0) {
+        logger.info(`👤 [GenWithGemini] ${sceneId} — Matched ${refsToUse.length} character reference(s) for scene cast: ${refsToUse.map(r => r.name || r.id).join(", ")}`);
+      } else {
+        logger.info(`ℹ️ [GenWithGemini] ${sceneId} — No character references matched scene characters [${sceneCharacters.join(", ")}]. Generating text-only.`);
       }
-
-      refsToUse = matchedRefs;
-    } else if (characterReferences.length > 0) {
-      // Tier 3: no sceneCharacters specified → inject all character references
-      refsToUse = [...characterReferences];
-      logger.info(`ℹ️ [GenWithGemini] ${sceneId} — No sceneCharacters specified. Injecting all ${characterReferences.length} character ref(s).`);
+    } else {
+      // No custom override and no scene characters specified -> OPTIONAL (text-only prompt)
+      refsToUse = [];
+      logger.info(`ℹ️ [GenWithGemini] ${sceneId} — Character reference is optional. Generating scene text-only.`);
     }
 
     for (const ref of refsToUse) {
       if (!ref) continue;
       try {
         if (ref.base64) {
-          inlineImages.push({
-            mimeType: ref.mimeType || "image/png",
-            base64: ref.base64,
-            charId: ref.id,
-            charName: ref.name,
-          });
-          debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url || "base64" });
+          const cleanB64 = sanitizeBase64(ref.base64);
+          if (cleanB64) {
+            inlineImages.push({
+              mimeType: ref.mimeType || "image/png",
+              base64: cleanB64,
+              charId: ref.id,
+              charName: ref.name,
+            });
+            debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url || "base64" });
+          }
         } else if (ref.url) {
           const charData = await fetchImageAsBase64(ref.url);
-          inlineImages.push({
-            mimeType: charData.mimeType,
-            base64: charData.base64,
-            charId: ref.id,
-            charName: ref.name,
-          });
-          debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url });
+          if (charData && charData.base64) {
+            inlineImages.push({
+              mimeType: charData.mimeType,
+              base64: charData.base64,
+              charId: ref.id,
+              charName: ref.name,
+            });
+            debugReport.referenceImages.push({ charId: ref.id, charName: ref.name, url: ref.url });
+          }
         }
       } catch (fetchErr) {
-        logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not fetch ref for "${ref.name || ref.id}": ${fetchErr.message}`);
+        logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not fetch/decode ref for "${ref.name || ref.id}": ${fetchErr.message}`);
       }
     }
   } catch (err) {
-    logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not fetch character reference images: ${err.message}`);
+    logger.warn(`⚠️ [GenWithGemini] ${sceneId} — Could not process character reference images: ${err.message}`);
   }
 
 

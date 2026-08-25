@@ -2,6 +2,7 @@ import { exec, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { getAudioDuration } from "./audioService.js";
+import { sanitizeBase64 } from "./imageService.js";
 import { GoogleGenAI } from "@google/genai";
 import { createLogger } from "../utils/logger.js";
 import { config } from "../config/workflow.config.js";
@@ -601,12 +602,15 @@ export async function generateVeoVideoClips(prompts, tempDir, aspectRatio = "16:
         // 3. Character likeness reference images
         for (const ref of activeReferences) {
           if (ref && ref.imageBytes) {
-            inputParts.push({
-              type: "image",
-              data: ref.imageBytes,
-              mime_type: ref.mimeType || "image/png",
-            });
-            hasMediaInput = true;
+            const cleanBytes = sanitizeBase64(ref.imageBytes);
+            if (cleanBytes) {
+              inputParts.push({
+                type: "image",
+                data: cleanBytes,
+                mime_type: ref.mimeType || "image/png",
+              });
+              hasMediaInput = true;
+            }
           }
         }
         if (activeReferences.length > 0) {

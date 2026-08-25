@@ -117,11 +117,11 @@ export async function regenerateScene({ workflowId, sceneId, prompt, characterRe
   fs.mkdirSync(regenTempDir, { recursive: true });
 
   try {
-    let characterReferences = meta.characterReferences || meta.uploadedCharacterReferences || meta._characterReferences || [];
-    
-    // If a custom character reference is attached to this request, merge it into references
+    let characterReferences = [];
     let customRef = null;
+
     if (characterReference) {
+      // 1. MUST USE: User explicitly provided/uploaded a character reference for this scene regeneration!
       customRef = typeof characterReference === "string"
         ? { id: `custom_ref_${Date.now()}`, name: "Character Ref", url: characterReference, isCustomOverride: true, isExplicit: true }
         : {
@@ -135,9 +135,36 @@ export async function regenerateScene({ workflowId, sceneId, prompt, characterRe
           };
 
       if (customRef.url || customRef.base64) {
-        // Prepend custom ref so it has highest priority
-        characterReferences = [customRef, ...characterReferences.filter(r => r.id !== customRef.id && r.url !== customRef.url)];
-        logger.info(`👤 [Regen] Attached custom character reference: ${customRef.name || customRef.id} (${customRef.url ? "URL" : "Base64"})`);
+        characterReferences = [customRef];
+        logger.info(`👤 [Regen] MUST USE attached character reference: ${customRef.name || customRef.id} (${customRef.url ? "URL" : "Base64"})`);
+      }
+    } else {
+      // 2. OPTIONAL: User did NOT attach a character reference in the scene editor modal.
+      // Do NOT force-inject all workflow cast portraits into this single scene.
+      // Only attach if this specific scene has matching characters from scene.charactersInScene.
+      const storyRefs = meta.characterReferences || meta.uploadedCharacterReferences || meta._characterReferences || [];
+      const sceneChars = Array.isArray(targetScene.charactersInScene) ? targetScene.charactersInScene : [];
+
+      if (sceneChars.length > 0 && storyRefs.length > 0) {
+        const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        const matched = storyRefs.filter((ref) => {
+          const rId = norm(ref.id);
+          const rName = norm(ref.name);
+          return sceneChars.some((sc) => {
+            const scName = norm(typeof sc === "object" ? sc.name || sc.id : sc);
+            return scName && (rId === scName || rName === scName || (scName.length > 2 && (rId.includes(scName) || rName.includes(scName))));
+          });
+        });
+        if (matched.length > 0) {
+          characterReferences = matched;
+          logger.info(`👤 [Regen] Matched ${matched.length} scene character reference(s) from story bible.`);
+        } else {
+          characterReferences = [];
+          logger.info(`ℹ️ [Regen] No matching character references for scene characters [${sceneChars.join(", ")}]. Generating text-only.`);
+        }
+      } else {
+        characterReferences = [];
+        logger.info(`ℹ️ [Regen] No character reference attached and no scene characters specified. Generating text-only.`);
       }
     }
 
