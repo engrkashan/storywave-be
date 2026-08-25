@@ -156,7 +156,7 @@ export async function regenerateScene({ workflowId, sceneId, prompt, characterRe
       const generationType = generateAsVideo ? "veo_video" : (isVideoGeneration ? "video_regen" : "regen");
 
       // Merge scene characters with custom character reference name if present
-      const sceneCharacters = customRef
+      const charactersInScene = customRef
         ? [customRef.name || customRef.id || "Character Ref", ...(sc.charactersInScene || [])]
         : (sc.charactersInScene || []);
 
