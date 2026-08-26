@@ -566,12 +566,14 @@ async function generatePromptForChunk({
   prevVisualContext,
   prevChunkText,
   prevCharactersInScene,
-  characterReferences
+  characterReferences,
+  storyGuidelines = null,
 }) {
   const charactersStr = storyBible?.characters?.map(c => `- ${c.name} (ID: ${c.id}): ${c.appearance || "Clinical neutral appearance"} | Locked Wardrobe: ${c.clothing || c.base_clothing || "Default cinematic attire"}`).join('\n') || "None";
   const locationsStr = storyBible?.locations?.map(l => `- ${l.name}: ${l.description}`).join('\n') || "None";
   const artStyle = storyBible?.artStyle || "Cinematic photorealistic film still, 8K detail, hyper-realistic, volumetric lighting.";
   const synopsis = storyBible?.synopsis ? `STORY SYNOPSIS:\n${storyBible.synopsis}\n` : "";
+  const guidelinesBlock = storyGuidelines ? `\nDIRECTORIAL & VISUAL GUIDELINES (Follow Strictly!):\n${storyGuidelines}\n` : "";
 
   const prompt = `You are an elite cinematic film director, visual storyteller, and master prompt engineer.
 Your objective is to visualize the complete story as a continuous, realistic movie step by step. You are generating the visual prompt for keyframe beat ${chunkIndex + 1} in the sequence.
@@ -589,7 +591,7 @@ ${locationsStr}
 CINEMATIC ART STYLE & LIGHTING DIRECTION:
 ${artStyle}
 ${visualSuggestions || ""}
-
+${guidelinesBlock}
 PREVIOUS SCENE CONTEXT (For Sequential Visual Continuity):
 Previous Narration: "${prevChunkText || "None"}"
 Previous Characters Present: ${prevCharactersInScene?.length > 0 ? prevCharactersInScene.join(", ") : "None"}
@@ -648,6 +650,7 @@ async function generateBatchScenePrompts({
   storyBible,
   visualSuggestions,
   characterReferences,
+  storyGuidelines = null,
 }) {
   logger.info(`⚡ [Strategy 2 Batched Engine] Generating ${segments.length} scene prompts in 1 batched API call...`);
 
@@ -655,6 +658,7 @@ async function generateBatchScenePrompts({
   const castGuide = storyBible?.characters
     ? JSON.stringify(storyBible.characters, null, 2)
     : "No cast guide provided.";
+  const guidelinesBlock = storyGuidelines ? `DIRECTORIAL & VISUAL GUIDELINES (Follow Strictly!):\n${storyGuidelines}\n` : "";
 
   const segmentsFormatted = segments
     .map((seg, idx) => `BEAT ${idx + 1} (Start: ${seg.startSec}s, End: ${seg.endSec}s):\n"${seg.text}"`)
@@ -665,7 +669,7 @@ Generate standalone cinematic keyframe image prompts for ALL ${segments.length} 
 
 ART STYLE / VISUAL THEME: ${artStyle}
 VISUAL SUGGESTIONS: ${visualSuggestions || "None"}
-
+${guidelinesBlock}
 MATERIALIZED CAST GUIDE (CHARACTER IDENTITY & WARDROBE LOCK):
 ${castGuide}
 
@@ -721,7 +725,7 @@ Return STRICT valid JSON in this exact structure:
  * Converts exact Whisper voiceover chunks into standalone image prompts
  * analyzing each chunk individually using the global movie guide.
  */
-export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null, referenceTraits = null, characterReferences = []) {
+export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null, referenceTraits = null, characterReferences = [], storyGuidelines = null) {
   logger.info(`🎬 [Chunk-based Engine] generateScenePrompts — ${count} frames requested`);
 
   let segments = narrationSegments;
@@ -742,6 +746,7 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
     storyBible,
     visualSuggestions,
     characterReferences,
+    storyGuidelines,
   });
 
   if (batchedPrompts && batchedPrompts.length === segments.length) {
@@ -767,6 +772,7 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
       prevChunkText,
       prevCharactersInScene,
       characterReferences,
+      storyGuidelines,
     });
 
     scenePrompts.push({

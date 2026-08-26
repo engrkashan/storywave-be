@@ -51,6 +51,7 @@ export const createWorkflow = async (req, res) => {
       characterReferences: userCharacterReferences,
       autoPublish,
       autoPublishDelayMinutes,
+      useStoryGuidelinesOnlyForPrompts,
     } = req.body;
 
     if (!userId) {
@@ -107,6 +108,7 @@ export const createWorkflow = async (req, res) => {
             : null,
           autoPublish,
           autoPublishDelayMinutes,
+          useStoryGuidelinesOnlyForPrompts: useStoryGuidelinesOnlyForPrompts ?? undefined,
         },
       },
     });
@@ -156,6 +158,7 @@ export const createWorkflow = async (req, res) => {
         : null,
       autoPublish,
       autoPublishDelayMinutes,
+      useStoryGuidelinesOnlyForPrompts: useStoryGuidelinesOnlyForPrompts ?? undefined,
     };
 
     const job = await addWorkflowJob(workflowPayload);
