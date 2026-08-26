@@ -17,7 +17,7 @@ import {
 import { transcribeWithTimestamps } from "./transcribeService.js";
 import { getAudioDuration, convertToWav, mixAudioFiles, mixCinematicSoundscape } from "./audioService.js";
 import { analyzeNarrativeAndPlanSoundscape, buildSoundscapeAssets } from "./soundDirectorService.js";
-import { buildMasterTimeline, saveMasterTimeline, buildNarrationSegments, buildSubtitleGroups, intelligentVideoScriptChunker } from "./timelineService.js";
+import { buildMasterTimeline, saveMasterTimeline, buildNarrationSegments, buildSubtitleGroups, intelligentVideoScriptChunker, secToMs, msToSec } from "./timelineService.js";
 import {
   createVideo,
   createVideoWithTimeline,
@@ -1347,16 +1347,31 @@ async function _runWorkflow({
             });
             scenePrompts = videoPlanResult.scenePrompts;
             if (videoPlanResult.plannedScenes && videoPlanResult.plannedScenes.length > 0) {
-              masterTimeline.scenes = videoPlanResult.plannedScenes.map((sc) => ({
-                sceneIndex: sc.index,
-                startSec: sc.startSec,
-                endSec: sc.endSec,
-                durationSec: sc.durationSec,
-                text: sc.narration || "",
-              }));
+              masterTimeline.scenes = videoPlanResult.plannedScenes.map((sc, sIdx) => {
+                const startMs = sc.startMs !== undefined ? sc.startMs : secToMs(sc.startSec);
+                const endMs = sc.endMs !== undefined ? sc.endMs : secToMs(sc.endSec);
+                const durationMs = sc.durationMs !== undefined ? sc.durationMs : (endMs - startMs);
+                return {
+                  index: sc.index !== undefined ? sc.index : sIdx,
+                  sceneIndex: sc.index !== undefined ? sc.index : sIdx,
+                  sceneId: `scene_${String((sc.index !== undefined ? sc.index : sIdx) + 1).padStart(3, "0")}`,
+                  startMs,
+                  endMs,
+                  durationMs,
+                  startSec: msToSec(startMs),
+                  endSec: msToSec(endMs),
+                  durationSec: msToSec(durationMs),
+                  audioStartMs: startMs,
+                  audioEndMs: endMs,
+                  subtitleStartMs: startMs,
+                  subtitleEndMs: endMs,
+                  text: sc.narration || "",
+                };
+              });
               masterTimeline.actualSceneCount = masterTimeline.scenes.length;
               if (videoPlanResult.totalDuration > 0) {
                 masterTimeline.totalDuration = videoPlanResult.totalDuration;
+                masterTimeline.totalDurationMs = secToMs(videoPlanResult.totalDuration);
                 actualAudioDuration = videoPlanResult.totalDuration;
               }
               const timelinePath = path.join(workflowTempDir, "timeline.json");

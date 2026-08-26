@@ -102,11 +102,25 @@ export async function planDedicatedVideoPipeline(script, storyBible = {}, option
     const endSec = b.timing?.endSec !== undefined ? b.timing.endSec : startSec + durationSec;
     totalDuration = Math.max(totalDuration, endSec);
 
+    const startMs = Math.round(startSec * 1000);
+    const endMs = Math.round(endSec * 1000);
+    const durationMs = endMs - startMs;
+
     return {
       index: idx,
+      sceneIndex: idx,
+      sceneId: `scene_${String(idx + 1).padStart(3, "0")}`,
       startSec,
       endSec,
       durationSec,
+      startMs,
+      endMs,
+      durationMs,
+      audioStartMs: startMs,
+      audioEndMs: endMs,
+      subtitleStartMs: startMs,
+      subtitleEndMs: endMs,
+      narration: b.narrative || "",
     };
   });
 

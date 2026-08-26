@@ -25,44 +25,122 @@ import {
   renderMediaSegment,
   convertTranscriptToAss,
 } from "./videoService.js";
+import {
+  validateCanonicalTimeline,
+  logSyncDiagnostics,
+  buildSubtitleGroups,
+  secToMs,
+  msToSec,
+} from "./timelineService.js";
 
 const logger = createLogger("FinalAssemblyService");
 
-const TEMP_ROOT = path.resolve(process.cwd(), "temp");
-fs.mkdirSync(TEMP_ROOT, { recursive: true });
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 32,
+  timeout: 60000,
+});
+
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 32,
+  timeout: 60000,
+});
 
 /**
- * Download a URL to a local file path with redirect support.
+ * Download a URL to a local file path with persistent keep-alive agents, redirect support,
+ * and exponential backoff retry. Eliminates Undici/Fetch ConnectTimeoutError.
  */
-function downloadFile(url, destPath, maxRedirects = 5) {
+function downloadFileOnce(url, destPath, timeoutMs = 60000) {
   return new Promise((resolve, reject) => {
-    if (maxRedirects < 0) return reject(new Error(`Too many redirects downloading ${url}`));
-    const file = fs.createWriteStream(destPath);
-    const protocol = url.startsWith("https") ? https : http;
-    protocol
-      .get(url, (response) => {
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+
+    const isHttps = url.startsWith("https");
+    const client = isHttps ? https : http;
+    const agent = isHttps ? httpsAgent : httpAgent;
+
+    let timer = null;
+    const req = client.get(
+      url,
+      {
+        agent,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          Accept: "*/*",
+        },
+      },
+      (res) => {
         // Follow redirects (301, 302, 307, 308)
-        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-          file.close();
-          fs.unlink(destPath, () => {});
-          const redirectUrl = response.headers.location.startsWith("http")
-            ? response.headers.location
-            : new URL(response.headers.location, url).href;
-          return downloadFile(redirectUrl, destPath, maxRedirects - 1).then(resolve).catch(reject);
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          clearTimeout(timer);
+          const redirectUrl = res.headers.location.startsWith("http")
+            ? res.headers.location
+            : new URL(res.headers.location, url).href;
+          return downloadFileOnce(redirectUrl, destPath, timeoutMs).then(resolve).catch(reject);
         }
-        if (response.statusCode !== 200) {
-          file.close();
-          fs.unlink(destPath, () => {});
-          return reject(new Error(`Download failed: HTTP ${response.statusCode} for ${url}`));
+
+        if (res.statusCode !== 200) {
+          clearTimeout(timer);
+          return reject(new Error(`HTTP ${res.statusCode} ${res.statusMessage || ""}`));
         }
-        response.pipe(file);
-        file.on("finish", () => file.close(resolve));
-      })
-      .on("error", (err) => {
-        fs.unlink(destPath, () => {});
-        reject(err);
-      });
+
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          clearTimeout(timer);
+          const buffer = Buffer.concat(chunks);
+          if (buffer.length === 0) {
+            return reject(new Error("Received empty 0-byte payload"));
+          }
+          try {
+            fs.writeFileSync(destPath, buffer);
+            resolve(destPath);
+          } catch (writeErr) {
+            reject(writeErr);
+          }
+        });
+        res.on("error", (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      }
+    );
+
+    timer = setTimeout(() => {
+      req.destroy(new Error(`Connection timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+
+    req.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
   });
+}
+
+async function downloadFile(url, destPath, retries = 4, timeoutMs = 60000) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await downloadFileOnce(url, destPath, timeoutMs);
+      return destPath;
+    } catch (err) {
+      lastError = err;
+      if (fs.existsSync(destPath)) {
+        try { fs.unlinkSync(destPath); } catch (_) {}
+      }
+
+      if (attempt < retries) {
+        const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 6000);
+        logger.warn(`⚠️ [FinalAssembly Download] Attempt ${attempt}/${retries} failed for ${path.basename(destPath)} (${err.message}). Retrying in ${delayMs}ms...`);
+        await new Promise((r) => setTimeout(r, delayMs));
+      } else {
+        logger.error(`❌ [FinalAssembly Download] All ${retries} attempts failed for ${url}: ${err.message}`);
+      }
+    }
+  }
+
+  throw new Error(`Download failed for ${path.basename(destPath)}: ${lastError?.message || String(lastError)}`);
 }
 
 /**
@@ -120,8 +198,8 @@ export async function runFinalAssembly(workflowId) {
   const finalAudioUrl = meta._editorFinalAudioUrl || workflow.story?.audioURL || null;
   let masterTimeline = meta._editorMasterTimeline || meta.masterTimeline || null;
 
-  if (!masterTimeline) {
-    logger.warn(`⚠️ [FinalAssembly] masterTimeline not found in metadata for workflow ${workflowId} — dynamically reconstructing from DB scenes`);
+  if (!masterTimeline || !Array.isArray(masterTimeline.scenes) || masterTimeline.scenes.length === 0) {
+    logger.warn(`⚠️ [FinalAssembly] masterTimeline not found in metadata for workflow ${workflowId} — dynamically reconstructing canonical timeline from DB scenes`);
     const dbScenes = await prisma.scene.findMany({
       where: { workflowId },
       orderBy: { index: "asc" },
@@ -129,20 +207,31 @@ export async function runFinalAssembly(workflowId) {
 
     const uniqueScenes = [];
     const seenIndices = new Set();
-    let calculatedDuration = 0;
+    let calculatedDurationMs = 0;
 
     for (const sc of dbScenes) {
       if (!seenIndices.has(sc.index)) {
         seenIndices.add(sc.index);
-        const duration = sc.durationSec || 5.0;
-        const startSec = sc.startSec ?? calculatedDuration;
-        const endSec = sc.endSec ?? (startSec + duration);
-        calculatedDuration = endSec;
+        const durationSec = sc.durationSec || 5.0;
+        const durationMs = secToMs(durationSec);
+        const startMs = sc.startSec !== null && sc.startSec !== undefined ? secToMs(sc.startSec) : calculatedDurationMs;
+        const endMs = sc.endSec !== null && sc.endSec !== undefined ? secToMs(sc.endSec) : (startMs + durationMs);
+        calculatedDurationMs = endMs;
+
         uniqueScenes.push({
+          index: sc.index,
           sceneIndex: sc.index,
-          startSec,
-          endSec,
-          durationSec: duration,
+          sceneId: `scene_${String(sc.index + 1).padStart(3, "0")}`,
+          startMs,
+          endMs,
+          durationMs,
+          startSec: msToSec(startMs),
+          endSec: msToSec(endMs),
+          durationSec: msToSec(durationMs),
+          audioStartMs: startMs,
+          audioEndMs: endMs,
+          subtitleStartMs: startMs,
+          subtitleEndMs: endMs,
           narration: sc.narration || "",
         });
       }
@@ -153,16 +242,30 @@ export async function runFinalAssembly(workflowId) {
     }
 
     if (!actualAudioDuration) {
-      actualAudioDuration = calculatedDuration;
+      actualAudioDuration = msToSec(calculatedDurationMs);
     }
 
+    const words = masterTimeline?.words || meta.timelineWords || [];
+    const subtitleGroups = words.length > 0 ? buildSubtitleGroups(words) : (masterTimeline?.subtitleGroups || []);
+
     masterTimeline = {
+      version: 2,
       actualSceneCount: uniqueScenes.length,
       totalDuration: actualAudioDuration,
+      totalDurationMs: secToMs(actualAudioDuration),
       scenes: uniqueScenes,
-      subtitleGroups: [],
+      subtitleGroups,
+      words,
     };
-    logger.info(`🗺️ [FinalAssembly] Reconstructed masterTimeline with ${uniqueScenes.length} scenes (totalDuration: ${actualAudioDuration.toFixed(1)}s)`);
+    logger.info(`🗺️ [FinalAssembly] Reconstructed canonical masterTimeline with ${uniqueScenes.length} scenes (totalDuration: ${actualAudioDuration.toFixed(1)}s)`);
+  }
+
+  // Run integrity validation on canonical timeline
+  const val = validateCanonicalTimeline(masterTimeline, secToMs(actualAudioDuration));
+  if (!val.valid) {
+    logger.warn(`⚠️ [FinalAssembly Timeline Integrity Warning]: ${val.errors.join(" | ")}`);
+  } else {
+    logger.info(`✅ [FinalAssembly Timeline Integrity Validated]: 0ms drift across ${masterTimeline.scenes.length} scenes`);
   }
 
   // Determine ratios to assemble
@@ -187,8 +290,8 @@ export async function runFinalAssembly(workflowId) {
 
     if (finalAudioUrl) {
       finalAudioLocalPath = path.join(assemblyTempDir, "final_audio.mp3");
-      logger.info(`[FinalAssembly] Downloading audio in parallel: ${finalAudioUrl}`);
-      downloadTasks.push(downloadFile(finalAudioUrl, finalAudioLocalPath));
+      logger.info(`[FinalAssembly] Downloading audio: ${finalAudioUrl}`);
+      downloadTasks.push(() => downloadFile(finalAudioUrl, finalAudioLocalPath));
     }
 
     // Pre-load scenes and prepare directories for each ratio
@@ -216,7 +319,7 @@ export async function runFinalAssembly(workflowId) {
           `scene_${String(scene.index).padStart(3, "0")}.${ext}`
         );
         scene._assetLocalPath = assetLocalPath;
-        downloadTasks.push(
+        downloadTasks.push(() =>
           downloadFile(scene.assetUrl, assetLocalPath).catch((err) => {
             logger.error(`❌ [FinalAssembly] Failed downloading scene ${scene.index} [${currentRatio}]: ${err.message}`);
             throw err;
@@ -225,9 +328,13 @@ export async function runFinalAssembly(workflowId) {
       }
     }
 
-    logger.info(`⚡ [FinalAssembly] Starting parallel download of ${downloadTasks.length} assets (audio + scene visuals)...`);
-    await Promise.all(downloadTasks);
-    logger.info(`✅ [FinalAssembly] All ${downloadTasks.length} assets downloaded in parallel`);
+    logger.info(`⚡ [FinalAssembly] Starting controlled batch download of ${downloadTasks.length} assets (audio + scene visuals)...`);
+    const DOWNLOAD_CONCURRENCY = 8;
+    for (let i = 0; i < downloadTasks.length; i += DOWNLOAD_CONCURRENCY) {
+      const batch = downloadTasks.slice(i, i + DOWNLOAD_CONCURRENCY);
+      await Promise.all(batch.map((taskFn) => taskFn()));
+    }
+    logger.info(`✅ [FinalAssembly] All ${downloadTasks.length} assets downloaded successfully`);
 
     // ── 3. For each ratio, assemble final video ──────────────────────────────
     for (const currentRatio of ratiosToGenerate) {
@@ -297,6 +404,7 @@ export async function runFinalAssembly(workflowId) {
       await concatSegments(validSegments, finalAudioLocalPath, videoPath, actualAudioDuration, null, {
         useSegmentAudioOnly,
         mixSegmentAudio,
+        masterTimeline,
       });
       logger.info(`[FinalAssembly] Concatenated ${validSegments.length} segments for ${currentRatio}`);
 

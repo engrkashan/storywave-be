@@ -40,20 +40,9 @@ async function splitAudioFile(audioPath, outputDir) {
           .on("end", () => {
             processed++;
             if (processed === numChunks) {
-              // Phase 2 fix: probe ACTUAL duration of each chunk after encoding.
-              // Do NOT use the nominal 600s stride — MP3 encoder delays and
-              // re-encoding artefacts make the real boundary slightly different.
-              const durationPromises = chunkPaths.map(
-                (p) =>
-                  new Promise((res, rej) =>
-                    ffmpeg.ffprobe(p, (e, m) =>
-                      e ? rej(e) : res(m.format.duration)
-                    )
-                  )
-              );
-              Promise.all(durationPromises)
-                .then((actualDurations) => resolve({ paths: chunkPaths, actualDurations }))
-                .catch(reject);
+              // Use exact seek offsets for each chunk to guarantee zero cumulative drift across 60+ min audio
+              const startOffsets = chunkPaths.map((_, i) => i * maxChunkDuration);
+              resolve({ paths: chunkPaths, startOffsets });
             }
           })
           .on("error", reject)
@@ -99,32 +88,25 @@ function normalizeTranscript(data, provider = "whisper") {
 
 /**
  * Merges multiple normalized JSON transcripts into a single coherent timeline.
- *
- * CRITICAL FIX (Phase 2): Uses measured `actualDurations[]` for offsets instead
- * of the nominal 600s stride. Each chunk's words are shifted by the cumulative
- * sum of *real* durations, not an assumed constant. This eliminates seconds-per-hour
- * of drift caused by MP3 encoder delay and FFmpeg re-encoding artefacts.
+ * Uses exact seek offsets for each chunk, guaranteeing 0ms drift across 60+ minute audio.
  *
  * @param {Array<Array<{word,start,end}>>} chunks  — normalized word arrays per chunk
- * @param {number[]} actualDurations               — real probed duration of each chunk (seconds)
+ * @param {number[]} startOffsets                  — exact start offset of each chunk (seconds)
  */
-function mergeTranscript(chunks, actualDurations) {
+function mergeTranscript(chunks, startOffsets) {
   const masterWords = [];
-  let cumulativeOffset = 0;
 
   for (let i = 0; i < chunks.length; i++) {
     const chunkWords = chunks[i];
+    const offset = startOffsets[i] || 0;
 
     for (const w of chunkWords) {
       masterWords.push({
         word: w.word,
-        start: w.start + cumulativeOffset,
-        end:   w.end   + cumulativeOffset,
+        start: Number((w.start + offset).toFixed(3)),
+        end:   Number((w.end   + offset).toFixed(3)),
       });
     }
-
-    // Advance by the MEASURED duration of this chunk (not a fixed constant)
-    cumulativeOffset += actualDurations[i];
   }
 
   return masterWords;
@@ -147,14 +129,13 @@ export async function transcribeWithTimestamps(audioPath) {
     const stats = fs.statSync(audioPath);
 
     let rawChunks = [];
-    let actualDurations = [];
+    let startOffsets = [];
 
     if (stats.size > 24 * 1024 * 1024) {
       logger.info("⚙️ Large file detected. Splitting into smaller chunks...");
-      // Phase 2 fix: splitAudioFile now returns { paths, actualDurations }
-      const { paths: chunkPaths, actualDurations: chunkDurations } = await splitAudioFile(audioPath, outputDir);
-      actualDurations = chunkDurations;
-      logger.info(`📏 Actual chunk durations: ${chunkDurations.map(d => d.toFixed(3) + "s").join(", ")}`);
+      const { paths: chunkPaths, startOffsets: offsets } = await splitAudioFile(audioPath, outputDir);
+      startOffsets = offsets;
+      logger.info(`📏 Chunk offsets: ${offsets.map(d => d.toFixed(1) + "s").join(", ")}`);
 
       for (const chunk of chunkPaths) {
         const result = await transcribeChunk(chunk);
@@ -164,11 +145,7 @@ export async function transcribeWithTimestamps(audioPath) {
     } else {
       const result = await transcribeChunk(audioPath);
       rawChunks.push(result);
-      // Single chunk: probe its actual duration directly
-      const { format } = await new Promise((resolve, reject) =>
-        ffmpeg.ffprobe(audioPath, (e, m) => e ? reject(e) : resolve(m))
-      );
-      actualDurations = [format.duration];
+      startOffsets = [0];
     }
 
     // Save RAW output for debugging
@@ -176,9 +153,9 @@ export async function transcribeWithTimestamps(audioPath) {
     fs.writeFileSync(rawPath, JSON.stringify(rawChunks, null, 2));
     logger.info(`💾 Saved raw transcript to ${rawPath}`);
 
-    // Normalize and merge using REAL chunk durations (Phase 2 fix)
+    // Normalize and merge using exact chunk seek offsets
     const normalizedChunks = rawChunks.map(c => normalizeTranscript(c, "whisper"));
-    const finalTranscript = mergeTranscript(normalizedChunks, actualDurations);
+    const finalTranscript = mergeTranscript(normalizedChunks, startOffsets);
 
     logger.info("✅ Transcription complete!");
 

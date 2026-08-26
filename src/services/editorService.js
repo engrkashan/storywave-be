@@ -176,8 +176,9 @@ export async function updateScenePrompt({ workflowId, sceneId, prompt, userId })
     throw new Error("Scene not found or unauthorized");
   }
 
-  if (scene.workflow.status !== "USER_CONFIRMATION_REQUIRED") {
-    throw new Error("Workflow is not currently in review state");
+  const ALLOWED_EDIT_STATUSES = ["USER_CONFIRMATION_REQUIRED", "COMPLETED", "FAILED"];
+  if (!ALLOWED_EDIT_STATUSES.includes(scene.workflow.status)) {
+    throw new Error(`Workflow is in '${scene.workflow.status}' state — editing not permitted while actively processing`);
   }
 
   // Update this scene and its paired dual ratio scene if applicable
@@ -258,8 +259,9 @@ export async function replaceSceneFrame({ workflowId, sceneId, file, imageUrl, i
     throw new Error("Scene not found or unauthorized");
   }
 
-  if (scene.workflow.status !== "USER_CONFIRMATION_REQUIRED") {
-    throw new Error("Workflow is not currently in review state");
+  const ALLOWED_EDIT_STATUSES = ["USER_CONFIRMATION_REQUIRED", "COMPLETED", "FAILED"];
+  if (!ALLOWED_EDIT_STATUSES.includes(scene.workflow.status)) {
+    throw new Error(`Workflow is in '${scene.workflow.status}' state — frame replacement not permitted while actively processing`);
   }
 
   let finalImageUrl = imageUrl;
@@ -428,8 +430,9 @@ export async function requestSceneRegen({ workflowId, sceneId, prompt, character
     throw new Error("Scene not found or unauthorized");
   }
 
-  if (scene.workflow.status !== "USER_CONFIRMATION_REQUIRED") {
-    throw new Error("Workflow is not currently in review state");
+  const ALLOWED_EDIT_STATUSES = ["USER_CONFIRMATION_REQUIRED", "COMPLETED", "FAILED"];
+  if (!ALLOWED_EDIT_STATUSES.includes(scene.workflow.status)) {
+    throw new Error(`Workflow is in '${scene.workflow.status}' state — regeneration not permitted while actively processing`);
   }
 
   if (scene.status === "REGENERATING") {
@@ -495,8 +498,9 @@ export async function validateMergeEligibility({ workflowId, userId }) {
     return { eligible: false, reason: "Workflow not found or unauthorized" };
   }
 
-  if (workflow.status !== "USER_CONFIRMATION_REQUIRED") {
-    return { eligible: false, reason: `Workflow status is '${workflow.status}', expected 'USER_CONFIRMATION_REQUIRED'` };
+  const ALLOWED_MERGE_STATUSES = ["USER_CONFIRMATION_REQUIRED", "COMPLETED", "FAILED"];
+  if (!ALLOWED_MERGE_STATUSES.includes(workflow.status)) {
+    return { eligible: false, reason: `Workflow status is '${workflow.status}', expected one of: ${ALLOWED_MERGE_STATUSES.join(", ")}` };
   }
 
   if (!workflow.scenes || workflow.scenes.length === 0) {

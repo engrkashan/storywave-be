@@ -8,7 +8,7 @@ import { createLogger } from "../utils/logger.js";
 import { config } from "../config/workflow.config.js";
 import { enqueueRender, enqueueSegmentRender } from "../utils/renderQueue.js";
 import { getPerfSession } from "../utils/perfLogger.js";
-import { buildSubtitleGroups } from "./timelineService.js";
+import { buildSubtitleGroups, msToAssTime, secToMs, msToSec, logSyncDiagnostics } from "./timelineService.js";
 import { validateClipSpeech } from "./videoPlanner/speechValidator.js";
 
 const logger = createLogger("VideoService");
@@ -262,7 +262,14 @@ export function convertTranscriptToAss(transcriptSourceOrPath, assPath, aspectRa
   // ── NEW PATH: Timeline object ─────────────────────────────────────────────
   if (transcriptSourceOrPath && typeof transcriptSourceOrPath === "object" && transcriptSourceOrPath.subtitleGroups) {
     const timeline = transcriptSourceOrPath;
-    const scene = sceneIndexOrStartTime !== null ? timeline.scenes[sceneIndexOrStartTime] : null;
+    let scene = null;
+    if (sceneIndexOrStartTime !== null && Array.isArray(timeline.scenes)) {
+      if (typeof sceneIndexOrStartTime === "number") {
+        scene = timeline.scenes.find((s, idx) => s.index === sceneIndexOrStartTime || s.sceneIndex === sceneIndexOrStartTime || idx === sceneIndexOrStartTime) || timeline.scenes[sceneIndexOrStartTime] || null;
+      } else if (typeof sceneIndexOrStartTime === "object") {
+        scene = sceneIndexOrStartTime;
+      }
+    }
     const dialogues = _assDialoguesFromTimeline(timeline.subtitleGroups, scene, posX, posY);
     fs.writeFileSync(assPath, header + dialogues);
     stopTimer?.();
@@ -302,33 +309,37 @@ function parseJsonToAss(words, posX, posY, startTime, duration) {
   const durationSec = duration !== null ? duration : Infinity;
   return _assDialoguesFromTimeline(groups, { startSec: startTime, endSec: startTime + durationSec }, posX, posY);
 }
+
 /**
  * Build ASS dialogue lines from pre-computed timeline subtitle groups.
- * Groups are already in absolute time — just filter the scene window
- * and rebase by subtracting scene.startSec.
+ * Uses exact integer milliseconds to eliminate cumulative floating-point drift.
  *
- * @param {Array<{start,end,text}>} groups  — from timeline.subtitleGroups
- * @param {{startSec,endSec,durationSec}|null} scene — null = use all (single image)
+ * @param {Array<{start,end,startMs,endMs,text}>} groups  — from timeline.subtitleGroups
+ * @param {{startSec,endSec,durationSec,startMs,endMs,durationMs}|null} scene — null = use all (single image)
  * @param {number} posX
  * @param {number} posY
  * @returns {string} ASS dialogue lines
  */
 function _assDialoguesFromTimeline(groups, scene, posX, posY) {
   let dialogues = "";
-  const startSec = scene ? scene.startSec : 0;
-  const endSec = scene ? scene.endSec : Infinity;
+  const startMs = scene ? (scene.startMs !== undefined ? scene.startMs : secToMs(scene.startSec)) : 0;
+  const endMs = scene ? (scene.endMs !== undefined ? scene.endMs : secToMs(scene.endSec)) : Infinity;
+  const durationMs = scene ? (scene.durationMs !== undefined ? scene.durationMs : (endMs - startMs)) : Infinity;
 
   for (const g of groups) {
+    const gStartMs = g.startMs !== undefined ? g.startMs : secToMs(g.start);
+    const gEndMs = g.endMs !== undefined ? g.endMs : secToMs(g.end);
+
     // Include group if it overlaps the scene window
-    if (g.end <= startSec || g.start >= endSec) continue;
+    if (gEndMs <= startMs || gStartMs >= endMs) continue;
 
-    // Rebase to segment-local time
-    const s = Math.max(0, g.start - startSec);
-    const e = Math.min(scene ? scene.durationSec : g.end, g.end - startSec);
+    // Rebase to segment-local millisecond time
+    const localStartMs = Math.max(0, gStartMs - startMs);
+    const localEndMs = Math.min(durationMs, gEndMs - startMs);
 
-    if (e <= s) continue;
+    if (localEndMs <= localStartMs) continue;
 
-    dialogues += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${g.text}\n`;
+    dialogues += `Dialogue: 0,${msToAssTime(localStartMs)},${msToAssTime(localEndMs)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${g.text}\n`;
   }
 
   return dialogues;
@@ -741,32 +752,32 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
   // Subtitle filter — applied in the segment pass so the merge only needs copy
   const subFilter = escapedAssPath ? `,subtitles='${escapedAssPath}'` : "";
 
-  // SYNC FIX (A2): trim every segment to EXACTLY `duration` seconds so that the
-  // sum of rendered segment durations equals the audio duration with no
-  // accumulation of frame-rounding error. zoompan uses d=ceil(duration*FPS)
-  // which can emit one extra frame; the trim+setpts forces the output length to
-  // the requested duration so concatSegments (concat demuxer) lands precisely on
-  // the audio timeline instead of drifting toward the tail of the video.
-  const exactDuration = Number(duration).toFixed(3);
+  // CANONICAL SYNC FIX: Enforce exact millisecond duration and pad video clips that are
+  // shorter than the scene duration slot using tpad (cloning the last frame) so visual,
+  // audio, and subtitles never drift across scenes.
+  const durationMs = secToMs(duration);
+  const exactDuration = (durationMs / 1000).toFixed(3);
   const trimFilter = `,trim=duration=${exactDuration},setpts=PTS-STARTPTS`;
 
   let args;
   if (isVideo) {
+    // If the video clip is shorter than the scene slot, tpad clones the last frame.
+    // trim then cleanly cuts at exactDuration.
+    const padDuration = Math.max(2, Math.ceil(Number(duration)) + 5);
+    const videoFilter = `${commonScale},fps=30,tpad=stop_mode=clone:stop_duration=${padDuration}${trimFilter}${subFilter}`;
+
     args = [
       "-y", "-loglevel", "error",
       "-threads", String(config.workflow.ffmpegThreads),
       "-i", itemPath,
-      "-map", "0:v",
-      "-map", "0:a?",
-      "-vf", `${commonScale},fps=30${trimFilter}${subFilter}`,
-      "-af", "aresample=async=1",
-      "-t", String(duration),
+      "-vf", videoFilter,
+      "-t", String(exactDuration),
+      "-an", // Strip audio so ALL segments have identical 1-video, 0-audio stream signatures
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-b:a", "192k",
       outputPath
     ];
   } else {
-    const totalFrames = Math.ceil(duration * FPS);
+    const totalFrames = Math.max(1, Math.round((durationMs / 1000) * FPS));
     const cycleFrames = ZOOM_CYCLE_SECONDS * FPS; // fixed 12s cycle (6s in, 6s out)
     const center = (1 + MAX_ZOOM_LEVEL) / 2;
     const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
@@ -787,7 +798,8 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
       "-threads", String(config.workflow.ffmpegThreads),
       "-i", itemPath,
       "-vf", filter,
-      "-t", String(duration),
+      "-t", String(exactDuration),
+      "-an", // Strip audio so ALL segments have identical 1-video, 0-audio stream signatures
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
       outputPath
     ];
@@ -931,6 +943,10 @@ export async function concatSegments(segmentFiles, audioPath, outputPath, audioD
         logger.warn(`⚠️ [SyncVerify] Final video duration ${finalDur?.toFixed(3)}s vs audio ${audioDuration?.toFixed(3)}s (Δ=${delta.toFixed(3)}s) over ${segmentFiles.length} segments.`);
       } else {
         logger.info(`✅ [SyncVerify] Final video duration ${finalDur?.toFixed(3)}s matches audio ${audioDuration?.toFixed(3)}s across ${segmentFiles.length} segments.`);
+      }
+
+      if (options.masterTimeline) {
+        logSyncDiagnostics(options.masterTimeline, [], (finalDur || 0) * 1000, (audioDuration || 0) * 1000);
       }
     } catch (probeErr) {
       logger.warn(`⚠️ [SyncVerify] Could not probe final duration: ${probeErr.message}`);

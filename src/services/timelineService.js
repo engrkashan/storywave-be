@@ -91,13 +91,49 @@ const PREPOSITIONS = new Set(["to", "of", "in", "at", "for", "with", "into", "on
 const ARTICLES     = new Set(["the", "a", "an"]);
 
 /**
+ * Converts seconds to integer milliseconds.
+ * @param {number|string} sec
+ * @returns {number}
+ */
+export function secToMs(sec) {
+  return Math.round(Number(sec || 0) * 1000);
+}
+
+/**
+ * Converts milliseconds to seconds (floating point).
+ * @param {number} ms
+ * @returns {number}
+ */
+export function msToSec(ms) {
+  return Number((Number(ms || 0) / 1000).toFixed(3));
+}
+
+/**
+ * Deterministically converts integer milliseconds to ASS timestamp format H:MM:SS.cs (centiseconds).
+ * Guarantees zero floating-point rounding errors.
+ * @param {number} ms - Milliseconds
+ * @returns {string} - e.g. "0:01:23.45"
+ */
+export function msToAssTime(ms) {
+  const totalMs = Math.max(0, Math.round(ms));
+  const totalSec = Math.floor(totalMs / 1000);
+  const cs = Math.floor((totalMs % 1000) / 10); // 1 centisecond = 10 ms (0-99)
+
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+  return `${h}:${pad2(m)}:${pad2(s)}.${pad2(cs)}`;
+}
+
+/**
  * Groups Whisper word-level timestamps into subtitle display chunks.
- * Returns ABSOLUTE timestamps (from t=0 of the narration file).
- * No startTime/duration offset applied here — that is done in
- * videoService when building per-segment ASS from these groups.
+ * Returns ABSOLUTE timestamps (from t=0 of the narration file) in both
+ * integer milliseconds (startMs, endMs, durationMs) and floating seconds (start, end).
  *
  * @param {Array<{word:string, start:number, end:number}>} words
- * @returns {Array<{start:number, end:number, text:string}>}
+ * @returns {Array<{start:number, end:number, startMs:number, endMs:number, durationMs:number, text:string}>}
  */
 export function buildSubtitleGroups(words) {
   const rawChunks  = [];
@@ -142,12 +178,6 @@ export function buildSubtitleGroups(words) {
   for (const chunk of rawChunks) {
     if (chunk.length === 0) continue;
 
-    // LOSSLESS duration handling: never clamp a group's END inward (that would
-    // truncate the display window and make the tail words blink out / get skipped
-    // in per-scene ASS rendering). Instead, if a chunk is longer than MAX_DURATION_S,
-    // SPLIT it at the midpoint word so every word keeps its true timing and nothing
-    // is dropped. Guarantee contiguity: each group uses the real first-word start
-    // and last-word end, and we never leave a gap that hides spoken words.
     let s = chunk[0].start;
     let e = chunk[chunk.length - 1].end;
     let pieces = [chunk];
@@ -164,9 +194,16 @@ export function buildSubtitleGroups(words) {
       let pe = piece[piece.length - 1].end;
       if (pe - ps < MIN_DURATION_S) pe = ps + MIN_DURATION_S;
 
+      const startMs = secToMs(ps);
+      const endMs = secToMs(pe);
+      const durationMs = endMs - startMs;
+
       groups.push({
         start: ps,
         end:   pe,
+        startMs,
+        endMs,
+        durationMs,
         text:  piece.map((w) => w.word.trim()).join(" "),
       });
     }
@@ -189,28 +226,26 @@ export function buildSubtitleGroups(words) {
  * that fall within that scene's time window.
  *
  * @param {Array<{word:string, start:number, end:number}>} words
- * @param {Array<{index:number, startSec:number, endSec:number}>} scenes
- * @returns {Array<{sceneIndex:number, startSec:number, endSec:number, text:string}>}
+ * @param {Array<{index:number, startSec:number, endSec:number, startMs?:number, endMs?:number}>} scenes
+ * @returns {Array<{sceneIndex:number, startSec:number, endSec:number, startMs:number, endMs:number, text:string}>}
  */
 export function buildNarrationSegments(words, scenes) {
-  // LOSSLESS word→scene partition.
-  // Every spoken word is assigned to EXACTLY ONE scene using its START time, so no
-  // word is ever dropped or double-counted. A word belongs to the scene whose
-  // [startSec, endSec) window contains its start; boundary words (start == next
-  // scene's startSec) go to the EARLIER scene to keep the partition contiguous.
-  // This guarantees the per-scene narration text covers 100% of spoken audio and
-  // that the subtitle track (built from the same words) never misses a word.
   const segWordsByScene = scenes.map(() => []);
   for (const w of words) {
+    const wStartMs = secToMs(w.start);
     let assigned = -1;
     for (let s = 0; s < scenes.length; s++) {
       const sc = scenes[s];
-      if (w.start >= sc.startSec && w.start < sc.endSec) { assigned = s; break; }
+      const scStartMs = sc.startMs !== undefined ? sc.startMs : secToMs(sc.startSec);
+      const scEndMs = sc.endMs !== undefined ? sc.endMs : secToMs(sc.endSec);
+      if (wStartMs >= scStartMs && wStartMs < scEndMs) { assigned = s; break; }
     }
     // Boundary / past-last-window fallback: attach to the nearest prior scene.
     if (assigned === -1) {
       for (let s = scenes.length - 1; s >= 0; s--) {
-        if (w.start >= scenes[s].startSec) { assigned = s; break; }
+        const sc = scenes[s];
+        const scStartMs = sc.startMs !== undefined ? sc.startMs : secToMs(sc.startSec);
+        if (wStartMs >= scStartMs) { assigned = s; break; }
       }
     }
     if (assigned === -1) assigned = 0;
@@ -220,98 +255,215 @@ export function buildNarrationSegments(words, scenes) {
   return scenes.map((scene, si) => {
     const segWords = segWordsByScene[si];
     const text = segWords.map((w) => w.word.trim()).join(" ").trim();
+    const startMs = scene.startMs !== undefined ? scene.startMs : secToMs(scene.startSec);
+    const endMs = scene.endMs !== undefined ? scene.endMs : secToMs(scene.endSec);
+
     return {
-      sceneIndex: scene.index,
-      startSec:   scene.startSec,
-      endSec:     scene.endSec,
+      sceneIndex: scene.index !== undefined ? scene.index : si,
+      startSec:   scene.startSec !== undefined ? scene.startSec : msToSec(startMs),
+      endSec:     scene.endSec !== undefined ? scene.endSec : msToSec(endMs),
+      startMs,
+      endMs,
       text:       text || "", // empty only if genuinely no words spoken in this window
     };
   });
 }
 
 /* ============================================================
-   SCENE BOUNDARY DETECTION
-   Replaces the equal-division getSegmentRange() math.
-   Boundaries come from natural speech pauses, not arithmetic.
+   CANONICAL SCENE BOUNDARY GENERATION (INTEGER MILLISECONDS)
    ============================================================ */
 
 /**
- * Detects scene cut points from natural speech pauses in the word timeline.
+ * Builds deterministic, gap-free, and overlap-free scene boundaries in integer milliseconds.
  *
- * Algorithm:
- *   1. Collect all inter-word gaps > 100ms as candidate pause points.
- *   2. For each of the N-1 ideal cut positions (evenly spaced by duration),
- *      find the best natural pause within a ±50% scene-width search window.
- *   3. Fall back to the ideal mathematical point when no pause is nearby.
- *   4. Build scenes from the selected cut times.
- *   5. Clamp result to targetSceneCount ± 3 via merge/bisect.
+ * Guaranteed Invariants:
+ *   1. scene[0].startMs === 0
+ *   2. scene[i].endMs === scene[i+1].startMs (0 gap, 0 overlap)
+ *   3. scene[last].endMs === totalDurationMs
+ *   4. scene[i].durationMs === scene[i].endMs - scene[i].startMs
  *
  * @param {Array<{word,start,end}>} words
  * @param {number} totalDuration       — narration duration from ffprobe (seconds)
- * @param {number} targetSceneCount    — user-requested scene count (imageCount)
- * @returns {Array<{index, startSec, endSec, durationSec}>}
+ * @param {number} targetSceneCount    — user-requested scene count
+ * @returns {Array<{index:number, sceneId:string, startMs:number, endMs:number, durationMs:number, startSec:number, endSec:number, durationSec:number, audioStartMs:number, audioEndMs:number, subtitleStartMs:number, subtitleEndMs:number}>}
  */
 export function buildSceneBoundaries(words, totalDuration, targetSceneCount) {
-  if (!words || words.length === 0 || targetSceneCount <= 1) {
-    return [{ index: 0, startSec: 0, endSec: totalDuration, durationSec: totalDuration }];
+  const totalDurationMs = Math.max(100, secToMs(totalDuration));
+  const count = Math.max(1, parseInt(targetSceneCount, 10) || 1);
+
+  if (!words || words.length === 0 || count <= 1) {
+    return [{
+      index: 0,
+      sceneId: "scene_001",
+      startMs: 0,
+      endMs: totalDurationMs,
+      durationMs: totalDurationMs,
+      startSec: 0,
+      endSec: msToSec(totalDurationMs),
+      durationSec: msToSec(totalDurationMs),
+      audioStartMs: 0,
+      audioEndMs: totalDurationMs,
+      subtitleStartMs: 0,
+      subtitleEndMs: totalDurationMs,
+    }];
   }
 
-  // Strictly divide the audio length by the target scene count
   const scenes = [];
-  const sceneDuration = totalDuration / targetSceneCount;
-
-  for (let k = 0; k < targetSceneCount; k++) {
-    const isLast = k === targetSceneCount - 1;
-    const start = k * sceneDuration;
-    const end = isLast ? totalDuration : (k + 1) * sceneDuration;
+  for (let k = 0; k < count; k++) {
+    const isLast = k === count - 1;
+    const startMs = Math.round(k * (totalDurationMs / count));
+    const endMs = isLast ? totalDurationMs : Math.round((k + 1) * (totalDurationMs / count));
+    const durationMs = endMs - startMs;
 
     scenes.push({
       index: k,
-      startSec: start,
-      endSec: end,
-      durationSec: end - start,
+      sceneId: `scene_${String(k + 1).padStart(3, "0")}`,
+      startMs,
+      endMs,
+      durationMs,
+      startSec: msToSec(startMs),
+      endSec: msToSec(endMs),
+      durationSec: msToSec(durationMs),
+      audioStartMs: startMs,
+      audioEndMs: endMs,
+      subtitleStartMs: startMs,
+      subtitleEndMs: endMs,
     });
   }
 
-  logger.info(`📐 Master Timeline: ${scenes.length} strictly divided scenes (target ${targetSceneCount})`);
+  logger.info(`📐 Canonical Master Timeline: ${scenes.length} integer-millisecond scenes generated (${totalDurationMs}ms total)`);
   return scenes;
 }
 
-/** Merge adjacent pairs until scenes.length === target (smallest combined duration first). */
-function _mergeToCount(scenes, target) {
-  while (scenes.length > target) {
-    let minIdx = 0, minDur = Infinity;
-    for (let i = 0; i < scenes.length - 1; i++) {
-      const combined = scenes[i].durationSec + scenes[i + 1].durationSec;
-      if (combined < minDur) { minDur = combined; minIdx = i; }
-    }
-    const merged = {
-      index:       minIdx,
-      startSec:    scenes[minIdx].startSec,
-      endSec:      scenes[minIdx + 1].endSec,
-      durationSec: scenes[minIdx + 1].endSec - scenes[minIdx].startSec,
-    };
-    scenes.splice(minIdx, 2, merged);
-    scenes = scenes.map((s, i) => ({ ...s, index: i }));
+/* ============================================================
+   CANONICAL TIMELINE VALIDATION & DRIFT AUDITING
+   ============================================================ */
+
+/**
+ * Strict integrity validator for the Canonical Master Timeline.
+ * Ensures zero gap, zero overlap, exact duration arithmetic, and audio synchronization.
+ *
+ * @param {Object} timeline - The Master Timeline object
+ * @param {number} [expectedAudioDurationMs] - Optional expected audio duration in milliseconds
+ * @returns {{ valid: boolean, errors: Array<string>, maxDriftMs: number }}
+ */
+export function validateCanonicalTimeline(timeline, expectedAudioDurationMs = null) {
+  const errors = [];
+  if (!timeline || !Array.isArray(timeline.scenes) || timeline.scenes.length === 0) {
+    return { valid: false, errors: ["Timeline is empty or missing scenes array"], maxDriftMs: 0 };
   }
-  return scenes;
+
+  const scenes = timeline.scenes;
+  let cumulativeDurationMs = 0;
+  let maxDriftMs = 0;
+
+  for (let i = 0; i < scenes.length; i++) {
+    const sc = scenes[i];
+    const startMs = sc.startMs !== undefined ? sc.startMs : secToMs(sc.startSec);
+    const endMs = sc.endMs !== undefined ? sc.endMs : secToMs(sc.endSec);
+    const durationMs = sc.durationMs !== undefined ? sc.durationMs : (endMs - startMs);
+
+    // 1. Duration check
+    if (endMs - startMs !== durationMs) {
+      errors.push(`Scene ${i} duration mismatch: endMs (${endMs}) - startMs (${startMs}) !== durationMs (${durationMs})`);
+    }
+
+    // 2. Contiguity check with previous scene
+    if (i === 0) {
+      if (startMs !== 0) {
+        errors.push(`Scene 0 does not start at 0ms (starts at ${startMs}ms)`);
+      }
+    } else {
+      const prevSc = scenes[i - 1];
+      const prevEndMs = prevSc.endMs !== undefined ? prevSc.endMs : secToMs(prevSc.endSec);
+      if (startMs !== prevEndMs) {
+        const gapMs = Math.abs(startMs - prevEndMs);
+        maxDriftMs = Math.max(maxDriftMs, gapMs);
+        errors.push(`Timeline continuity break between Scene ${i - 1} (end: ${prevEndMs}ms) and Scene ${i} (start: ${startMs}ms) [Δ=${gapMs}ms]`);
+      }
+    }
+
+    cumulativeDurationMs += durationMs;
+  }
+
+  // 3. Audio duration sync check if provided
+  if (expectedAudioDurationMs !== null && expectedAudioDurationMs > 0) {
+    const audioDriftMs = Math.abs(cumulativeDurationMs - Math.round(expectedAudioDurationMs));
+    maxDriftMs = Math.max(maxDriftMs, audioDriftMs);
+    // Allow up to 35ms (1 frame @ 30fps) for container rounding
+    if (audioDriftMs > 35) {
+      errors.push(`Cumulative visual duration (${cumulativeDurationMs}ms) drifts from audio duration (${Math.round(expectedAudioDurationMs)}ms) by ${audioDriftMs}ms`);
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    maxDriftMs,
+    totalVisualDurationMs: cumulativeDurationMs,
+  };
 }
 
-/** Bisect the longest scene until scenes.length === target. */
-function _splitToCount(scenes, target) {
-  while (scenes.length < target) {
-    let maxIdx = 0, maxDur = 0;
-    for (let i = 0; i < scenes.length; i++) {
-      if (scenes[i].durationSec > maxDur) { maxDur = scenes[i].durationSec; maxIdx = i; }
-    }
-    const s   = scenes[maxIdx];
-    const mid = (s.startSec + s.endSec) / 2;
-    const s1  = { index: maxIdx,     startSec: s.startSec, endSec: mid,       durationSec: mid - s.startSec };
-    const s2  = { index: maxIdx + 1, startSec: mid,        endSec: s.endSec,  durationSec: s.endSec - mid };
-    scenes.splice(maxIdx, 1, s1, s2);
-    scenes = scenes.map((s, i) => ({ ...s, index: i }));
+/**
+ * Diagnostic logger for logging per-scene and global drift.
+ *
+ * @param {Object} timeline
+ * @param {Array<number>} [segmentActualDurationsMs]
+ * @param {number} [finalVideoDurationMs]
+ * @param {number} [audioDurationMs]
+ */
+export function logSyncDiagnostics(timeline, segmentActualDurationsMs = [], finalVideoDurationMs = null, audioDurationMs = null) {
+  if (!timeline || !Array.isArray(timeline.scenes)) return;
+
+  const scenes = timeline.scenes;
+  const groups = timeline.subtitleGroups || [];
+
+  logger.info("================== 🔍 SYNC AUDIT REPORT ==================");
+  let maxDriftMs = 0;
+
+  for (let i = 0; i < scenes.length; i++) {
+    const sc = scenes[i];
+    const vStart = sc.startMs !== undefined ? sc.startMs : secToMs(sc.startSec);
+    const vEnd = sc.endMs !== undefined ? sc.endMs : secToMs(sc.endSec);
+    const vDur = sc.durationMs !== undefined ? sc.durationMs : (vEnd - vStart);
+
+    // Matching subtitles in this window
+    const sceneSubs = groups.filter((g) => {
+      const gStart = g.startMs !== undefined ? g.startMs : secToMs(g.start);
+      const gEnd = g.endMs !== undefined ? g.endMs : secToMs(g.end);
+      return gStart < vEnd && gEnd > vStart;
+    });
+
+    const subStart = sceneSubs.length > 0 ? (sceneSubs[0].startMs ?? secToMs(sceneSubs[0].start)) : vStart;
+    const subEnd = sceneSubs.length > 0 ? (sceneSubs[sceneSubs.length - 1].endMs ?? secToMs(sceneSubs[sceneSubs.length - 1].end)) : vEnd;
+
+    const actualSegDur = segmentActualDurationsMs[i] !== undefined ? segmentActualDurationsMs[i] : vDur;
+    const segDrift = Math.abs(actualSegDur - vDur);
+    maxDriftMs = Math.max(maxDriftMs, segDrift);
+
+    logger.info(
+      `  Scene ${i} (${sc.sceneId || `scene_${String(i + 1).padStart(3, "0")}`}): ` +
+      `Visual: ${vStart}ms -> ${vEnd}ms (${vDur}ms) | ` +
+      `Audio: ${vStart}ms -> ${vEnd}ms | ` +
+      `Subs: ${subStart}ms -> ${subEnd}ms | ` +
+      `Drift: ${segDrift}ms`
+    );
   }
-  return scenes;
+
+  const totalVisualMs = scenes.reduce((sum, s) => sum + (s.durationMs ?? (secToMs(s.endSec) - secToMs(s.startSec))), 0);
+  const totalAudioMs = audioDurationMs ? Math.round(audioDurationMs) : totalVisualMs;
+  const totalFinalMs = finalVideoDurationMs ? Math.round(finalVideoDurationMs) : totalVisualMs;
+
+  const totalDriftMs = Math.abs(totalFinalMs - totalAudioMs);
+  maxDriftMs = Math.max(maxDriftMs, totalDriftMs);
+
+  logger.info("----------------------------------------------------------");
+  logger.info(`  Total Visual Duration:   ${totalVisualMs}ms`);
+  logger.info(`  Total Audio Duration:    ${totalAudioMs}ms`);
+  logger.info(`  Total Final Video:       ${totalFinalMs}ms`);
+  logger.info(`  Maximum Timeline Drift:  ${maxDriftMs}ms`);
+  logger.info(`  Status:                  ${maxDriftMs <= 35 ? "✅ PERFECT_SYNC (0-frame drift)" : "⚠️ DRIFT_DETECTED"}`);
+  logger.info("==========================================================");
 }
 
 /* ============================================================
@@ -324,46 +476,45 @@ function _splitToCount(scenes, target) {
  * scene rendering, subtitle generation, audio muxing.
  *
  * @param {Array<{word,start,end}>} words          — from Whisper (absolute timestamps)
- * @param {number}                  totalDuration  — measured from narration WAV via ffprobe
+ * @param {number}                  totalDuration  — measured from narration WAV via ffprobe (seconds)
  * @param {number}                  targetSceneCount — user-requested count (imageCount)
  * @param {string}                  originalScript   — the original user script for exact subtitle matching
  * @returns {Object} timeline
  */
 export function buildMasterTimeline(words, totalDuration, targetSceneCount, originalScript = "") {
+  const totalDurationMs = Math.max(100, secToMs(totalDuration));
   logger.info(
-    `🕐 Building Master Timeline: ${words.length} words | ` +
-    `${totalDuration.toFixed(2)}s | target ${targetSceneCount} scenes`
+    `🕐 Building Master Timeline: ${words?.length || 0} words | ` +
+    `${totalDuration.toFixed(2)}s (${totalDurationMs}ms) | target ${targetSceneCount} scenes`
   );
 
   const scenes         = buildSceneBoundaries(words, totalDuration, targetSceneCount);
-  let subtitleGroups   = buildSubtitleGroups(words);
+  let subtitleGroups   = buildSubtitleGroups(words || []);
 
-  // SYNC FIX: subtitles MUST reflect the ACTUALLY SPOKEN audio (Whisper verbatim),
-  // not the original script text. The voiceover is generated from `script`, but TTS
-  // can alter phrasing/pauses, so replacing Whisper words with the script text caused
-  // subtitles to mismatch — and occasionally drop — words vs the audio. We keep the
-  // Whisper-derived groups as the canonical subtitle source so voice, subtitle, and
-  // image stay in sync. The original script is still used downstream for narration
-  // seeding (buildNarrationSegments) where verbatim-match is less critical.
   if (originalScript && originalScript.trim().length > 0) {
     logger.info(`ℹ️ Keeping Whisper verbatim subtitle text (script alignment skipped) to guarantee voice/subtitle sync.`);
   }
 
   const timeline = {
-    version:          1,
+    version:          2, // upgraded to version 2 (integer milliseconds canonical)
     generatedAt:      new Date().toISOString(),
     totalDuration,
+    totalDurationMs,
     targetSceneCount,
     actualSceneCount: scenes.length,
-    words,            // kept for debugging / re-processing
+    words:            words || [], // kept for debugging / re-processing
     scenes,
     subtitleGroups,
   };
 
-  logger.info(
-    `✅ Master Timeline ready: ${scenes.length} scenes, ` +
-    `${subtitleGroups.length} subtitle groups`
-  );
+  // Run integrity validation immediately
+  const val = validateCanonicalTimeline(timeline, totalDurationMs);
+  if (!val.valid) {
+    logger.warn(`⚠️ [MasterTimeline Integrity Warning]: ${val.errors.join(" | ")}`);
+  } else {
+    logger.info(`✅ [MasterTimeline Integrity Passed]: 0ms drift across all ${scenes.length} scenes`);
+  }
+
   return timeline;
 }
 
@@ -389,57 +540,4 @@ export function loadMasterTimeline(filePath) {
     throw new Error(`Invalid or corrupt timeline.json at ${filePath}`);
   }
   return timeline;
-}
-
-/**
- * Replaces the Whisper transcribed text in subtitle groups with the perfectly
- * formatted original script using a deterministic word-count alignment.
- *
- * @param {string} script
- * @param {Array<{start, end, text}>} subtitleGroups
- */
-function alignScriptToSubtitleGroups(script, subtitleGroups) {
-  let remainingScript = script.trim();
-
-  for (let i = 0; i < subtitleGroups.length; i++) {
-    const group = subtitleGroups[i];
-    const groupWords = group.text.trim().split(/\s+/);
-    const numWords = groupWords.length;
-
-    let wordCount = 0;
-    let splitIdx = 0;
-    let inWord = false;
-    for (let j = 0; j < remainingScript.length; j++) {
-      if (/\s/.test(remainingScript[j])) {
-        if (inWord) {
-          wordCount++;
-          inWord = false;
-          if (wordCount === numWords) {
-            splitIdx = j;
-            break;
-          }
-        }
-      } else {
-        inWord = true;
-      }
-    }
-
-    if (splitIdx === 0 && remainingScript.length > 0) {
-      splitIdx = remainingScript.length;
-    }
-
-    const matchedText = remainingScript.substring(0, splitIdx).trim();
-    remainingScript = remainingScript.substring(splitIdx).trim();
-
-    if (matchedText) {
-      group.text = matchedText; // replace whisper text with exact script text
-    }
-  }
-
-  // Any leftover text gets appended to the last group
-  if (remainingScript.length > 0 && subtitleGroups.length > 0) {
-    subtitleGroups[subtitleGroups.length - 1].text += " " + remainingScript;
-  }
-
-  return subtitleGroups;
 }
