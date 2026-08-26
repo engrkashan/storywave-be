@@ -253,11 +253,13 @@ export function convertTranscriptToAss(transcriptSourceOrPath, assPath, aspectRa
   const isVertical = aspectRatio === "9:16";
   const resX = isVertical ? 1080 : 1920;
   const resY = isVertical ? 1920 : 1080;
-  const fontSize = isVertical ? 80 : 130;
+  const fontSize = isVertical ? 40 : 65;
   const posX = resX / 2;
-  const posY = isVertical ? 1400 : 900;
+  const posY = isVertical ? 1580 : 960;
+  const bord = isVertical ? 6 : 8;
+  const shad = isVertical ? 3 : 4;
 
-  const header = `[Script Info]\nTitle: Cinematic Shorts Subs\nScriptType: v4.00+\nPlayResX: ${resX}\nPlayResY: ${resY}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n\n; ---- GOLD GRADIENT FILL WITH BRIGHT STROKE & GLOW ----\nStyle: GoldGlow,Bebas Neue Bold,${fontSize},&H0000B8E6&,&H0000BFFF&,&H00FFFFFF&,&H64000000&,1,0,0,0,100,100,2,0,1,12,5,3,2,60,60,120,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
+  const header = `[Script Info]\nTitle: Cinematic Shorts Subs\nScriptType: v4.00+\nPlayResX: ${resX}\nPlayResY: ${resY}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n\n; ---- GOLD GRADIENT FILL WITH BRIGHT STROKE & GLOW ----\nStyle: GoldGlow,Bebas Neue Bold,${fontSize},&H0000B8E6&,&H0000BFFF&,&H00FFFFFF&,&H64000000&,1,0,0,0,100,100,2,0,1,${bord},${shad},2,60,60,120,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
 
   // ── NEW PATH: Timeline object ─────────────────────────────────────────────
   if (transcriptSourceOrPath && typeof transcriptSourceOrPath === "object" && transcriptSourceOrPath.subtitleGroups) {
@@ -270,7 +272,7 @@ export function convertTranscriptToAss(transcriptSourceOrPath, assPath, aspectRa
         scene = sceneIndexOrStartTime;
       }
     }
-    const dialogues = _assDialoguesFromTimeline(timeline.subtitleGroups, scene, posX, posY);
+    const dialogues = _assDialoguesFromTimeline(timeline.subtitleGroups, scene, posX, posY, bord, shad);
     fs.writeFileSync(assPath, header + dialogues);
     stopTimer?.();
     return;
@@ -288,14 +290,14 @@ export function convertTranscriptToAss(transcriptSourceOrPath, assPath, aspectRa
     try {
       const json = JSON.parse(content);
       if (json.words && Array.isArray(json.words)) {
-        const dialogues = parseJsonToAss(json.words, posX, posY, startTime, duration);
+        const dialogues = parseJsonToAss(json.words, posX, posY, startTime, duration, bord, shad);
         fs.writeFileSync(assPath, header + dialogues);
         stopTimer?.();
         return;
       }
     } catch (_) { /* not JSON, fall through to SRT */ }
 
-    const dialogues = parseSrtToAss(content, posX, posY, startTime, duration);
+    const dialogues = parseSrtToAss(content, posX, posY, startTime, duration, bord, shad);
     fs.writeFileSync(assPath, header + dialogues);
     stopTimer?.();
   } catch (err) {
@@ -304,10 +306,10 @@ export function convertTranscriptToAss(transcriptSourceOrPath, assPath, aspectRa
   }
 }
 
-function parseJsonToAss(words, posX, posY, startTime, duration) {
+function parseJsonToAss(words, posX, posY, startTime, duration, bord = 6, shad = 3) {
   const groups = buildSubtitleGroups(words);
   const durationSec = duration !== null ? duration : Infinity;
-  return _assDialoguesFromTimeline(groups, { startSec: startTime, endSec: startTime + durationSec }, posX, posY);
+  return _assDialoguesFromTimeline(groups, { startSec: startTime, endSec: startTime + durationSec }, posX, posY, bord, shad);
 }
 
 /**
@@ -318,9 +320,11 @@ function parseJsonToAss(words, posX, posY, startTime, duration) {
  * @param {{startSec,endSec,durationSec,startMs,endMs,durationMs}|null} scene — null = use all (single image)
  * @param {number} posX
  * @param {number} posY
+ * @param {number} bord
+ * @param {number} shad
  * @returns {string} ASS dialogue lines
  */
-function _assDialoguesFromTimeline(groups, scene, posX, posY) {
+function _assDialoguesFromTimeline(groups, scene, posX, posY, bord = 6, shad = 3) {
   let dialogues = "";
   const startMs = scene ? (scene.startMs !== undefined ? scene.startMs : secToMs(scene.startSec)) : 0;
   const endMs = scene ? (scene.endMs !== undefined ? scene.endMs : secToMs(scene.endSec)) : Infinity;
@@ -339,13 +343,13 @@ function _assDialoguesFromTimeline(groups, scene, posX, posY) {
 
     if (localEndMs <= localStartMs) continue;
 
-    dialogues += `Dialogue: 0,${msToAssTime(localStartMs)},${msToAssTime(localEndMs)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${g.text}\n`;
+    dialogues += `Dialogue: 0,${msToAssTime(localStartMs)},${msToAssTime(localEndMs)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord${bord}\\shad${shad}\\be2}${g.text}\n`;
   }
 
   return dialogues;
 }
 
-function parseSrtToAss(srtContent, posX, posY, startTime, duration) {
+function parseSrtToAss(srtContent, posX, posY, startTime, duration, bord = 6, shad = 3) {
   let dialogueLines = "";
   const blocks = srtContent.trim().split(/\n\s*\n/);
 
@@ -383,7 +387,7 @@ function parseSrtToAss(srtContent, posX, posY, startTime, duration) {
         e = Math.min(duration, e - startTime);
       }
 
-      dialogueLines += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord12\\shad5\\be4}${chunk}\n`;
+      dialogueLines += `Dialogue: 0,${secToAssTime(s)},${secToAssTime(e)},GoldGlow,,0,0,0,,{\\an2\\pos(${posX},${posY})\\bord${bord}\\shad${shad}\\be2}${chunk}\n`;
     });
   }
   return dialogueLines;
