@@ -186,7 +186,10 @@ export async function runFinalAssembly(workflowId) {
     where: { id: workflowId },
     include: { story: true },
   });
-  if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+  if (!workflow) {
+    logger.warn(`[FinalAssembly] Workflow ${workflowId} not found in database — skipping merge (workflow was deleted)`);
+    return { success: false, skipped: true, reason: `Workflow ${workflowId} not found` };
+  }
 
   const meta = workflow.metadata || {};
   const title = meta._editorTitle || workflow.title;
