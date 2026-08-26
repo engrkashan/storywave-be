@@ -32,7 +32,8 @@ import {
   secToMs,
   msToSec,
 } from "./timelineService.js";
-
+const TEMP_ROOT = path.resolve(process.cwd(), "temp");
+fs.mkdirSync(TEMP_ROOT, { recursive: true });
 const logger = createLogger("FinalAssemblyService");
 
 const httpsAgent = new https.Agent({
@@ -127,7 +128,7 @@ async function downloadFile(url, destPath, retries = 4, timeoutMs = 60000) {
     } catch (err) {
       lastError = err;
       if (fs.existsSync(destPath)) {
-        try { fs.unlinkSync(destPath); } catch (_) {}
+        try { fs.unlinkSync(destPath); } catch (_) { }
       }
 
       if (attempt < retries) {
@@ -459,7 +460,7 @@ export async function runFinalAssembly(workflowId) {
       await prisma.story.update({
         where: { id: workflow.story.id },
         data: { audioURL: finalAudioUrl },
-      }).catch(() => {}); // non-fatal
+      }).catch(() => { }); // non-fatal
     }
 
     // 🚀 Auto-publish to social media via Mallary.ai if configured
@@ -508,7 +509,7 @@ export async function runFinalAssembly(workflowId) {
           mergeFailedAt: new Date().toISOString(),
         },
       },
-    }).catch(() => {});
+    }).catch(() => { });
 
     throw err;
   } finally {
