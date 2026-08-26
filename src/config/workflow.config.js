@@ -11,6 +11,7 @@ export const config = {
     imageConcurrency: parseInt(process.env.IMAGE_CONCURRENCY || "3", 10),
     ffmpegThreads: parseInt(process.env.FFMPEG_THREADS || "2", 10),
     enableQueue: process.env.ENABLE_QUEUE !== "false", // Default to true
+    useStoryGuidelinesOnlyForPrompts: process.env.USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS === "true", // Default false
   },
   redis: {
     host: process.env.REDIS_HOST || "127.0.0.1",
