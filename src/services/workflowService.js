@@ -144,6 +144,7 @@ export async function runScheduledWorkflows() {
       dualPlatform: meta.dualPlatform || false,
       characterTalk: meta.characterTalk ?? false,
       uploadedMediaUrl: meta.uploadedMediaUrl || null,
+      useStoryGuidelinesOnlyForPrompts: meta.useStoryGuidelinesOnlyForPrompts ?? undefined,
       existingWorkflow: workflow,
     };
 
@@ -178,6 +179,7 @@ export async function processExistingWorkflow(workflow) {
     storyLength: meta.storyLength || null,
     scheduledAt: null,
     soundEffects: meta.soundEffects ?? false,
+    useStoryGuidelinesOnlyForPrompts: meta.useStoryGuidelinesOnlyForPrompts ?? undefined,
     existingWorkflow: workflow,
   });
 }
@@ -391,6 +393,7 @@ async function _runWorkflow({
   characterReferenceBase64: userCharacterReferenceBase64 = null,
   // New: multi-character reference array [{ name, base64 }]
   characterReferences: userMultiCharacterReferences = null,
+  useStoryGuidelinesOnlyForPrompts = null,
 }) {
   const nowUTC = new Date().toISOString();
   const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
@@ -523,6 +526,9 @@ async function _runWorkflow({
       },
     });
 
+    // Determine if guidelines should only be routed to visual prompts (skipping script alteration)
+    const isGuidelinesOnlyForPrompts = useStoryGuidelinesOnlyForPrompts ?? existingWorkflow?.metadata?.useStoryGuidelinesOnlyForPrompts ?? config.workflow.useStoryGuidelinesOnlyForPrompts ?? false;
+
     // 2. Generate story outline & script
     let outline, script;
     if (url || videoFile) {
@@ -533,7 +539,7 @@ async function _runWorkflow({
         storyType,
         voiceTone,
         storyLength,
-        storyGuidelines,
+        storyGuidelines: isGuidelinesOnlyForPrompts ? null : storyGuidelines,
       }));
       stopStoryTimer?.();
     } else {
@@ -1223,6 +1229,7 @@ async function _runWorkflow({
           narrationSegments,       // ← Whisper-aligned narration segments
           referenceTraits,         // ← Analyzed reference image traits for MGE character locking
           characterReferences,     // ← [{ id, name, url }] for v7 per-frame Reference Selector
+          storyGuidelines,         // ← User story guidelines for prompt building
         );
         stopPromptTimer?.();
 
