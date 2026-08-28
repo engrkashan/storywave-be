@@ -48,6 +48,18 @@ import { createLogger, loggingStorage } from "../utils/logger.js";
 
 const logger = createLogger("WorkflowService");
 
+function toBool(val, defaultVal = true) {
+  if (val === undefined || val === null) return defaultVal;
+  if (typeof val === "boolean") return val;
+  if (typeof val === "number") return val !== 0;
+  if (typeof val === "string") {
+    const s = val.trim().toLowerCase();
+    if (s === "false" || s === "0" || s === "off" || s === "no") return false;
+    if (s === "true" || s === "1" || s === "on" || s === "yes") return true;
+  }
+  return Boolean(val);
+}
+
 // Sentinel error class so we can distinguish a user cancel from a real failure
 class CancelledError extends Error {
   constructor() {
@@ -140,9 +152,10 @@ export async function runScheduledWorkflows() {
       backgroundMusic: meta.backgroundMusic ?? true,
       backgroundMusicStyle: meta.backgroundMusicStyle || null,
       soundEffects: meta.soundEffects ?? false,
+      characterTalk: meta.characterTalk ?? false,
+      subtitles: meta.subtitles ?? true,
       aspectRatio: meta.aspectRatio || "16:9",
       dualPlatform: meta.dualPlatform || false,
-      characterTalk: meta.characterTalk ?? false,
       uploadedMediaUrl: meta.uploadedMediaUrl || null,
       useStoryGuidelinesOnlyForPrompts: meta.useStoryGuidelinesOnlyForPrompts ?? undefined,
       existingWorkflow: workflow,
@@ -179,6 +192,8 @@ export async function processExistingWorkflow(workflow) {
     storyLength: meta.storyLength || null,
     scheduledAt: null,
     soundEffects: meta.soundEffects ?? false,
+    characterTalk: meta.characterTalk ?? false,
+    subtitles: meta.subtitles ?? true,
     useStoryGuidelinesOnlyForPrompts: meta.useStoryGuidelinesOnlyForPrompts ?? undefined,
     existingWorkflow: workflow,
   });
@@ -382,9 +397,10 @@ async function _runWorkflow({
   backgroundMusic = true,
   backgroundMusicStyle = null,
   soundEffects = false,
+  characterTalk = false,
+  subtitles = true,
   aspectRatio = "16:9",
   dualPlatform = false,
-  characterTalk = false,
   series = null,
   coverArtPrompt = null,
   seoContent = null,
@@ -442,6 +458,9 @@ async function _runWorkflow({
           imageCount,
           backgroundMusic,
           backgroundMusicStyle,
+          soundEffects,
+          characterTalk,
+          subtitles,
           aspectRatio,
           dualPlatform,
           series,
@@ -462,6 +481,9 @@ async function _runWorkflow({
   }
 
   logger.info(`Workflow ID: ${workflow.id}`);
+
+  const isSubtitlesEnabled = toBool(workflow?.metadata?.subtitles !== undefined ? workflow.metadata.subtitles : subtitles, true);
+  logger.info(`🔤 [WorkflowService] Workflow ${workflow.id} Subtitles mode: ${isSubtitlesEnabled ? "ENABLED" : "DISABLED"} (raw input: ${JSON.stringify(subtitles)})`);
 
   if (isScheduled) {
     return { success: true, workflowId: workflow.id, status: "SCHEDULED" };
@@ -1013,18 +1035,32 @@ async function _runWorkflow({
       voiceLocalPath = voiceRes.localPath;
       stopVoiceTimer?.();
 
-      logger.info("Step 3.1: Transcribing voiceover narration with Whisper for word-level audio sync...");
-      const stopSubTimer = perf?.start("subtitle", "Transcribe Audio with Whisper");
-      const narrationWavPath = path.join(workflowTempDir, `narration-${workflow.id}.wav`);
-      await convertToWav(voiceLocalPath, narrationWavPath);
+      if (isSubtitlesEnabled === true) {
+        logger.info("Step 3.1: Transcribing voiceover narration with Whisper for word-level audio sync...");
+        const stopSubTimer = perf?.start("subtitle", "Transcribe Audio with Whisper");
+        const narrationWavPath = path.join(workflowTempDir, `narration-${workflow.id}.wav`);
+        await convertToWav(voiceLocalPath, narrationWavPath);
 
-      const transcriptContent = await transcribeWithTimestamps(narrationWavPath);
-      transcriptPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
-      fs.writeFileSync(transcriptPath, transcriptContent);
-      stopSubTimer?.();
+        const transcriptContent = await transcribeWithTimestamps(narrationWavPath);
+        transcriptPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
+        fs.writeFileSync(transcriptPath, transcriptContent);
+        stopSubTimer?.();
 
-      const parsedSub = JSON.parse(transcriptContent);
-      timelineWords = parsedSub.words || [];
+        const parsedSub = JSON.parse(transcriptContent);
+        timelineWords = parsedSub.words || [];
+      } else {
+        logger.info("Step 3.1: Subtitles toggle is OFF — skipping Whisper API transcription (saving costs & latency)...");
+        const detectedDuration = await getAudioDuration(voiceLocalPath).catch(() => 0);
+        if (detectedDuration) actualAudioDuration = detectedDuration;
+        const scriptWords = script.split(/\s+/).filter(Boolean);
+        const totalDuration = actualAudioDuration || Math.max(5, scriptWords.length * 0.35);
+        const secPerWord = scriptWords.length > 0 ? (totalDuration / scriptWords.length) : 0.35;
+        timelineWords = scriptWords.map((w, idx) => ({
+          word: w,
+          start: Number((idx * secPerWord).toFixed(3)),
+          end: Number(((idx + 1) * secPerWord).toFixed(3)),
+        }));
+      }
     }
 
     // ── Step 3.2: AI Cinematic Sound Director Pipeline ────────────────────────────
@@ -1136,15 +1172,10 @@ async function _runWorkflow({
       // const dualPlatform = workflow.metadata?.dualPlatform === true || dualPlatform === true;
       const ratiosToGenerate = dualPlatform ? ["16:9", "9:16"] : [aspectRatio];
 
-      logger.info(
-        `Generating for ratios: ${ratiosToGenerate.join(", ")} (Dual: ${dualPlatform})`,
-      );
-
-      logger.info("Step 5: Preparing subtitles & Master Timeline...");
-      const stopSubTimer = perf?.start("subtitle", "Prepare Subtitles (Whisper)");
+      logger.info(`Step 5: Preparing Master Timeline (Subtitles: ${isSubtitlesEnabled ? "ON" : "OFF"})...`);
 
       const narrationWavPath = path.join(workflowTempDir, `narration-${workflow.id}.wav`);
-      if (voiceLocalPath && fs.existsSync(voiceLocalPath) && !fs.existsSync(narrationWavPath)) {
+      if (isSubtitlesEnabled && voiceLocalPath && fs.existsSync(voiceLocalPath) && !fs.existsSync(narrationWavPath)) {
         await convertToWav(voiceLocalPath, narrationWavPath);
       }
 
@@ -1152,14 +1183,15 @@ async function _runWorkflow({
       const cachedSubPath = path.join(workflowTempDir, `subtitles-${workflow.id}.json`);
       if (fs.existsSync(cachedSubPath)) {
         transcriptContent = fs.readFileSync(cachedSubPath, "utf-8");
-      } else if (fs.existsSync(narrationWavPath)) {
+      } else if (isSubtitlesEnabled && fs.existsSync(narrationWavPath)) {
+        const stopSubTimer = perf?.start("subtitle", "Prepare Subtitles (Whisper)");
         transcriptContent = await transcribeWithTimestamps(narrationWavPath);
         fs.writeFileSync(cachedSubPath, transcriptContent);
+        stopSubTimer?.();
       } else {
         transcriptContent = JSON.stringify({ text: script, words: timelineWords });
       }
       transcriptPath = cachedSubPath;
-      stopSubTimer?.();
 
       let targetSceneCount;
       let narrationDuration;
@@ -1180,7 +1212,16 @@ async function _runWorkflow({
         targetSceneCount = imageCount || Math.max(5, dynamicCount);
       }
 
-      const { words: timelineWords } = JSON.parse(transcriptContent);
+      if (transcriptContent) {
+        try {
+          const parsed = JSON.parse(transcriptContent);
+          if (Array.isArray(parsed.words) && parsed.words.length > 0) {
+            timelineWords = parsed.words;
+          }
+        } catch (parseErr) {
+          logger.warn(`⚠️ [WorkflowService] Failed to parse transcriptContent: ${parseErr.message}`);
+        }
+      }
 
       // script variable holds the original text at this point. 
       const masterTimeline = buildMasterTimeline(timelineWords, narrationDuration, targetSceneCount, script);
@@ -1514,7 +1555,7 @@ async function _runWorkflow({
             if (imageResult.imageUrl) {
               mediaItems = [imageResult.imageUrl];
               const stopStitchTimer = perf?.start("video", "Stitch Single Image Video");
-              await createVideoWithTimeline(mediaItems[0], finalAudioLocalPath, videoPath, masterTimeline, currentRatio, actualAudioDuration);
+              await createVideoWithTimeline(mediaItems[0], finalAudioLocalPath, videoPath, masterTimeline, currentRatio, actualAudioDuration, isSubtitlesEnabled);
               stopStitchTimer?.();
             }
           }
@@ -1569,6 +1610,7 @@ async function _runWorkflow({
               _editorAspectRatio: aspectRatio,
               _editorCharacterTalk: characterTalk,
               _editorHasVoiceSelected: hasVoiceSelected,
+              _editorSubtitles: isSubtitlesEnabled,
               _editorMusicUsed: !!musicPath,
               _editorTitle: title,
               _editorUserId: userId,

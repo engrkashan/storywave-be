@@ -14,6 +14,18 @@ function generateRandomTitle(storyType = "Story") {
   return `${storyType}_${randomId}_${timestamp}`;
 }
 
+function toBool(val, defaultVal = true) {
+  if (val === undefined || val === null) return defaultVal;
+  if (typeof val === "boolean") return val;
+  if (typeof val === "number") return val !== 0;
+  if (typeof val === "string") {
+    const s = val.trim().toLowerCase();
+    if (s === "false" || s === "0" || s === "off" || s === "no") return false;
+    if (s === "true" || s === "1" || s === "on" || s === "yes") return true;
+  }
+  return Boolean(val);
+}
+
 // POST Create Workflow (Start background process)
 export const createWorkflow = async (req, res) => {
   try {
@@ -39,6 +51,7 @@ export const createWorkflow = async (req, res) => {
       backgroundMusicStyle,
       soundEffects,
       characterTalk,
+      subtitles,
       aspectRatio,
       dualPlatform,
       series,
@@ -53,6 +66,9 @@ export const createWorkflow = async (req, res) => {
       autoPublishDelayMinutes,
       useStoryGuidelinesOnlyForPrompts,
     } = req.body;
+
+    const subtitlesEnabled = toBool(subtitles, true);
+    logger.info(`🔤 [StoryController] Subtitles option parsed: ${subtitlesEnabled} (raw: ${JSON.stringify(subtitles)})`);
 
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized: missing user" });
@@ -94,6 +110,7 @@ export const createWorkflow = async (req, res) => {
           backgroundMusicStyle,
           soundEffects: soundEffects ?? false,
           characterTalk: characterTalk ?? false,
+          subtitles: subtitlesEnabled,
           aspectRatio,
           dualPlatform,
           series,
@@ -144,6 +161,7 @@ export const createWorkflow = async (req, res) => {
       backgroundMusicStyle,
       soundEffects: soundEffects ?? false,
       characterTalk: characterTalk ?? false,
+      subtitles: subtitlesEnabled,
       aspectRatio,
       dualPlatform,
       series,

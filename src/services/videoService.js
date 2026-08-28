@@ -13,13 +13,25 @@ import { validateClipSpeech } from "./videoPlanner/speechValidator.js";
 
 const logger = createLogger("VideoService");
 
+function toBool(val, defaultVal = true) {
+  if (val === undefined || val === null) return defaultVal;
+  if (typeof val === "boolean") return val;
+  if (typeof val === "number") return val !== 0;
+  if (typeof val === "string") {
+    const s = val.trim().toLowerCase();
+    if (s === "false" || s === "0" || s === "off" || s === "no") return false;
+    if (s === "true" || s === "1" || s === "on" || s === "yes") return true;
+  }
+  return Boolean(val);
+}
+
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const ZOOM_CYCLE_SECONDS = 20; // Total time for one full In-Out pulse (6s in, 6s out)
 const MAX_ZOOM_LEVEL = 1.2;   // Maximum zoom factor
 const FPS = 30;               // Standard frame rate
 
-export async function createVideoWithTimeline(imageUrl, audioPath, outputPath, masterTimeline, aspectRatio = "16:9", audioDurationParam = null) {
+export async function createVideoWithTimeline(imageUrl, audioPath, outputPath, masterTimeline, aspectRatio = "16:9", audioDurationParam = null, subtitlesEnabled = true) {
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -32,11 +44,17 @@ export async function createVideoWithTimeline(imageUrl, audioPath, outputPath, m
     imagePath = localImage;
   }
 
-  const assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
-  // Pass timeline object and null for sceneIndex (use all subtitles)
-  convertTranscriptToAss(masterTimeline, assPath, aspectRatio, null);
+  const isSubEnabled = toBool(subtitlesEnabled, true);
+  logger.info(`🔤 [VideoService] createVideoWithTimeline subtitlesEnabled: ${isSubEnabled}`);
 
-  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+  let escapedAssPath = null;
+  let assPath = null;
+  if (isSubEnabled) {
+    assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
+    convertTranscriptToAss(masterTimeline, assPath, aspectRatio, null);
+    escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+  }
+
   const audioDuration = audioDurationParam || await getAudioDuration(audioPath);
 
   if (!audioDuration || isNaN(audioDuration)) {
@@ -65,10 +83,10 @@ export async function createVideoWithTimeline(imageUrl, audioPath, outputPath, m
     `setsar=1`
   ].join(",");
 
+  const subFilter = escapedAssPath ? `,subtitles='${escapedAssPath}'` : "";
   const filterComplex = [
     commonScale,
-    `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}`,
-    `subtitles='${escapedAssPath}'[vfinal]`
+    `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}${subFilter}[vfinal]`
   ].join(",");
 
   const filterScriptPath = path.join(TEMP_DIR, `filter-${Date.now()}.txt`);
@@ -88,13 +106,10 @@ export async function createVideoWithTimeline(imageUrl, audioPath, outputPath, m
     "-preset", "veryfast",
     "-pix_fmt", "yuv420p",
     "-c:a", "copy",
-    "-shortest",
+    "-t", String(audioDuration),
     "-threads", String(config.workflow.ffmpegThreads)
   ];
 
-  if (audioDuration) {
-    args.push("-t", String(audioDuration));
-  }
   args.push(outputPath);
 
   try {
@@ -120,12 +135,12 @@ export async function createVideoWithTimeline(imageUrl, audioPath, outputPath, m
     throw new Error("🎥 Video creation failed. Check FFmpeg output above.");
   } finally {
     if (imagePath !== imageUrl && fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
-    if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
+    if (assPath && fs.existsSync(assPath)) fs.unlinkSync(assPath);
     if (fs.existsSync(filterScriptPath)) fs.unlinkSync(filterScriptPath);
   }
 }
 
-export async function createVideo(imageUrl, audioPath, outputPath, transcriptPath, aspectRatio = "16:9") {
+export async function createVideo(imageUrl, audioPath, outputPath, transcriptPath, aspectRatio = "16:9", subtitlesEnabled = true) {
   const TEMP_DIR = path.resolve(process.cwd(), "temp");
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -138,10 +153,15 @@ export async function createVideo(imageUrl, audioPath, outputPath, transcriptPat
     imagePath = localImage;
   }
 
-  const assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
-  convertTranscriptToAss(transcriptPath, assPath, aspectRatio);
+  const isSubEnabled = toBool(subtitlesEnabled, true);
+  let escapedAssPath = null;
+  let assPath = null;
+  if (isSubEnabled && transcriptPath) {
+    assPath = path.join(TEMP_DIR, `subs-${Date.now()}.ass`);
+    convertTranscriptToAss(transcriptPath, assPath, aspectRatio);
+    escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+  }
 
-  const escapedAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
   const audioDuration = await getAudioDuration(audioPath);
 
   if (!audioDuration || isNaN(audioDuration)) {
@@ -170,10 +190,10 @@ export async function createVideo(imageUrl, audioPath, outputPath, transcriptPat
     `setsar=1`
   ].join(",");
 
+  const subFilter = escapedAssPath ? `,subtitles='${escapedAssPath}'` : "";
   const filterComplex = [
     commonScale,
-    `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}`,
-    `subtitles='${escapedAssPath}'[vfinal]`
+    `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}${subFilter}[vfinal]`
   ].join(",");
 
   const filterScriptPath = path.join(TEMP_DIR, `filter-${Date.now()}.txt`);
@@ -193,13 +213,10 @@ export async function createVideo(imageUrl, audioPath, outputPath, transcriptPat
     "-preset", "veryfast",
     "-pix_fmt", "yuv420p",
     "-c:a", "copy",
-    "-shortest",
+    "-t", String(audioDuration),
     "-threads", String(config.workflow.ffmpegThreads)
   ];
 
-  if (audioDuration) {
-    args.push("-t", String(audioDuration));
-  }
   args.push(outputPath);
 
   try {
@@ -225,7 +242,7 @@ export async function createVideo(imageUrl, audioPath, outputPath, transcriptPat
     throw new Error("🎥 Video creation failed. Check FFmpeg output above.");
   } finally {
     if (imagePath !== imageUrl && fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
-    if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
+    if (assPath && fs.existsSync(assPath)) fs.unlinkSync(assPath);
     if (fs.existsSync(filterScriptPath)) fs.unlinkSync(filterScriptPath);
   }
 }
@@ -753,8 +770,8 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
   const isVideo = itemPath.endsWith(".mp4");
   const commonScale = `scale=${width}:${height}:force_original_aspect_ratio=increase:out_color_matrix=bt709:out_range=tv:flags=bicubic,crop=${width}:${height},setsar=1`;
 
-  // Subtitle filter — applied in the segment pass so the merge only needs copy
-  const subFilter = escapedAssPath ? `,subtitles='${escapedAssPath}'` : "";
+  // Subtitle filter — applied in the segment pass only if escapedAssPath is valid
+  const subFilter = (escapedAssPath && escapedAssPath !== "null" && escapedAssPath !== "undefined") ? `,subtitles='${escapedAssPath}'` : "";
 
   // CANONICAL SYNC FIX: Enforce exact millisecond duration and pad video clips that are
   // shorter than the scene duration slot using tpad (cloning the last frame) so visual,

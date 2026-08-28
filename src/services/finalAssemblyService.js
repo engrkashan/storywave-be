@@ -36,6 +36,18 @@ const TEMP_ROOT = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
 const logger = createLogger("FinalAssemblyService");
 
+function toBool(val, defaultVal = true) {
+  if (val === undefined || val === null) return defaultVal;
+  if (typeof val === "boolean") return val;
+  if (typeof val === "number") return val !== 0;
+  if (typeof val === "string") {
+    const s = val.trim().toLowerCase();
+    if (s === "false" || s === "0" || s === "off" || s === "no") return false;
+    if (s === "true" || s === "1" || s === "on" || s === "yes") return true;
+  }
+  return Boolean(val);
+}
+
 const httpsAgent = new https.Agent({
   keepAlive: true,
   maxSockets: 32,
@@ -198,6 +210,8 @@ export async function runFinalAssembly(workflowId) {
   const aspectRatio = meta._editorAspectRatio || meta.aspectRatio || "16:9";
   const characterTalk = meta._editorCharacterTalk ?? false;
   const hasVoiceSelected = meta._editorHasVoiceSelected ?? false;
+  const subtitles = toBool(meta._editorSubtitles !== undefined ? meta._editorSubtitles : meta.subtitles, true);
+  logger.info(`🔤 [FinalAssembly] Workflow ${workflowId} Subtitles mode: ${subtitles ? "ENABLED (burning subtitles)" : "DISABLED (clean video)"} (raw meta._editorSubtitles: ${JSON.stringify(meta._editorSubtitles)}, meta.subtitles: ${JSON.stringify(meta.subtitles)})`);
   let actualAudioDuration = meta._editorActualAudioDuration || 0;
   const finalAudioUrl = meta._editorFinalAudioUrl || workflow.story?.audioURL || null;
   let masterTimeline = meta._editorMasterTimeline || meta.masterTimeline || null;
@@ -368,14 +382,19 @@ export async function runFinalAssembly(workflowId) {
           continue;
         }
 
-        // Build subtitle .ass file for this scene slot
+        // Build subtitle .ass file for this scene slot (only if subtitles enabled)
         const sceneId = `scene_${String(scene.index + 1).padStart(3, "0")}`;
         const segmentPath = path.join(ratioDir, `${sceneId}_seg.mp4`);
         segmentFiles[i] = segmentPath;
 
-        const segmentAssPath = path.join(assemblyTempDir, `subs-${sceneId}-${Date.now()}.ass`);
-        convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, scene.index);
-        const escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+        let segmentAssPath = null;
+        let escapedSegmentAssPath = null;
+
+        if (subtitles) {
+          segmentAssPath = path.join(assemblyTempDir, `subs-${sceneId}-${Date.now()}.ass`);
+          convertTranscriptToAss(masterTimeline, segmentAssPath, currentRatio, scene.index);
+          escapedSegmentAssPath = segmentAssPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+        }
 
         try {
           await renderMediaSegment(
@@ -391,7 +410,7 @@ export async function runFinalAssembly(workflowId) {
           logger.error(`[FinalAssembly] Failed to render segment ${scene.index}: ${err.message}`);
           segmentFiles[i] = null;
         } finally {
-          if (fs.existsSync(segmentAssPath)) fs.unlinkSync(segmentAssPath);
+          if (segmentAssPath && fs.existsSync(segmentAssPath)) fs.unlinkSync(segmentAssPath);
         }
       }
 
