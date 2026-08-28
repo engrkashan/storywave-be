@@ -1205,9 +1205,12 @@ async function _runWorkflow({
           : targetSceneCount * 5.0;
         logger.info(`🎬 [Video Mode] Target scene count set to ${targetSceneCount} clips based on intelligent 6-7 word script chunking.`);
       } else {
-        narrationDuration = (fs.existsSync(narrationWavPath))
-          ? await getAudioDuration(narrationWavPath)
-          : (actualAudioDuration || Math.max(5, Math.ceil(script.split(/\s+/).length * 0.35)));
+        if (fs.existsSync(narrationWavPath)) {
+          narrationDuration = await getAudioDuration(narrationWavPath);
+          actualAudioDuration = narrationDuration;
+        } else {
+          narrationDuration = (actualAudioDuration || Math.max(5, Math.ceil(script.split(/\s+/).length * 0.35)));
+        }
         const dynamicCount = Math.max(1, Math.ceil(narrationDuration / 5));
         targetSceneCount = imageCount || Math.max(5, dynamicCount);
       }

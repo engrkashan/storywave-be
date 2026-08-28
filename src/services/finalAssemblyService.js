@@ -225,33 +225,12 @@ export async function runFinalAssembly(workflowId) {
 
     const uniqueScenes = [];
     const seenIndices = new Set();
-    let calculatedDurationMs = 0;
+    const FPS = 30;
 
     for (const sc of dbScenes) {
       if (!seenIndices.has(sc.index)) {
         seenIndices.add(sc.index);
-        const durationSec = sc.durationSec || 5.0;
-        const durationMs = secToMs(durationSec);
-        const startMs = sc.startSec !== null && sc.startSec !== undefined ? secToMs(sc.startSec) : calculatedDurationMs;
-        const endMs = sc.endSec !== null && sc.endSec !== undefined ? secToMs(sc.endSec) : (startMs + durationMs);
-        calculatedDurationMs = endMs;
-
-        uniqueScenes.push({
-          index: sc.index,
-          sceneIndex: sc.index,
-          sceneId: `scene_${String(sc.index + 1).padStart(3, "0")}`,
-          startMs,
-          endMs,
-          durationMs,
-          startSec: msToSec(startMs),
-          endSec: msToSec(endMs),
-          durationSec: msToSec(durationMs),
-          audioStartMs: startMs,
-          audioEndMs: endMs,
-          subtitleStartMs: startMs,
-          subtitleEndMs: endMs,
-          narration: sc.narration || "",
-        });
+        uniqueScenes.push(sc);
       }
     }
 
@@ -259,9 +238,74 @@ export async function runFinalAssembly(workflowId) {
       throw new Error(`[FinalAssembly] Workflow ${workflowId} has no scenes in database — cannot assemble`);
     }
 
-    if (!actualAudioDuration) {
-      actualAudioDuration = msToSec(calculatedDurationMs);
+    // Determine canonical total frames from authoritative audio or scene duration sum
+    let targetTotalFrames = 0;
+    if (actualAudioDuration && actualAudioDuration > 0) {
+      targetTotalFrames = Math.max(1, Math.round(Number(actualAudioDuration) * FPS));
+    } else {
+      const sumDur = uniqueScenes.reduce((sum, sc) => sum + (sc.durationSec || 5.0), 0);
+      targetTotalFrames = Math.max(1, Math.round(sumDur * FPS));
+      actualAudioDuration = targetTotalFrames / FPS;
     }
+
+    const reconstructedScenes = [];
+    let runningFrame = 0;
+
+    for (let k = 0; k < uniqueScenes.length; k++) {
+      const sc = uniqueScenes[k];
+      const isLast = k === uniqueScenes.length - 1;
+
+      // Allocate integer frames deterministically
+      let frameStart, frameEnd, frameCount;
+      if (sc.frameStart !== undefined && sc.frameEnd !== undefined && sc.frameCount !== undefined) {
+        frameStart = sc.frameStart;
+        frameEnd = sc.frameEnd;
+        frameCount = sc.frameCount;
+      } else {
+        frameStart = runningFrame;
+        frameEnd = isLast ? targetTotalFrames : Math.round((k + 1) * (targetTotalFrames / uniqueScenes.length));
+        frameCount = frameEnd - frameStart;
+      }
+      runningFrame = frameEnd;
+
+      const startSec = Number((frameStart / FPS).toFixed(6));
+      const endSec = Number((frameEnd / FPS).toFixed(6));
+      const durationSec = Number((frameCount / FPS).toFixed(6));
+      const startMs = Math.round((frameStart / FPS) * 1000);
+      const endMs = Math.round((frameEnd / FPS) * 1000);
+      const durationMs = endMs - startMs;
+
+      reconstructedScenes.push({
+        index: sc.index,
+        sceneIndex: sc.index,
+        sceneId: `scene_${String(sc.index + 1).padStart(3, "0")}`,
+        frameStart,
+        frameEnd,
+        frameCount,
+        startSec,
+        endSec,
+        durationSec,
+        startMs,
+        endMs,
+        durationMs,
+        audioStartMs: startMs,
+        audioEndMs: endMs,
+        subtitleStartMs: startMs,
+        subtitleEndMs: endMs,
+        narration: sc.narration || "",
+      });
+    }
+
+    masterTimeline = {
+      version: 3,
+      fps: FPS,
+      timebase: `1/${FPS}`,
+      totalFrames: targetTotalFrames,
+      totalDuration: actualAudioDuration,
+      totalDurationMs: Math.round((targetTotalFrames / FPS) * 1000),
+      scenes: reconstructedScenes,
+      subtitleGroups: [],
+    };
 
     const words = masterTimeline?.words || meta.timelineWords || [];
     const subtitleGroups = words.length > 0 ? buildSubtitleGroups(words) : (masterTimeline?.subtitleGroups || []);
@@ -400,12 +444,12 @@ export async function runFinalAssembly(workflowId) {
           await renderMediaSegment(
             assetLocalPath,
             segmentPath,
-            scene.durationSec,
+            scene,
             width,
             height,
             escapedSegmentAssPath
           );
-          logger.info(`[FinalAssembly] Rendered segment ${scene.index} (${scene.durationSec}s)`);
+          logger.info(`[FinalAssembly] Rendered segment ${scene.index} (${scene.frameCount ?? Math.round(scene.durationSec * 30)} frames, ${scene.durationSec}s)`);
         } catch (err) {
           logger.error(`[FinalAssembly] Failed to render segment ${scene.index}: ${err.message}`);
           segmentFiles[i] = null;

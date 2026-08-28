@@ -281,49 +281,75 @@ export function buildNarrationSegments(words, scenes) {
  *   2. scene[i].endMs === scene[i+1].startMs (0 gap, 0 overlap)
  *   3. scene[last].endMs === totalDurationMs
  *   4. scene[i].durationMs === scene[i].endMs - scene[i].startMs
+ */
+
+export const FPS = 30;
+
+/**
+ * Derives canonical scene boundaries using an authoritative 30 FPS Integer Frame Ledger.
+ * Every scene is assigned an exact integer frame interval [frameStart, frameEnd) such that:
+ *   sum(frameCount) === totalFrames
+ * Millisecond and floating-point seconds are strictly derived compatibility fields.
  *
  * @param {Array<{word,start,end}>} words
  * @param {number} totalDuration       — narration duration from ffprobe (seconds)
  * @param {number} targetSceneCount    — user-requested scene count
- * @returns {Array<{index:number, sceneId:string, startMs:number, endMs:number, durationMs:number, startSec:number, endSec:number, durationSec:number, audioStartMs:number, audioEndMs:number, subtitleStartMs:number, subtitleEndMs:number}>}
+ * @returns {Array<{index:number, sceneId:string, frameStart:number, frameEnd:number, frameCount:number, startMs:number, endMs:number, durationMs:number, startSec:number, endSec:number, durationSec:number, audioStartMs:number, audioEndMs:number, subtitleStartMs:number, subtitleEndMs:number}>}
  */
 export function buildSceneBoundaries(words, totalDuration, targetSceneCount) {
-  const totalDurationMs = Math.max(100, secToMs(totalDuration));
+  const totalDurationSec = Math.max(0.1, Number(totalDuration || 0));
+  const totalFrames = Math.max(1, Math.round(totalDurationSec * FPS));
   const count = Math.max(1, parseInt(targetSceneCount, 10) || 1);
 
   if (!words || words.length === 0 || count <= 1) {
+    const durationSec = totalFrames / FPS;
+    const durationMs = Math.round(durationSec * 1000);
     return [{
       index: 0,
       sceneId: "scene_001",
+      frameStart: 0,
+      frameEnd: totalFrames,
+      frameCount: totalFrames,
       startMs: 0,
-      endMs: totalDurationMs,
-      durationMs: totalDurationMs,
+      endMs: durationMs,
+      durationMs,
       startSec: 0,
-      endSec: msToSec(totalDurationMs),
-      durationSec: msToSec(totalDurationMs),
+      endSec: durationSec,
+      durationSec,
       audioStartMs: 0,
-      audioEndMs: totalDurationMs,
+      audioEndMs: durationMs,
       subtitleStartMs: 0,
-      subtitleEndMs: totalDurationMs,
+      subtitleEndMs: durationMs,
     }];
   }
 
   const scenes = [];
   for (let k = 0; k < count; k++) {
     const isLast = k === count - 1;
-    const startMs = Math.round(k * (totalDurationMs / count));
-    const endMs = isLast ? totalDurationMs : Math.round((k + 1) * (totalDurationMs / count));
+    const frameStart = Math.round(k * (totalFrames / count));
+    const frameEnd = isLast ? totalFrames : Math.round((k + 1) * (totalFrames / count));
+    const frameCount = frameEnd - frameStart;
+
+    // Derived compatibility fields
+    const startSec = Number((frameStart / FPS).toFixed(6));
+    const endSec = Number((frameEnd / FPS).toFixed(6));
+    const durationSec = Number((frameCount / FPS).toFixed(6));
+    const startMs = Math.round((frameStart / FPS) * 1000);
+    const endMs = Math.round((frameEnd / FPS) * 1000);
     const durationMs = endMs - startMs;
 
     scenes.push({
       index: k,
       sceneId: `scene_${String(k + 1).padStart(3, "0")}`,
+      frameStart,
+      frameEnd,
+      frameCount,
       startMs,
       endMs,
       durationMs,
-      startSec: msToSec(startMs),
-      endSec: msToSec(endMs),
-      durationSec: msToSec(durationMs),
+      startSec,
+      endSec,
+      durationSec,
       audioStartMs: startMs,
       audioEndMs: endMs,
       subtitleStartMs: startMs,
@@ -331,7 +357,7 @@ export function buildSceneBoundaries(words, totalDuration, targetSceneCount) {
     });
   }
 
-  logger.info(`📐 Canonical Master Timeline: ${scenes.length} integer-millisecond scenes generated (${totalDurationMs}ms total)`);
+  logger.info(`📐 Canonical Master Frame Ledger: ${scenes.length} scenes generated (${totalFrames} total frames @ ${FPS} FPS)`);
   return scenes;
 }
 
@@ -355,26 +381,36 @@ export function validateCanonicalTimeline(timeline, expectedAudioDurationMs = nu
 
   const scenes = timeline.scenes;
   let cumulativeDurationMs = 0;
+  let cumulativeFrames = 0;
   let maxDriftMs = 0;
+
+  const plannedTotalFrames = timeline.totalFrames || Math.round(Number(timeline.totalDuration || 0) * FPS);
 
   for (let i = 0; i < scenes.length; i++) {
     const sc = scenes[i];
     const startMs = sc.startMs !== undefined ? sc.startMs : secToMs(sc.startSec);
     const endMs = sc.endMs !== undefined ? sc.endMs : secToMs(sc.endSec);
     const durationMs = sc.durationMs !== undefined ? sc.durationMs : (endMs - startMs);
+    const frameStart = sc.frameStart !== undefined ? sc.frameStart : Math.round((startMs / 1000) * FPS);
+    const frameEnd = sc.frameEnd !== undefined ? sc.frameEnd : Math.round((endMs / 1000) * FPS);
+    const frameCount = sc.frameCount !== undefined ? sc.frameCount : (frameEnd - frameStart);
 
-    // 1. Duration check
-    if (endMs - startMs !== durationMs) {
-      errors.push(`Scene ${i} duration mismatch: endMs (${endMs}) - startMs (${startMs}) !== durationMs (${durationMs})`);
+    // 1. Frame duration check
+    if (frameEnd - frameStart !== frameCount) {
+      errors.push(`Scene ${i} frame mismatch: frameEnd (${frameEnd}) - frameStart (${frameStart}) !== frameCount (${frameCount})`);
     }
 
     // 2. Contiguity check with previous scene
     if (i === 0) {
-      if (startMs !== 0) {
-        errors.push(`Scene 0 does not start at 0ms (starts at ${startMs}ms)`);
+      if (frameStart !== 0) {
+        errors.push(`Scene 0 does not start at frame 0 (starts at frame ${frameStart})`);
       }
     } else {
       const prevSc = scenes[i - 1];
+      const prevFrameEnd = prevSc.frameEnd !== undefined ? prevSc.frameEnd : Math.round(((prevSc.endMs || secToMs(prevSc.endSec)) / 1000) * FPS);
+      if (frameStart !== prevFrameEnd) {
+        errors.push(`Frame continuity break between Scene ${i - 1} (end: ${prevFrameEnd}) and Scene ${i} (start: ${frameStart})`);
+      }
       const prevEndMs = prevSc.endMs !== undefined ? prevSc.endMs : secToMs(prevSc.endSec);
       if (startMs !== prevEndMs) {
         const gapMs = Math.abs(startMs - prevEndMs);
@@ -384,9 +420,15 @@ export function validateCanonicalTimeline(timeline, expectedAudioDurationMs = nu
     }
 
     cumulativeDurationMs += durationMs;
+    cumulativeFrames += frameCount;
   }
 
-  // 3. Audio duration sync check if provided
+  // 3. Total frame conservation check
+  if (cumulativeFrames !== plannedTotalFrames) {
+    errors.push(`Frame conservation violation: sum(frameCount) = ${cumulativeFrames} !== planned totalFrames = ${plannedTotalFrames}`);
+  }
+
+  // 4. Audio duration sync check if provided
   if (expectedAudioDurationMs !== null && expectedAudioDurationMs > 0) {
     const audioDriftMs = Math.abs(cumulativeDurationMs - Math.round(expectedAudioDurationMs));
     maxDriftMs = Math.max(maxDriftMs, audioDriftMs);
@@ -401,6 +443,7 @@ export function validateCanonicalTimeline(timeline, expectedAudioDurationMs = nu
     errors,
     maxDriftMs,
     totalVisualDurationMs: cumulativeDurationMs,
+    totalFrames: cumulativeFrames,
   };
 }
 
@@ -443,6 +486,7 @@ export function logSyncDiagnostics(timeline, segmentActualDurationsMs = [], fina
 
     logger.info(
       `  Scene ${i} (${sc.sceneId || `scene_${String(i + 1).padStart(3, "0")}`}): ` +
+      `Frames: [${sc.frameStart ?? "?"}..${sc.frameEnd ?? "?"}] (${sc.frameCount ?? "?"}f) | ` +
       `Visual: ${vStart}ms -> ${vEnd}ms (${vDur}ms) | ` +
       `Audio: ${vStart}ms -> ${vEnd}ms | ` +
       `Subs: ${subStart}ms -> ${subEnd}ms | ` +
@@ -458,6 +502,7 @@ export function logSyncDiagnostics(timeline, segmentActualDurationsMs = [], fina
   maxDriftMs = Math.max(maxDriftMs, totalDriftMs);
 
   logger.info("----------------------------------------------------------");
+  logger.info(`  Total Frames:            ${timeline.totalFrames ?? scenes.reduce((s, c) => s + (c.frameCount || 0), 0)} frames`);
   logger.info(`  Total Visual Duration:   ${totalVisualMs}ms`);
   logger.info(`  Total Audio Duration:    ${totalAudioMs}ms`);
   logger.info(`  Total Final Video:       ${totalFinalMs}ms`);
@@ -482,13 +527,16 @@ export function logSyncDiagnostics(timeline, segmentActualDurationsMs = [], fina
  * @returns {Object} timeline
  */
 export function buildMasterTimeline(words, totalDuration, targetSceneCount, originalScript = "") {
-  const totalDurationMs = Math.max(100, secToMs(totalDuration));
+  const totalDurationSec = Math.max(0.1, Number(totalDuration || 0));
+  const totalFrames = Math.max(1, Math.round(totalDurationSec * FPS));
+  const totalDurationMs = Math.round((totalFrames / FPS) * 1000);
+
   logger.info(
     `🕐 Building Master Timeline: ${words?.length || 0} words | ` +
-    `${totalDuration.toFixed(2)}s (${totalDurationMs}ms) | target ${targetSceneCount} scenes`
+    `${totalDurationSec.toFixed(3)}s (${totalFrames} frames @ ${FPS} FPS) | target ${targetSceneCount} scenes`
   );
 
-  const scenes         = buildSceneBoundaries(words, totalDuration, targetSceneCount);
+  const scenes         = buildSceneBoundaries(words, totalDurationSec, targetSceneCount);
   let subtitleGroups   = buildSubtitleGroups(words || []);
 
   if (originalScript && originalScript.trim().length > 0) {
@@ -496,9 +544,12 @@ export function buildMasterTimeline(words, totalDuration, targetSceneCount, orig
   }
 
   const timeline = {
-    version:          2, // upgraded to version 2 (integer milliseconds canonical)
+    version:          3, // upgraded to version 3 (authoritative 30 FPS integer frame ledger)
+    fps:              FPS,
+    timebase:         `1/${FPS}`,
+    totalFrames,
     generatedAt:      new Date().toISOString(),
-    totalDuration,
+    totalDuration:    totalDurationSec,
     totalDurationMs,
     targetSceneCount,
     actualSceneCount: scenes.length,
@@ -512,7 +563,7 @@ export function buildMasterTimeline(words, totalDuration, targetSceneCount, orig
   if (!val.valid) {
     logger.warn(`⚠️ [MasterTimeline Integrity Warning]: ${val.errors.join(" | ")}`);
   } else {
-    logger.info(`✅ [MasterTimeline Integrity Passed]: 0ms drift across all ${scenes.length} scenes`);
+    logger.info(`✅ [MasterTimeline Integrity Passed]: 0-frame drift across all ${scenes.length} scenes (${totalFrames} total frames)`);
   }
 
   return timeline;

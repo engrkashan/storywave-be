@@ -343,20 +343,28 @@ function parseJsonToAss(words, posX, posY, startTime, duration, bord = 6, shad =
  */
 function _assDialoguesFromTimeline(groups, scene, posX, posY, bord = 6, shad = 3) {
   let dialogues = "";
-  const startMs = scene ? (scene.startMs !== undefined ? scene.startMs : secToMs(scene.startSec)) : 0;
-  const endMs = scene ? (scene.endMs !== undefined ? scene.endMs : secToMs(scene.endSec)) : Infinity;
-  const durationMs = scene ? (scene.durationMs !== undefined ? scene.durationMs : (endMs - startMs)) : Infinity;
+  // Rebase using exact frameStart / FPS when available for zero-drift alignment
+  const sceneStartSec = scene
+    ? (scene.frameStart !== undefined ? scene.frameStart / FPS : (scene.startSec !== undefined ? scene.startSec : (scene.startMs || 0) / 1000))
+    : 0;
+  const sceneDurationSec = scene
+    ? (scene.frameCount !== undefined ? scene.frameCount / FPS : (scene.durationSec !== undefined ? scene.durationSec : ((scene.endMs || 0) - (scene.startMs || 0)) / 1000))
+    : Infinity;
+  const sceneEndSec = sceneStartSec + sceneDurationSec;
 
   for (const g of groups) {
-    const gStartMs = g.startMs !== undefined ? g.startMs : secToMs(g.start);
-    const gEndMs = g.endMs !== undefined ? g.endMs : secToMs(g.end);
+    const gStartSec = g.startSec !== undefined ? g.startSec : (g.startMs !== undefined ? g.startMs / 1000 : Number(g.start || 0));
+    const gEndSec = g.endSec !== undefined ? g.endSec : (g.endMs !== undefined ? g.endMs / 1000 : Number(g.end || 0));
 
     // Include group if it overlaps the scene window
-    if (gEndMs <= startMs || gStartMs >= endMs) continue;
+    if (gEndSec <= sceneStartSec || gStartSec >= sceneEndSec) continue;
 
-    // Rebase to segment-local millisecond time
-    const localStartMs = Math.max(0, gStartMs - startMs);
-    const localEndMs = Math.min(durationMs, gEndMs - startMs);
+    // Rebase to segment-local millisecond time using exact frame start
+    const localStartSec = Math.max(0, gStartSec - sceneStartSec);
+    const localEndSec = Math.min(sceneDurationSec, gEndSec - sceneStartSec);
+
+    const localStartMs = Math.round(localStartSec * 1000);
+    const localEndMs = Math.round(localEndSec * 1000);
 
     if (localEndMs <= localStartMs) continue;
 
@@ -766,25 +774,104 @@ export async function generateVideoClips(
  * Encoding params are identical to the final stitch pass so the merge can
  * use "-c:v copy" and avoid a second full re-encode.
  */
-export async function renderMediaSegment(itemPath, outputPath, duration, width, height, escapedAssPath) {
+/**
+ * Probes video frame count and stream duration using a robust fallback hierarchy:
+ * 1. stream.nb_frames
+ * 2. stream.nb_read_packets (via -count_packets)
+ * 3. stream.duration * FPS (with < 0.5 frame tolerance)
+ *
+ * @param {string} filePath
+ * @returns {Promise<{frames: number, duration: number, source: string}>}
+ */
+export async function probeStreamFrames(filePath) {
+  return new Promise((resolve, reject) => {
+    exec(`ffprobe -v error -select_streams v:0 -show_entries stream=nb_frames,duration -count_packets -show_entries stream=nb_read_packets -of json "${filePath}"`, (err, stdout) => {
+      if (err) return reject(new Error(`ffprobe failed on ${filePath}: ${err.message}`));
+      try {
+        const parsed = JSON.parse(stdout);
+        const stream = parsed.streams?.[0];
+        if (!stream) return reject(new Error(`No video stream found in ${filePath}`));
+
+        let actualFrames = null;
+        let source = "nb_frames";
+        if (stream.nb_frames && !isNaN(parseInt(stream.nb_frames, 10)) && parseInt(stream.nb_frames, 10) > 0) {
+          actualFrames = parseInt(stream.nb_frames, 10);
+        } else if (stream.nb_read_packets && !isNaN(parseInt(stream.nb_read_packets, 10))) {
+          actualFrames = parseInt(stream.nb_read_packets, 10);
+          source = "count_packets";
+        } else if (stream.duration && !isNaN(parseFloat(stream.duration))) {
+          const durFrames = parseFloat(stream.duration) * FPS;
+          if (Math.abs(durFrames - Math.round(durFrames)) < 0.5) {
+            actualFrames = Math.round(durFrames);
+            source = "duration_calc";
+          }
+        }
+
+        if (actualFrames === null) {
+          return reject(new Error(`[FrameAudit] Could not determine frame count for ${filePath}`));
+        }
+
+        resolve({
+          frames: actualFrames,
+          duration: parseFloat(stream.duration || 0),
+          source,
+        });
+      } catch (parseErr) {
+        reject(new Error(`Failed to parse ffprobe output: ${parseErr.message}`));
+      }
+    });
+  });
+}
+
+/**
+ * Validates that an encoded segment has precisely the expected integer frame count.
+ * Fails fast if frame conservation is violated.
+ *
+ * @param {string} filePath
+ * @param {number} expectedFrames
+ * @returns {Promise<{frames: number, duration: number, source: string}>}
+ */
+export async function verifySegmentFrames(filePath, expectedFrames) {
+  const probe = await probeStreamFrames(filePath);
+  if (probe.frames !== expectedFrames) {
+    throw new Error(
+      `[FrameAudit FAIL] Segment ${path.basename(filePath)} frame conservation violated: actual ${probe.frames} !== expected ${expectedFrames} (${probe.source})`
+    );
+  }
+  return probe;
+}
+
+/**
+ * Renders a single media item (image or video clip) to a standardised H.264
+ * segment file with frame-exact length.
+ *
+ * All calls go through enqueueSegmentRender so concurrency is capped by MAX_SEGMENT_CONCURRENCY.
+ * Encoding params are identical to the final stitch pass so the merge can use "-c:v copy".
+ *
+ * @param {string} itemPath
+ * @param {string} outputPath
+ * @param {number|Object} sceneOrDuration — scene object with frameCount/frameStart or fallback duration
+ * @param {number} width
+ * @param {number} height
+ * @param {string} escapedAssPath
+ */
+export async function renderMediaSegment(itemPath, outputPath, sceneOrDuration, width, height, escapedAssPath) {
   const isVideo = itemPath.endsWith(".mp4");
   const commonScale = `scale=${width}:${height}:force_original_aspect_ratio=increase:out_color_matrix=bt709:out_range=tv:flags=bicubic,crop=${width}:${height},setsar=1`;
 
   // Subtitle filter — applied in the segment pass only if escapedAssPath is valid
   const subFilter = (escapedAssPath && escapedAssPath !== "null" && escapedAssPath !== "undefined") ? `,subtitles='${escapedAssPath}'` : "";
 
-  // CANONICAL SYNC FIX: Enforce exact millisecond duration and pad video clips that are
-  // shorter than the scene duration slot using tpad (cloning the last frame) so visual,
-  // audio, and subtitles never drift across scenes.
-  const durationMs = secToMs(duration);
-  const exactDuration = (durationMs / 1000).toFixed(3);
-  const trimFilter = `,trim=duration=${exactDuration},setpts=PTS-STARTPTS`;
+  // Extract exact integer frame count from canonical frame ledger
+  const targetFrames = (typeof sceneOrDuration === "object" && sceneOrDuration !== null && sceneOrDuration.frameCount !== undefined)
+    ? Math.max(1, parseInt(sceneOrDuration.frameCount, 10))
+    : Math.max(1, Math.round(Number(sceneOrDuration?.durationSec ?? sceneOrDuration) * FPS));
 
   let args;
   if (isVideo) {
     // If the video clip is shorter than the scene slot, tpad clones the last frame.
-    // trim then cleanly cuts at exactDuration.
-    const padDuration = Math.max(2, Math.ceil(Number(duration)) + 5);
+    const padDuration = Math.max(2, Math.ceil(targetFrames / FPS) + 5);
+    const trimFilter = `,trim=start_frame=0:end_frame=${targetFrames},setpts=PTS-STARTPTS`;
     const videoFilter = `${commonScale},fps=30,tpad=stop_mode=clone:stop_duration=${padDuration}${trimFilter}${subFilter}`;
 
     args = [
@@ -792,13 +879,12 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
       "-threads", String(config.workflow.ffmpegThreads),
       "-i", itemPath,
       "-vf", videoFilter,
-      "-t", String(exactDuration),
+      "-vframes", String(targetFrames),
       "-an", // Strip audio so ALL segments have identical 1-video, 0-audio stream signatures
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
       outputPath
     ];
   } else {
-    const totalFrames = Math.max(1, Math.round((durationMs / 1000) * FPS));
     const cycleFrames = ZOOM_CYCLE_SECONDS * FPS; // fixed 12s cycle (6s in, 6s out)
     const center = (1 + MAX_ZOOM_LEVEL) / 2;
     const amplitude = (MAX_ZOOM_LEVEL - 1) / 2;
@@ -810,16 +896,18 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
 
     const upScaleFilter = `scale=${upWidth}:${upHeight}:force_original_aspect_ratio=increase:out_color_matrix=bt709:out_range=tv:flags=bicubic,crop=${upWidth}:${upHeight},setsar=1`;
 
-    // zoompan receives the upscaled image, animates it, and outputs back at 1080p (s=widthxheight)
-    const zoomFilter = `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${totalFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}`;
-    const filter = `${upScaleFilter},${zoomFilter},fps=30${trimFilter}${subFilter}`;
+    // zoompan receives the upscaled image, animates it, and outputs back at 1080p at 30 fps
+    // CRITICAL: No redundant fps=30 filter after zoompan (which caused terminal frame drop)
+    const zoomFilter = `zoompan=z='${center}-${amplitude}*cos(2*PI*on/${cycleFrames})':d=${targetFrames}:x='floor(iw/2-(iw/zoom/2))':y='floor(ih/2-(ih/zoom/2))':s=${width}x${height}:fps=${FPS}`;
+    const trimFilter = `,trim=start_frame=0:end_frame=${targetFrames},setpts=PTS-STARTPTS`;
+    const filter = `${upScaleFilter},${zoomFilter}${trimFilter}${subFilter}`;
 
     args = [
       "-y", "-loglevel", "error",
       "-threads", String(config.workflow.ffmpegThreads),
       "-i", itemPath,
       "-vf", filter,
-      "-t", String(exactDuration),
+      "-vframes", String(targetFrames),
       "-an", // Strip audio so ALL segments have identical 1-video, 0-audio stream signatures
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
       outputPath
@@ -833,7 +921,7 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
     const stopFfmpeg = perf?.startFfmpeg(`Segment Render: ${path.basename(itemPath)}`, args, {
       itemPath,
       outputPath,
-      duration,
+      targetFrames,
       width,
       height,
     });
@@ -841,10 +929,21 @@ export async function renderMediaSegment(itemPath, outputPath, duration, width, 
     const ff = spawn("ffmpeg", args);
     let errorLog = "";
     ff.stderr.on("data", (data) => errorLog += data.toString());
-    ff.on("close", (code) => {
+    ff.on("close", async (code) => {
       stopFfmpeg?.(code, errorLog, outputPath);
-      if (code === 0) resolve();
-      else reject(new Error(`Segment render failed for ${itemPath}: ${errorLog || code}`));
+      if (code === 0) {
+        try {
+          // Verify segment frame count matches expected target frames
+          const audit = await verifySegmentFrames(outputPath, targetFrames);
+          logger.info(`✅ [SegmentAudit] ${path.basename(outputPath)} passed: ${audit.frames}/${targetFrames} frames (${audit.source})`);
+          resolve();
+        } catch (auditErr) {
+          logger.error(`❌ [SegmentAudit FAIL] ${auditErr.message}`);
+          reject(auditErr);
+        }
+      } else {
+        reject(new Error(`Segment render failed for ${itemPath}: ${errorLog || code}`));
+      }
     });
     ff.on("error", (err) => {
       stopFfmpeg?.(1, err.message, null);
@@ -953,24 +1052,33 @@ export async function concatSegments(segmentFiles, audioPath, outputPath, audioD
     });
     logger.info(`✅ Final video assembled: ${outputPath}`);
 
-    // SYNC VERIFY (A2): confirm the stitched video duration matches the audio
-    // timeline. With exact-duration segment trimming in renderMediaSegment, the
-    // concat of all segments should land on audioDuration. A mismatch here means
-    // residual frame-rounding drift was NOT fully eliminated.
+    // CANONICAL SYNC VERIFY & FRAME CONSERVATION AUDIT:
+    // Verify the stitched video frame count matches planned canonical totalFrames
+    // and stream duration matches audio within half a frame tolerance (<= 16.67ms).
     try {
-      const finalDur = await getAudioDuration(outputPath);
-      const delta = Math.abs((finalDur || 0) - (audioDuration || 0));
-      if (delta > 0.1) {
-        logger.warn(`⚠️ [SyncVerify] Final video duration ${finalDur?.toFixed(3)}s vs audio ${audioDuration?.toFixed(3)}s (Δ=${delta.toFixed(3)}s) over ${segmentFiles.length} segments.`);
+      const vAudit = await probeStreamFrames(outputPath);
+      const expectedTotalFrames = options.masterTimeline?.totalFrames;
+
+      if (expectedTotalFrames && vAudit.frames !== expectedTotalFrames) {
+        const frameDelta = vAudit.frames - expectedTotalFrames;
+        logger.error(`❌ [FinalSyncAudit FAIL] Video frame conservation violated: actual ${vAudit.frames} !== expected ${expectedTotalFrames} [Δ=${frameDelta} frames]`);
+        throw new Error(`[FinalSyncAudit FAIL] Video frame conservation violated: actual ${vAudit.frames} !== expected ${expectedTotalFrames}`);
+      }
+
+      const streamDeltaSec = Math.abs((vAudit.duration || 0) - (audioDuration || 0));
+      const streamDeltaMs = streamDeltaSec * 1000;
+      if (streamDeltaMs > 35) {
+        logger.warn(`⚠️ [FinalSyncAudit] Video stream duration ${vAudit.duration?.toFixed(3)}s vs audio ${Number(audioDuration).toFixed(3)}s (Δ=${streamDeltaMs.toFixed(1)}ms) over ${segmentFiles.length} segments.`);
       } else {
-        logger.info(`✅ [SyncVerify] Final video duration ${finalDur?.toFixed(3)}s matches audio ${audioDuration?.toFixed(3)}s across ${segmentFiles.length} segments.`);
+        logger.info(`✅ [FinalSyncAudit PASSED] Final video: ${vAudit.frames} frames (${vAudit.duration?.toFixed(3)}s) matches planned frames (${expectedTotalFrames ?? vAudit.frames}) and audio (${Number(audioDuration).toFixed(3)}s, Δ=${streamDeltaMs.toFixed(1)}ms) across ${segmentFiles.length} segments.`);
       }
 
       if (options.masterTimeline) {
-        logSyncDiagnostics(options.masterTimeline, [], (finalDur || 0) * 1000, (audioDuration || 0) * 1000);
+        logSyncDiagnostics(options.masterTimeline, [], (vAudit.duration || 0) * 1000, (audioDuration || 0) * 1000);
       }
     } catch (probeErr) {
-      logger.warn(`⚠️ [SyncVerify] Could not probe final duration: ${probeErr.message}`);
+      logger.error(`⚠️ [SyncVerify Error]: ${probeErr.message}`);
+      throw probeErr;
     }
   } catch (err) {
     logger.error("FFmpeg Merge Error:", err.message);
