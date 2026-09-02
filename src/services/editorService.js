@@ -382,7 +382,18 @@ export async function streamEditorWorkflowDetail({ workflowId, userId, role, onH
 export async function updateScenePrompt({ workflowId, sceneId, prompt, userId }) {
   const scene = await prisma.scene.findFirst({
     where: { id: sceneId, workflowId },
-    include: { workflow: true },
+    select: {
+      id: true,
+      index: true,
+      originalPrompt: true,
+      workflow: {
+        select: {
+          id: true,
+          userId: true,
+          status: true,
+        },
+      },
+    },
   });
 
   if (!scene || scene.workflow.userId !== userId) {
@@ -394,13 +405,10 @@ export async function updateScenePrompt({ workflowId, sceneId, prompt, userId })
     throw new Error(`Workflow is in '${scene.workflow.status}' state — editing not permitted while actively processing`);
   }
 
-  // Update this scene and its paired dual ratio scene if applicable
-  const meta = scene.workflow.metadata || {};
-  const dualPlatform = meta.dualPlatform ?? false;
-
-  const scenesToUpdate = dualPlatform
-    ? await prisma.scene.findMany({ where: { workflowId, index: scene.index } })
-    : [scene];
+  // Update this scene and its paired dual ratio scene if applicable (finds both 16:9 and 9:16 by index)
+  const scenesToUpdate = await prisma.scene.findMany({
+    where: { workflowId, index: scene.index },
+  });
 
   for (const sc of scenesToUpdate) {
     await prisma.scene.update({
@@ -422,7 +430,25 @@ export async function updateScenePrompt({ workflowId, sceneId, prompt, userId })
 export async function revertSceneVersion({ workflowId, sceneId, version, userId }) {
   const scene = await prisma.scene.findFirst({
     where: { id: sceneId, workflowId },
-    include: { workflow: true, versions: true },
+    select: {
+      id: true,
+      workflow: {
+        select: {
+          id: true,
+          userId: true,
+        },
+      },
+      versions: {
+        select: {
+          id: true,
+          version: true,
+          assetUrl: true,
+          assetPublicId: true,
+          assetType: true,
+          prompt: true,
+        },
+      },
+    },
   });
 
   if (!scene || scene.workflow.userId !== userId) {
@@ -465,7 +491,24 @@ export async function revertSceneVersion({ workflowId, sceneId, version, userId 
 export async function replaceSceneFrame({ workflowId, sceneId, file, imageUrl, imageBase64, userId }) {
   const scene = await prisma.scene.findFirst({
     where: { id: sceneId, workflowId },
-    include: { workflow: true, versions: true },
+    select: {
+      id: true,
+      index: true,
+      ratio: true,
+      durationSec: true,
+      startSec: true,
+      endSec: true,
+      activeVersion: true,
+      activePrompt: true,
+      originalPrompt: true,
+      workflow: {
+        select: {
+          id: true,
+          userId: true,
+          status: true,
+        },
+      },
+    },
   });
 
   if (!scene || scene.workflow.userId !== userId) {
@@ -573,7 +616,16 @@ export async function replaceSceneFrame({ workflowId, sceneId, file, imageUrl, i
 export async function uploadCharacterReferenceAsset({ workflowId, sceneId, file, imageBase64, imageUrl, name, userId }) {
   const scene = await prisma.scene.findFirst({
     where: { id: sceneId, workflowId },
-    include: { workflow: true },
+    select: {
+      id: true,
+      index: true,
+      workflow: {
+        select: {
+          id: true,
+          userId: true,
+        },
+      },
+    },
   });
 
   if (!scene || scene.workflow.userId !== userId) {
@@ -636,7 +688,21 @@ export async function uploadCharacterReferenceAsset({ workflowId, sceneId, file,
 export async function requestSceneRegen({ workflowId, sceneId, prompt, characterReference, generateAsVideo, userId }) {
   const scene = await prisma.scene.findFirst({
     where: { id: sceneId, workflowId },
-    include: { workflow: true },
+    select: {
+      id: true,
+      index: true,
+      status: true,
+      activePrompt: true,
+      originalPrompt: true,
+      selectedRefs: true,
+      workflow: {
+        select: {
+          id: true,
+          userId: true,
+          status: true,
+        },
+      },
+    },
   });
 
   if (!scene || scene.workflow.userId !== userId) {
@@ -704,7 +770,17 @@ export async function requestSceneRegen({ workflowId, sceneId, prompt, character
 export async function validateMergeEligibility({ workflowId, userId }) {
   const workflow = await prisma.workflow.findFirst({
     where: { id: workflowId, userId },
-    include: { scenes: true },
+    select: {
+      id: true,
+      status: true,
+      scenes: {
+        select: {
+          id: true,
+          status: true,
+          assetUrl: true,
+        },
+      },
+    },
   });
 
   if (!workflow) {
