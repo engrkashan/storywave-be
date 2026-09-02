@@ -142,22 +142,90 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
 
 /**
  * Get full detail of a workflow and its scenes for the Editor.
+ *
+ * Fields actually consumed by the detail page (detail/index.jsx + SceneCard.jsx):
+ *
+ * Workflow-level:
+ *   id, title, status, storyId,
+ *   metadata.mediaType, metadata.aspectRatio, metadata.dualPlatform,
+ *   metadata._editorCharacterTalk / metadata.characterTalk,
+ *   metadata._editorFinalAudioUrl,
+ *   metadata.characterReferences, metadata.uploadedCharacterReferences
+ *   story.title, story.content (script), story.isPodcast, story.audioURL
+ *
+ * Scene-level (SceneCard.jsx):
+ *   id, workflowId, index, ratio, status, startSec, endSec, durationSec,
+ *   narration, mediaType, originalPrompt, activePrompt, userEditedPrompt,
+ *   activeVersion, generationAttempts, assetUrl, assetPublicId, assetType,
+ *   charactersInScene
+ *   NOT needed: compiledState, directorDecision, prevExitState, selectedRefs
+ *               (MGE engine blobs — only used during generation, not in the editor UI)
+ *
+ * SceneVersion-level (VersionModal.jsx):
+ *   id, version, prompt, assetUrl, assetType, ratio, createdAt
  */
 export async function getEditorWorkflowDetail({ workflowId, userId, role }) {
-  const where = role === "CREATOR" && userId
-    ? { id: workflowId, userId }
-    : userId
-    ? { id: workflowId, userId }
-    : { id: workflowId };
+  // ADMIN can view any workflow; all others are scoped to their own userId.
+  const where =
+    role === "ADMIN"
+      ? { id: workflowId }
+      : { id: workflowId, userId };
 
   const workflow = await prisma.workflow.findFirst({
     where,
-    include: {
-      story: true,
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      storyId: true,
+      createdAt: true,
+      updatedAt: true,
+      // metadata: fetched separately via raw projection to avoid loading the
+      // full multi-MB blob just to read ~6 sub-fields (see Phase 2 below).
+      story: {
+        select: {
+          title: true,
+          content: true,      // rendered as "script" in the hero panel
+          isPodcast: true,
+          audioURL: true,
+        },
+      },
       scenes: {
-        include: {
+        select: {
+          id: true,
+          workflowId: true,
+          index: true,
+          ratio: true,
+          status: true,
+          startSec: true,
+          endSec: true,
+          durationSec: true,
+          narration: true,
+          mediaType: true,
+          originalPrompt: true,
+          activePrompt: true,
+          userEditedPrompt: true,
+          activeVersion: true,
+          generationAttempts: true,
+          assetUrl: true,
+          assetPublicId: true,
+          assetType: true,
+          charactersInScene: true,
+          // compiledState, directorDecision, prevExitState, selectedRefs intentionally
+          // omitted — these are large MGE engine blobs (10-50 KB each × 170 scenes =
+          // several MB). The editor UI never reads them; they are only used by the
+          // BullMQ worker during regeneration (which re-reads the scene from DB directly).
           versions: {
             orderBy: { version: "desc" },
+            select: {
+              id: true,
+              version: true,
+              prompt: true,
+              assetUrl: true,
+              assetType: true,
+              ratio: true,
+              createdAt: true,
+            },
           },
         },
         orderBy: [{ index: "asc" }, { ratio: "asc" }],
@@ -169,7 +237,28 @@ export async function getEditorWorkflowDetail({ workflowId, userId, role }) {
     throw new Error("Workflow not found or unauthorized");
   }
 
-  const meta = workflow.metadata || {};
+  // ── Targeted metadata sub-field projection ───────────────────────────────────
+  // Fetches only the ~6 metadata sub-fields the editor detail page reads.
+  // avoids loading the full multi-MB metadata blob (masterPrompts × 170 scenes,
+  // soundscapePlan, finalAudit, globalNegativePrompt, characterBible, etc.).
+  const metaCommand = await prisma.$runCommandRaw({
+    find: "Workflow",
+    filter: { _id: { $oid: workflowId } },
+    projection: {
+      "metadata.mediaType": 1,
+      "metadata.aspectRatio": 1,
+      "metadata.dualPlatform": 1,
+      "metadata._editorCharacterTalk": 1,
+      "metadata.characterTalk": 1,
+      "metadata._editorFinalAudioUrl": 1,
+      "metadata.characterReferences": 1,
+      "metadata.uploadedCharacterReferences": 1,
+    },
+    limit: 1,
+  });
+
+  const metaDoc = metaCommand?.cursor?.firstBatch?.[0] || {};
+  const meta = metaDoc.metadata || {};
 
   return {
     id: workflow.id,
@@ -184,6 +273,7 @@ export async function getEditorWorkflowDetail({ workflowId, userId, role }) {
     aspectRatio: meta.aspectRatio || "16:9",
     dualPlatform: meta.dualPlatform ?? false,
     characterTalk: meta._editorCharacterTalk ?? meta.characterTalk ?? false,
+    characterReferences: meta.characterReferences || meta.uploadedCharacterReferences || [],
     createdAt: workflow.createdAt,
     updatedAt: workflow.updatedAt,
     scenes: workflow.scenes.map((s) => ({
@@ -218,6 +308,7 @@ export async function getEditorWorkflowDetail({ workflowId, userId, role }) {
     })),
   };
 }
+
 
 /**
  * Update prompt for a scene.
