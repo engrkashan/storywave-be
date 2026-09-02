@@ -61,16 +61,24 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
 
   const workflowIds = workflows.map((w) => w.id);
 
-  // ── Phase 2: metadata + first-scene thumbnail (parallel) ─────────────────────
-  // Metadata is fetched separately so it doesn't block the list query.
-  // First-scene query loads ONLY index=0 scenes (1-2 docs per workflow, not 170).
-  const [metaRows, firstScenes] = await Promise.all([
-    prisma.workflow.findMany({
-      where: { id: { in: workflowIds } },
-      select: { id: true, metadata: true },
+  // ── Phase 2: targeted metadata projection + first-scene thumbnail (parallel) ──
+  // CRITICAL: metadata: true would transfer the full 2-5MB blob (masterPrompts for
+  // 170 scenes, soundscapePlan, finalAudit, characterBible, etc.) just to read 3 fields.
+  // $runCommandRaw with dot-notation projection evaluates server-side on Atlas —
+  // only ~100 bytes transferred instead of the full document.
+  const [metaCommand, firstScenes] = await Promise.all([
+    prisma.$runCommandRaw({
+      find: "Workflow",
+      filter: {
+        _id: { $in: workflowIds.map((id) => ({ $oid: id })) },
+      },
+      projection: {
+        "metadata.mediaType": 1,
+        "metadata.aspectRatio": 1,
+        "metadata.dualPlatform": 1,
+      },
     }),
-    // index=0 covers the first visual moment — 1 doc for single-ratio,
-    // 2 docs (16:9 + 9:16) for dual-platform. Either way tiny I/O.
+    // index=0 = first visual moment. 1 doc per workflow (2 for dual-platform). Tiny I/O.
     prisma.scene.findMany({
       where: { workflowId: { in: workflowIds }, index: 0 },
       select: { workflowId: true, assetUrl: true, ratio: true },
@@ -79,8 +87,12 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
   ]);
 
   // Build O(1) lookup maps
+  // $runCommandRaw returns ObjectId as { $oid: "hexstring" }
   const metaById = {};
-  for (const m of metaRows) metaById[m.id] = m.metadata || {};
+  for (const doc of metaCommand?.cursor?.firstBatch ?? []) {
+    const id = doc._id?.$oid ?? String(doc._id);
+    metaById[id] = doc.metadata || {};
+  }
 
   const firstSceneByWorkflow = {};
   for (const s of firstScenes) {
@@ -89,6 +101,7 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
       firstSceneByWorkflow[s.workflowId] = s.assetUrl;
     }
   }
+
 
   const items = workflows.map((wf) => {
     const meta = metaById[wf.id] || {};
