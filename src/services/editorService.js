@@ -24,6 +24,11 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
     ...(role !== "ADMIN" && userId ? { userId } : {}),
   };
 
+  // ── Phase 1: List + count (no metadata, no scene documents) ──────────────────
+  // _count.scenes counts rows in the Scene collection via a fast index lookup
+  // (@@index([workflowId, index])) without loading any scene document bodies.
+  // This avoids loading 100s of Scene docs that contain large MGE JSON blobs
+  // (compiledState, directorDecision, selectedRefs) which caused the 46s timeout.
   const [total, workflows] = await Promise.all([
     prisma.workflow.count({ where }),
     prisma.workflow.findMany({
@@ -31,45 +36,68 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
       skip,
       take: parsedLimit,
       orderBy: { updatedAt: "desc" },
-      // Use select (not include) so we fetch only what we render.
-      // metadata is kept here because this list is always tiny
-      // (USER_CONFIRMATION_REQUIRED is a transient state — 1-5 items).
       select: {
         id: true,
         title: true,
         status: true,
         type: true,
-        metadata: true,
         createdAt: true,
         updatedAt: true,
+        _count: { select: { scenes: true } }, // scene count — no doc I/O
         story: {
           select: {
-            id: true,
-            title: true,
             coverArtURL: true,
             coverArtURL_16_9: true,
             coverArtURL_9_16: true,
           },
         },
-        scenes: {
-          select: {
-            id: true,
-            index: true,
-            status: true,
-            ratio: true,
-            assetUrl: true,
-            assetType: true,
-          },
-          orderBy: { index: "asc" },
-        },
       },
     }),
   ]);
 
+  if (workflows.length === 0) {
+    return { items: [], total, page: parsedPage, limit: parsedLimit, totalPages: 0 };
+  }
+
+  const workflowIds = workflows.map((w) => w.id);
+
+  // ── Phase 2: metadata + first-scene thumbnail (parallel) ─────────────────────
+  // Metadata is fetched separately so it doesn't block the list query.
+  // First-scene query loads ONLY index=0 scenes (1-2 docs per workflow, not 170).
+  const [metaRows, firstScenes] = await Promise.all([
+    prisma.workflow.findMany({
+      where: { id: { in: workflowIds } },
+      select: { id: true, metadata: true },
+    }),
+    // index=0 covers the first visual moment — 1 doc for single-ratio,
+    // 2 docs (16:9 + 9:16) for dual-platform. Either way tiny I/O.
+    prisma.scene.findMany({
+      where: { workflowId: { in: workflowIds }, index: 0 },
+      select: { workflowId: true, assetUrl: true, ratio: true },
+      orderBy: { workflowId: "asc" },
+    }),
+  ]);
+
+  // Build O(1) lookup maps
+  const metaById = {};
+  for (const m of metaRows) metaById[m.id] = m.metadata || {};
+
+  const firstSceneByWorkflow = {};
+  for (const s of firstScenes) {
+    // Prefer 16:9 thumbnail; only store first occurrence per workflow
+    if (!firstSceneByWorkflow[s.workflowId] || s.ratio === "16:9") {
+      firstSceneByWorkflow[s.workflowId] = s.assetUrl;
+    }
+  }
+
   const items = workflows.map((wf) => {
-    const meta = wf.metadata || {};
-    // Scene count: deduplicate by index (dual-platform has 2 scenes per index)
-    const uniqueIndices = new Set(wf.scenes.map((s) => s.index));
+    const meta = metaById[wf.id] || {};
+    const dualPlatform = meta.dualPlatform ?? false;
+    // _count.scenes = total scene rows. For dual-platform each visual index
+    // produces 2 Scene records (16:9 + 9:16), so divide to get visual scene count.
+    const rawCount = wf._count.scenes;
+    const sceneCount = dualPlatform ? Math.ceil(rawCount / 2) : rawCount;
+
     return {
       id: wf.id,
       title: wf.title,
@@ -77,8 +105,8 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
       type: wf.type,
       mediaType: meta.mediaType || "multi_image",
       aspectRatio: meta.aspectRatio || "16:9",
-      dualPlatform: meta.dualPlatform ?? false,
-      sceneCount: uniqueIndices.size,
+      dualPlatform,
+      sceneCount,
       coverArtUrl:
         wf.story?.coverArtURL_16_9 ||
         wf.story?.coverArtURL_9_16 ||
@@ -86,7 +114,7 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
         null,
       createdAt: wf.createdAt,
       updatedAt: wf.updatedAt,
-      firstSceneAsset: wf.scenes?.[0]?.assetUrl || null,
+      firstSceneAsset: firstSceneByWorkflow[wf.id] || null,
     };
   });
 
