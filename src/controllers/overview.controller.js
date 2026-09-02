@@ -73,49 +73,87 @@ export const getWorkflows = async (req, res) => {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
+    logger.info(`[WORKFLOW DEBUG] controller entered — userId=${userId} role=${role} page=${page} limit=${limit}`);
+    const t0 = Date.now();
+
     const whereByRole = role === "CREATOR" ? { userId } : {};
 
-    const workflows = await prisma.workflow.findMany({
-      where: whereByRole,
-      orderBy: { createdAt: "desc" },
-      skip,
-      take: limit,
-      select: {
-        id: true,
-        title: true,
-        status: true,
-        metadata: true,
-        createdAt: true,
-        story: {
-          select: {
-            id: true,
-            isPodcast: true,
-            audioURL: true,
-            coverArtURL: true,
-            coverArtURL_16_9: true,
-            coverArtURL_9_16: true,
-            series: true,
-          },
-        },
-        video: {
-          select: {
-            fileURL: true,
-            video_16_9: true,
-            video_9_16: true,
-          },
-        },
-        user: {
-          select: {
-            id: true,
-            fullName: true,
-            role: true,
-          },
-        },
-      },
-    });
+    // ─── FIX: Run findMany + count in parallel (was sequential — 2 serial RTTs) ──
+    // ─── FIX: metadata removed from select — it was fetching multi-MB JSON blobs ─
+    //         (storyMetadata, characterBible, MGE audit, soundscapePlan, etc.)      
+    //         per workflow, causing the gateway 504 when the collection grew.        
+    //         Only metadata.error is consumed here; recovered via a targeted query   
+    //         scoped to FAILED workflows in this page only.                          
+    logger.info(`[WORKFLOW DEBUG] before findMany + count (parallel)`);
+    const t1 = Date.now();
 
-    const total = await prisma.workflow.count({ where: whereByRole });
+    const [workflows, total] = await Promise.all([
+      prisma.workflow.findMany({
+        where: whereByRole,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          // metadata intentionally omitted — see fix comment above.
+          // Only metadata.error is needed; fetched separately below for FAILED rows only.
+          createdAt: true,
+          story: {
+            select: {
+              id: true,
+              isPodcast: true,
+              audioURL: true,
+              coverArtURL: true,
+              coverArtURL_16_9: true,
+              coverArtURL_9_16: true,
+              series: true,
+            },
+          },
+          video: {
+            select: {
+              fileURL: true,
+              video_16_9: true,
+              video_9_16: true,
+            },
+          },
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              role: true,
+            },
+          },
+        },
+      }),
+      prisma.workflow.count({ where: whereByRole }),
+    ]);
 
+    logger.info(`[WORKFLOW DEBUG] after findMany + count: ${Date.now() - t1}ms — got ${workflows.length} rows, total=${total}`);
+
+    // ─── Recover metadata.error for FAILED workflows only ───────────────────────
+    // Tiny secondary query: at most `limit` IDs, status=FAILED, select only metadata.
+    // Index-covered by _id (hash). No-op when no FAILED workflows are on this page.
+    const failedIds = workflows
+      .filter((w) => w.status === "FAILED")
+      .map((w) => w.id);
+
+    const errorByWorkflowId = {};
+    if (failedIds.length > 0) {
+      logger.info(`[WORKFLOW DEBUG] fetching metadata.error for ${failedIds.length} FAILED workflow(s)`);
+      const t2 = Date.now();
+      const failedMeta = await prisma.workflow.findMany({
+        where: { id: { in: failedIds } },
+        select: { id: true, metadata: true },
+      });
+      logger.info(`[WORKFLOW DEBUG] after error fetch: ${Date.now() - t2}ms`);
+      for (const fm of failedMeta) {
+        errorByWorkflowId[fm.id] = fm.metadata?.error || null;
+      }
+    }
+
+    logger.info(`[WORKFLOW DEBUG] before mapping`);
     const stories = workflows.map((w) => ({
       id: w.id,
       workflow: w.id,
@@ -123,7 +161,7 @@ export const getWorkflows = async (req, res) => {
       status: w.status,
       series: w.story?.series || null,
       createdAt: w.createdAt,
-      error: w.metadata?.error || null,
+      error: errorByWorkflowId[w.id] ?? null,
       isPodcast: w.story?.isPodcast || false,
       audioURL: w.story?.audioURL || null,
       thumbnail: w.story?.coverArtURL_16_9 || w.story?.coverArtURL_9_16 || w.story?.coverArtURL || null,
@@ -139,6 +177,7 @@ export const getWorkflows = async (req, res) => {
       },
     }));
 
+    logger.info(`[WORKFLOW DEBUG] response completed — total elapsed: ${Date.now() - t0}ms`);
     return res.status(200).json({
       stories,
       meta: {
