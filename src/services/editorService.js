@@ -18,9 +18,10 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
   const parsedPage = Math.max(1, parseInt(page, 10) || 1);
   const skip = (parsedPage - 1) * parsedLimit;
 
+  // ADMIN sees all USER_CONFIRMATION_REQUIRED workflows; CREATOR sees only their own.
   const where = {
     status: "USER_CONFIRMATION_REQUIRED",
-    ...(role === "CREATOR" && userId ? { userId } : userId ? { userId } : {}),
+    ...(role !== "ADMIN" && userId ? { userId } : {}),
   };
 
   const [total, workflows] = await Promise.all([
@@ -30,7 +31,17 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
       skip,
       take: parsedLimit,
       orderBy: { updatedAt: "desc" },
-      include: {
+      // Use select (not include) so we fetch only what we render.
+      // metadata is kept here because this list is always tiny
+      // (USER_CONFIRMATION_REQUIRED is a transient state — 1-5 items).
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        type: true,
+        metadata: true,
+        createdAt: true,
+        updatedAt: true,
         story: {
           select: {
             id: true,
@@ -57,7 +68,7 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
 
   const items = workflows.map((wf) => {
     const meta = wf.metadata || {};
-    // Scene count: deduplicate indices
+    // Scene count: deduplicate by index (dual-platform has 2 scenes per index)
     const uniqueIndices = new Set(wf.scenes.map((s) => s.index));
     return {
       id: wf.id,
@@ -68,7 +79,11 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
       aspectRatio: meta.aspectRatio || "16:9",
       dualPlatform: meta.dualPlatform ?? false,
       sceneCount: uniqueIndices.size,
-      coverArtUrl: wf.story?.coverArtURL || wf.story?.coverArtURL_16_9 || wf.story?.coverArtURL_9_16 || null,
+      coverArtUrl:
+        wf.story?.coverArtURL_16_9 ||
+        wf.story?.coverArtURL_9_16 ||
+        wf.story?.coverArtURL ||
+        null,
       createdAt: wf.createdAt,
       updatedAt: wf.updatedAt,
       firstSceneAsset: wf.scenes?.[0]?.assetUrl || null,
@@ -78,9 +93,9 @@ export async function getEditorWorkflows({ userId, role, page = 1, limit = 20 })
   return {
     items,
     total,
-    page: Number(page),
-    limit: Number(limit),
-    totalPages: Math.ceil(total / limit),
+    page: parsedPage,
+    limit: parsedLimit,
+    totalPages: Math.ceil(total / parsedLimit),
   };
 }
 
