@@ -60,6 +60,14 @@ export function runPromptQualityPipeline(rawPrompts = [], beats = [], storyBible
  * @returns {{ finalPromptObj: object, auditLog: object }}
  */
 export function processSinglePromptPqa(beatNumber, initialPromptObj, historyContext) {
+  if (initialPromptObj?.isPredefined) {
+    logger.info(`📋 [PQA Pipeline] Beat ${beatNumber}: Prompt is pre-defined in storyGuidelines — bypassing PQA optimization to preserve 100% fidelity.`);
+    return {
+      finalPromptObj: initialPromptObj,
+      auditLog: { score: 100, status: "BYPASS_PREDEFINED", issuesCount: 0 }
+    };
+  }
+
   let currentPromptObj = { ...initialPromptObj };
   let iteration = 0;
   let finalReport = null;

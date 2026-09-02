@@ -4,7 +4,7 @@ import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import { config } from "../config/workflow.config.js";
 import { SCENE_PROMPT_VERSION_ONE, SCENE_PROMPT_VERSION_TWO } from "./promptService.js";
-
+import { parseStoryGuidelineFrames, findMatchingGuidelineFrame, isStoryGuidelinesOnlyForPromptsEnabled } from "../utils/storyGuidelineParser.js";
 
 const logger = createLogger("StoryService");
 
@@ -569,6 +569,28 @@ async function generatePromptForChunk({
   characterReferences,
   storyGuidelines = null,
 }) {
+  // 📋 Check for pre-defined frame block in storyGuidelines (FRAME ID)
+  // Gated by USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS
+  if (storyGuidelines && isStoryGuidelinesOnlyForPromptsEnabled()) {
+    const parsedGuidelineFrames = parseStoryGuidelineFrames(storyGuidelines);
+    if (parsedGuidelineFrames.length > 0) {
+      const matched = findMatchingGuidelineFrame(
+        { text: chunkText, sceneIndex: chunkIndex },
+        chunkIndex,
+        chunkIndex + 1,
+        parsedGuidelineFrames
+      );
+      if (matched && matched.fullFramePrompt) {
+        logger.info(`✅ [StoryGuidelines] Chunk ${chunkIndex + 1}: Using pre-defined full frame block from ${matched.frameId || `Frame ${matched.frameNumber || chunkIndex + 1}`} directly (USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS=true).`);
+        return {
+          prompt: matched.fullFramePrompt,
+          charactersInScene: matched.visibleHumans || [],
+          visualContext: ""
+        };
+      }
+    }
+  }
+
   const charactersStr = storyBible?.characters?.map(c => `- ${c.name} (ID: ${c.id}): ${c.appearance || "Clinical neutral appearance"} | Locked Wardrobe: ${c.clothing || c.base_clothing || "Default cinematic attire"}`).join('\n') || "None";
   const locationsStr = storyBible?.locations?.map(l => `- ${l.name}: ${l.description}`).join('\n') || "None";
   const artStyle = storyBible?.artStyle || "Cinematic photorealistic film still, 8K detail, hyper-realistic, volumetric lighting.";
@@ -725,7 +747,7 @@ Return STRICT valid JSON in this exact structure:
  * Converts exact Whisper voiceover chunks into standalone image prompts
  * analyzing each chunk individually using the global movie guide.
  */
-export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null, referenceTraits = null, characterReferences = [], storyGuidelines = null) {
+export async function generateScenePrompts(storyScript, count = 5, storyBible = null, visualSuggestions = null, narrationSegments = null, referenceTraits = null, characterReferences = [], storyGuidelines = null, options = {}) {
   logger.info(`🎬 [Chunk-based Engine] generateScenePrompts — ${count} frames requested`);
 
   let segments = narrationSegments;
@@ -738,6 +760,88 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
       endSec: (i + 1) * 5,
       text: words.slice(i * chunkSize, (i + 1) * chunkSize).join(" ")
     }));
+  }
+
+  // 📋 Direct Guideline Match: If storyGuidelines provides pre-defined frames (keyed by FRAME ID)
+  // Gated by USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS
+  const isOnlyForPrompts = isStoryGuidelinesOnlyForPromptsEnabled(options);
+  const parsedGuidelineFrames = (isOnlyForPrompts && storyGuidelines) ? parseStoryGuidelineFrames(storyGuidelines) : [];
+  if (parsedGuidelineFrames.length > 0) {
+    logger.info(`📋 [StoryGuidelines] USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS is active. Found ${parsedGuidelineFrames.length} pre-defined frame block(s) keyed by "FRAME ID". Checking matches for ${segments.length} scenes...`);
+    const guidelineClaimedIndices = new Set();
+    const preMatchedPrompts = new Array(segments.length).fill(null);
+    let matchedCount = 0;
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const matched = findMatchingGuidelineFrame(seg, i, segments.length, parsedGuidelineFrames, guidelineClaimedIndices);
+      if (matched && matched.fullFramePrompt) {
+        matchedCount++;
+        preMatchedPrompts[i] = {
+          prompt: matched.fullFramePrompt, // Full content from # FRAME ... / FRAME ID up to next heading
+          charactersInScene: matched.visibleHumans || [],
+          narration: seg.text,
+          _startSec: seg.startSec,
+          _endSec: seg.endSec,
+          _negativePrompt: matched.negativePrompt || "",
+          _globalNegativePrompt: storyBible?.globalNegativePrompt || "",
+          isPredefined: true,
+          _guidelineFrame: matched
+        };
+        logger.info(`✅ [StoryGuidelines] Scene ${i + 1}/${segments.length}: Copied full frame block (${matched.frameId || `Frame ${matched.frameNumber || i + 1}`}, ${matched.fullFramePrompt.length} chars) — ZERO remake.`);
+      }
+    }
+
+    if (matchedCount === segments.length) {
+      logger.info(`✨ [StoryGuidelines] ALL ${segments.length} scene prompts were copied directly from story guidelines! Skipping AI prompt generation entirely.`);
+      return { scenePrompts: preMatchedPrompts, castBible: storyBible?._preGeneratedBibles?.MATERIALIZED_CAST_BIBLE || null };
+    }
+
+    if (matchedCount > 0) {
+      logger.info(`⚡ [StoryGuidelines] ${matchedCount}/${segments.length} scene prompts copied from guidelines; generating remaining ${segments.length - matchedCount} scene(s) with AI...`);
+      let prevVisualContext = null;
+      let prevChunkText = null;
+      let prevCharactersInScene = [];
+
+      for (let i = 0; i < segments.length; i++) {
+        if (preMatchedPrompts[i]) {
+          prevVisualContext = "";
+          prevChunkText = segments[i].text;
+          prevCharactersInScene = preMatchedPrompts[i].charactersInScene || [];
+          continue;
+        }
+
+        const chunk = segments[i];
+        logger.info(`🧠 Generating missing prompt for chunk ${i + 1}/${segments.length}`);
+        const promptData = await generatePromptForChunk({
+          chunkText: chunk.text,
+          chunkIndex: i,
+          storyBible,
+          visualSuggestions,
+          prevVisualContext,
+          prevChunkText,
+          prevCharactersInScene,
+          characterReferences,
+          storyGuidelines,
+        });
+
+        preMatchedPrompts[i] = {
+          prompt: promptData.prompt,
+          charactersInScene: promptData.charactersInScene || [],
+          narration: chunk.text,
+          _startSec: chunk.startSec,
+          _endSec: chunk.endSec,
+          _negativePrompt: "",
+          _globalNegativePrompt: storyBible?.globalNegativePrompt || ""
+        };
+
+        prevVisualContext = promptData.visualContext;
+        prevChunkText = chunk.text;
+        prevCharactersInScene = promptData.charactersInScene || [];
+      }
+
+      return { scenePrompts: preMatchedPrompts, castBible: storyBible?._preGeneratedBibles?.MATERIALIZED_CAST_BIBLE || null };
+    }
   }
 
   // ⚡ Strategy 2: Attempt batched prompt generation first (1 API call instead of N)

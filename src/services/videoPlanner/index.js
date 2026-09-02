@@ -13,6 +13,7 @@ import { validateBeatContinuity, validateTimelineContinuity, validateSceneTiming
 import { buildStateBasedPrompt } from "./promptBuilder.js";
 import { buildUnifiedSpeechTimeline, allocateSpeechToBeats, validateWordLedger } from "./speechTimelineService.js";
 import { runPromptQualityPipeline } from "./pqa/promptQualityPipeline.js";
+import { parseStoryGuidelineFrames, findMatchingGuidelineFrame, isStoryGuidelinesOnlyForPromptsEnabled } from "../../utils/storyGuidelineParser.js";
 import { createLogger } from "../../utils/logger.js";
 
 const logger = createLogger("VideoPlannerOrchestrator");
@@ -69,9 +70,36 @@ export async function planDedicatedVideoPipeline(script, storyBible = {}, option
   const stateBasedPrompts = [];
   const totalBeatsCount = validatedBeats.length;
 
+  // 📋 Gated by USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS
+  const isOnlyForPrompts = isStoryGuidelinesOnlyForPromptsEnabled(options);
+  const parsedGuidelineFrames = (isOnlyForPrompts && options.storyGuidelines) ? parseStoryGuidelineFrames(options.storyGuidelines) : [];
+  const guidelineClaimedIndices = new Set();
+
   for (let i = 0; i < validatedBeats.length; i++) {
     const currentBeat = validatedBeats[i];
     const nextBeat = validatedBeats[i + 1] || null;
+
+    // 📋 Check if storyGuidelines provides a pre-defined frame block for this beat
+    if (parsedGuidelineFrames.length > 0) {
+      const matched = findMatchingGuidelineFrame(currentBeat, i, totalBeatsCount, parsedGuidelineFrames, guidelineClaimedIndices);
+      if (matched && matched.fullFramePrompt) {
+        logger.info(`✅ [VideoPlanner] Beat ${i + 1}/${totalBeatsCount}: Copied full frame block (${matched.frameId || `Frame ${matched.frameNumber || i + 1}`}, ${matched.fullFramePrompt.length} chars) — ZERO remake.`);
+        stateBasedPrompts.push({
+          sceneId: `scene_${String(i + 1).padStart(3, "0")}`,
+          sceneIndex: i,
+          prompt: matched.fullFramePrompt, // Full content from # FRAME ... / FRAME ID up to next heading
+          charactersInScene: matched.visibleHumans || [],
+          durationSec: currentBeat.timing?.durationSec || 5.0,
+          isPredefined: true,
+          _beat: currentBeat,
+          _guidelineFrame: matched,
+        });
+
+        // Advance SceneState & ConversationState for the next beat
+        currentState = updateSceneState(currentState, currentBeat, nextBeat, i, totalBeatsCount);
+        continue;
+      }
+    }
 
     // Validate beat timing mathematically
     const timingVal = validateSceneTiming(currentBeat);

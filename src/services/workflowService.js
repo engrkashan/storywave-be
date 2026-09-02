@@ -1274,6 +1274,7 @@ async function _runWorkflow({
           referenceTraits,         // ← Analyzed reference image traits for MGE character locking
           characterReferences,     // ← [{ id, name, url }] for v7 per-frame Reference Selector
           storyGuidelines,         // ← User story guidelines for prompt building
+          { useStoryGuidelinesOnlyForPrompts: isGuidelinesOnlyForPrompts } // ← Gated by USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS
         );
         stopPromptTimer?.();
 
@@ -1395,6 +1396,7 @@ async function _runWorkflow({
               whisperWords: timelineWords,
               targetSceneCount,
               narrationDuration,
+              storyGuidelines,
             });
             scenePrompts = videoPlanResult.scenePrompts;
             if (videoPlanResult.plannedScenes && videoPlanResult.plannedScenes.length > 0) {
