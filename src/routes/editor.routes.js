@@ -9,6 +9,7 @@ import { mediaUpload } from "../utils/upload.mw.js";
 import {
   listEditorWorkflows,
   getEditorWorkflow,
+  streamEditorWorkflow,
   updatePrompt,
   regenerateSceneHandler,
   revertVersionHandler,
@@ -23,7 +24,10 @@ const router = express.Router();
 // List stories in review state
 router.get("/workflows", verifyToken, listEditorWorkflows);
 
-// Get single workflow + scenes for review
+// Stream single workflow + scenes for review (progressive SSE)
+router.get("/workflows/:workflowId/stream", verifyToken, streamEditorWorkflow);
+
+// Get single workflow + scenes for review (standard JSON or ?stream=true)
 router.get("/workflows/:workflowId", verifyToken, getEditorWorkflow);
 
 // Update prompt for a scene

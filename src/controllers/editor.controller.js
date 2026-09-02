@@ -6,6 +6,7 @@
 import {
   getEditorWorkflows,
   getEditorWorkflowDetail,
+  streamEditorWorkflowDetail,
   updateScenePrompt,
   revertSceneVersion,
   requestSceneRegen,
@@ -41,12 +42,57 @@ export async function getEditorWorkflow(req, res) {
   try {
     const { userId, role } = extractUser(req);
     const { workflowId } = req.params;
+
+    // Check if client requested SSE stream
+    if (req.query.stream === "true" || req.headers.accept?.includes("text/event-stream")) {
+      return streamEditorWorkflow(req, res);
+    }
+
     const data = await getEditorWorkflowDetail({ workflowId, userId, role });
     return res.status(200).json({ success: true, data });
   } catch (err) {
     logger.error(`getEditorWorkflow error: ${err.message}`);
     const status = err.message.includes("unauthorized") ? 403 : 500;
     return res.status(status).json({ success: false, error: err.message });
+  }
+}
+
+export async function streamEditorWorkflow(req, res) {
+  try {
+    const { userId, role } = extractUser(req);
+    const { workflowId } = req.params;
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    if (res.flushHeaders) res.flushHeaders();
+
+    await streamEditorWorkflowDetail({
+      workflowId,
+      userId,
+      role,
+      onHeader: (headerData) => {
+        res.write(`event: workflow\ndata: ${JSON.stringify(headerData)}\n\n`);
+      },
+      onScenesChunk: (chunk) => {
+        res.write(`event: scenes\ndata: ${JSON.stringify(chunk)}\n\n`);
+      },
+      onComplete: () => {
+        res.write(`event: done\ndata: {}\n\n`);
+        res.end();
+      },
+    });
+  } catch (err) {
+    logger.error(`streamEditorWorkflow error: ${err.message}`);
+    if (!res.headersSent) {
+      const status = err.message.includes("unauthorized") ? 403 : 500;
+      return res.status(status).json({ success: false, error: err.message });
+    }
+    res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+    res.end();
   }
 }
 
