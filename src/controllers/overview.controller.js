@@ -477,44 +477,77 @@ export const getStoryBuilderInfo = async (req, res) => {
 
     const rawMeta = workflow.metadata || {};
 
-    // Extract character references across all possible metadata locations
-    const rawCharRefs =
-      rawMeta.characterReferences ||
-      rawMeta.uploadedCharacterReferences ||
-      rawMeta.storyMetadata?.characterReferences ||
-      rawMeta._characterReferences ||
-      rawMeta.mgeCastBible?.characters ||
-      story?.characterReferences ||
-      [];
+    // 1. Gather all sources of character references
+    const uploadedRefs = Array.isArray(rawMeta.uploadedCharacterReferences) ? rawMeta.uploadedCharacterReferences : [];
+    const directRefs = Array.isArray(rawMeta.characterReferences) ? rawMeta.characterReferences : [];
+    const storyMetaRefs = Array.isArray(rawMeta.storyMetadata?.characterReferences) ? rawMeta.storyMetadata.characterReferences : [];
+    const mgeRefs = Array.isArray(rawMeta.mgeCastBible?.characters) ? rawMeta.mgeCastBible.characters : [];
+    const storyModelRefs = Array.isArray(story?.characterReferences) ? story.characterReferences : [];
 
-    const normalizedCharRefs = [];
-    if (Array.isArray(rawCharRefs)) {
-      for (const c of rawCharRefs) {
-        if (!c) continue;
-        const imgUrl =
-          c.url ||
-          c.secure_url ||
-          c.previewUrl ||
-          c.image ||
-          c.portraitUrl ||
-          c.referenceImageUrl ||
-          (typeof c.base64 === "string" && c.base64.startsWith("http") ? c.base64 : "");
-        if (imgUrl || c.name || c.base64) {
-          normalizedCharRefs.push({
-            id: c.id || `char_${normalizedCharRefs.length + 1}`,
-            name: c.name || "",
-            url: imgUrl || "",
-            base64: imgUrl ? "" : (c.base64 || ""),
-          });
+    const allSources = [...uploadedRefs, ...directRefs, ...storyMetaRefs, ...mgeRefs, ...storyModelRefs];
+
+    // Helper to find a Cloudinary / HTTP URL by character name across all metadata sources
+    const findRemoteUrlForName = (name) => {
+      if (!name) return null;
+      const cleanName = name.trim().toLowerCase();
+      for (const item of allSources) {
+        if (!item) continue;
+        const itemName = (item.name || item.id || "").trim().toLowerCase();
+        if (itemName === cleanName || itemName.includes(cleanName) || cleanName.includes(itemName)) {
+          const u = item.url || item.secure_url || item.portraitUrl || item.referenceImageUrl || item.image;
+          if (typeof u === "string" && u.startsWith("http")) return u;
+          if (typeof item.base64 === "string" && item.base64.startsWith("http")) return item.base64;
         }
+      }
+      return null;
+    };
+
+    // 2. Build list of unique characters, guaranteeing clean Cloudinary URLs and ZERO base64 blobs
+    const charMap = new Map();
+    const primaryList = directRefs.length > 0 ? directRefs : (uploadedRefs.length > 0 ? uploadedRefs : allSources);
+
+    for (const c of primaryList) {
+      if (!c) continue;
+      const charName = (c.name || c.id || "").trim();
+      if (!charName) continue;
+      const key = charName.toLowerCase();
+
+      if (!charMap.has(key)) {
+        const directUrl = (typeof c.url === "string" && c.url.startsWith("http")) ? c.url : null;
+        const base64Url = (typeof c.base64 === "string" && c.base64.startsWith("http")) ? c.base64 : null;
+        const remoteUrl = directUrl || base64Url || findRemoteUrlForName(charName);
+
+        charMap.set(key, {
+          id: c.id || `char_${charMap.size + 1}`,
+          name: charName,
+          url: remoteUrl || "",
+          base64: "", // Never send raw base64 back when remote URL is available
+        });
       }
     }
 
-    // Also support legacy single character reference image URL if multi-char array is empty
-    if (normalizedCharRefs.length === 0 && (rawMeta.characterReferenceUrl || rawMeta.uploadedCharacterReferenceUrl)) {
+    // Also include any characters from uploadedRefs that were not in directRefs
+    for (const u of uploadedRefs) {
+      if (!u) continue;
+      const uName = (u.name || u.id || "").trim();
+      if (!uName) continue;
+      const key = uName.toLowerCase();
+      if (!charMap.has(key)) {
+        const remoteUrl = (typeof u.url === "string" && u.url.startsWith("http")) ? u.url : "";
+        charMap.set(key, {
+          id: u.id || `char_${charMap.size + 1}`,
+          name: uName,
+          url: remoteUrl,
+          base64: "",
+        });
+      }
+    }
+
+    // Support legacy single character reference image URL if list is still empty
+    if (charMap.size === 0 && (rawMeta.characterReferenceUrl || rawMeta.uploadedCharacterReferenceUrl)) {
       const singleUrl = rawMeta.characterReferenceUrl || rawMeta.uploadedCharacterReferenceUrl;
       if (typeof singleUrl === "string" && singleUrl.startsWith("http")) {
-        normalizedCharRefs.push({
+        charMap.set("main_char", {
           id: "char_1",
           name: "Main Character",
           url: singleUrl,
@@ -522,6 +555,8 @@ export const getStoryBuilderInfo = async (req, res) => {
         });
       }
     }
+
+    const normalizedCharRefs = Array.from(charMap.values());
 
     const builderMetadata = {
       url: rawMeta.url || null,
