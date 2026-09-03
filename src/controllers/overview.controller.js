@@ -477,26 +477,61 @@ export const getStoryBuilderInfo = async (req, res) => {
 
     const rawMeta = workflow.metadata || {};
 
-    // Normalize character references so Story Builder receives clean URLs and names
-    const rawCharRefs = rawMeta.characterReferences || rawMeta.uploadedCharacterReferences || [];
-    const normalizedCharRefs = Array.isArray(rawCharRefs)
-      ? rawCharRefs.map(c => ({
-          id: c.id,
-          name: c.name || "",
-          url: c.url || (typeof c.base64 === "string" && c.base64.startsWith("http") ? c.base64 : ""),
-          base64: "", // Do not send back binary blobs
-        }))
-      : [];
+    // Extract character references across all possible metadata locations
+    const rawCharRefs =
+      rawMeta.characterReferences ||
+      rawMeta.uploadedCharacterReferences ||
+      rawMeta.storyMetadata?.characterReferences ||
+      rawMeta._characterReferences ||
+      rawMeta.mgeCastBible?.characters ||
+      story?.characterReferences ||
+      [];
+
+    const normalizedCharRefs = [];
+    if (Array.isArray(rawCharRefs)) {
+      for (const c of rawCharRefs) {
+        if (!c) continue;
+        const imgUrl =
+          c.url ||
+          c.secure_url ||
+          c.previewUrl ||
+          c.image ||
+          c.portraitUrl ||
+          c.referenceImageUrl ||
+          (typeof c.base64 === "string" && c.base64.startsWith("http") ? c.base64 : "");
+        if (imgUrl || c.name || c.base64) {
+          normalizedCharRefs.push({
+            id: c.id || `char_${normalizedCharRefs.length + 1}`,
+            name: c.name || "",
+            url: imgUrl || "",
+            base64: imgUrl ? "" : (c.base64 || ""),
+          });
+        }
+      }
+    }
+
+    // Also support legacy single character reference image URL if multi-char array is empty
+    if (normalizedCharRefs.length === 0 && (rawMeta.characterReferenceUrl || rawMeta.uploadedCharacterReferenceUrl)) {
+      const singleUrl = rawMeta.characterReferenceUrl || rawMeta.uploadedCharacterReferenceUrl;
+      if (typeof singleUrl === "string" && singleUrl.startsWith("http")) {
+        normalizedCharRefs.push({
+          id: "char_1",
+          name: "Main Character",
+          url: singleUrl,
+          base64: "",
+        });
+      }
+    }
 
     const builderMetadata = {
       url: rawMeta.url || null,
       videoFile: rawMeta.videoFile || null,
-      textIdea: rawMeta.textIdea || workflow.story?.content || workflow.story?.outline || workflow.voiceover?.script || "",
+      textIdea: rawMeta.textIdea || story?.content || story?.outline || voiceover?.script || "",
       storyGuidelines: rawMeta.storyGuidelines || "",
       imagePrompt: rawMeta.imagePrompt || "",
       shouldGenerateImage: rawMeta.shouldGenerateImage ?? true,
       storyType: rawMeta.storyType || "fiction",
-      voice: rawMeta.voice || workflow.voiceover?.voice || null,
+      voice: rawMeta.voice || voiceover?.voice || null,
       voiceTone: rawMeta.voiceTone || null,
       storyLength: rawMeta.storyLength || null,
       mediaType: rawMeta.mediaType || "single_image",

@@ -181,20 +181,16 @@ export const createWorkflow = async (req, res) => {
 
     const job = await addWorkflowJob(workflowPayload);
 
-    // ✅ Step 3: Save the bullJobId back to the workflow DB record so cancellation can find it
-    const freshWf = await prisma.workflow.findUnique({
-      where: { id: workflow.id },
-      select: { metadata: true },
-    });
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: {
-        metadata: {
-          ...(freshWf?.metadata || workflow.metadata || {}),
-          bullJobId: job.id,
+    // ✅ Step 3: Save the bullJobId back to the workflow DB record atomically
+    prisma.$runCommandRaw({
+      update: "Workflow",
+      updates: [
+        {
+          q: { _id: { $oid: workflow.id } },
+          u: { $set: { "metadata.bullJobId": job.id } },
         },
-      },
-    });
+      ],
+    }).catch(e => logger.warn(`Failed to set bullJobId asynchronously: ${e.message}`));
 
     logger.info(`✅ Workflow ${workflow.id} queued as BullMQ job ${job.id}`);
 

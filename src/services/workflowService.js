@@ -44,7 +44,7 @@ import {
   runModule4_VisualWorldBible,
   generateSceneGraph
 } from "./motionGraphicEngine.js";
-import { parseStoryGuidelineFrames } from "../utils/storyGuidelineParser.js";
+import { parseStoryGuidelineFrames, isStoryGuidelinesOnlyForPromptsEnabled } from "../utils/storyGuidelineParser.js";
 import { createLogger, loggingStorage } from "../utils/logger.js";
 
 const logger = createLogger("WorkflowService");
