@@ -5,6 +5,7 @@ import {
   cancelWorkflow,
   deleteWorkflow,
   getWorkflowById,
+  getStoryBuilderInfo,
   bulkDeleteWorkflows,
 } from "../controllers/overview.controller.js";
 import { verifyToken } from "../middlewares/auth.js";
@@ -20,6 +21,9 @@ router.get("/workflows", verifyToken, getWorkflows);
 
 // GET /api/overview/publish-options
 router.get("/publish-options", verifyToken, getPublishOptions);
+
+// GET /api/overview/story-builder/:id (Dedicated for Story Builder pre-population & regeneration)
+router.get("/story-builder/:id", verifyToken, getStoryBuilderInfo);
 
 // GET /api/overview/:id
 router.get("/:id", verifyToken, getWorkflowById);

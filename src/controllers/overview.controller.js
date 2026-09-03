@@ -402,6 +402,150 @@ export const getWorkflowById = async (req, res) => {
   }
 };
 
+// Get Story Builder Data by Workflow ID (Dedicated for Story Builder pre-population & regeneration)
+export const getStoryBuilderInfo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ error: "Unauthorized – missing user identity" });
+    }
+
+    const filter = role === "CREATOR" ? { id, userId } : { id };
+
+    const workflow = await prisma.workflow.findFirst({
+      where: filter,
+      select: {
+        id: true,
+        title: true,
+        type: true,
+        status: true,
+        scheduledAt: true,
+        createdAt: true,
+        metadata: true,
+        storyId: true,
+        voiceoverId: true,
+        userId: true,
+      },
+    });
+
+    if (!workflow) {
+      return res.status(404).json({ error: "Workflow not found" });
+    }
+
+    const [story, voiceover, user] = await Promise.all([
+      workflow.storyId
+        ? prisma.story.findUnique({
+            where: { id: workflow.storyId },
+            select: {
+              id: true,
+              title: true,
+              outline: true,
+              content: true,
+              series: true,
+              coverArtPrompt: true,
+              coverArtURL: true,
+              coverArtURL_16_9: true,
+              coverArtURL_9_16: true,
+              coverArtURL_1_1: true,
+              seoContent: true,
+              visualSuggestions: true,
+              isPodcast: true,
+              audioURL: true,
+            },
+          })
+        : null,
+      workflow.voiceoverId
+        ? prisma.voiceover.findUnique({
+            where: { id: workflow.voiceoverId },
+            select: {
+              id: true,
+              script: true,
+              audioURL: true,
+              voice: true,
+            },
+          })
+        : null,
+      workflow.userId
+        ? prisma.user.findUnique({
+            where: { id: workflow.userId },
+            select: { id: true, fullName: true, role: true },
+          })
+        : null,
+    ]);
+
+    const rawMeta = workflow.metadata || {};
+
+    // Normalize character references so Story Builder receives clean URLs and names
+    const rawCharRefs = rawMeta.characterReferences || rawMeta.uploadedCharacterReferences || [];
+    const normalizedCharRefs = Array.isArray(rawCharRefs)
+      ? rawCharRefs.map(c => ({
+          id: c.id,
+          name: c.name || "",
+          url: c.url || (typeof c.base64 === "string" && c.base64.startsWith("http") ? c.base64 : ""),
+          base64: "", // Do not send back binary blobs
+        }))
+      : [];
+
+    const builderMetadata = {
+      url: rawMeta.url || null,
+      videoFile: rawMeta.videoFile || null,
+      textIdea: rawMeta.textIdea || workflow.story?.content || workflow.story?.outline || workflow.voiceover?.script || "",
+      storyGuidelines: rawMeta.storyGuidelines || "",
+      imagePrompt: rawMeta.imagePrompt || "",
+      shouldGenerateImage: rawMeta.shouldGenerateImage ?? true,
+      storyType: rawMeta.storyType || "fiction",
+      voice: rawMeta.voice || workflow.voiceover?.voice || null,
+      voiceTone: rawMeta.voiceTone || null,
+      storyLength: rawMeta.storyLength || null,
+      mediaType: rawMeta.mediaType || "single_image",
+      imageCount: rawMeta.imageCount || 5,
+      backgroundMusic: rawMeta.backgroundMusic ?? true,
+      backgroundMusicStyle: rawMeta.backgroundMusicStyle || "",
+      soundEffects: rawMeta.soundEffects ?? false,
+      characterTalk: rawMeta.characterTalk ?? false,
+      subtitles: rawMeta.subtitles ?? true,
+      aspectRatio: rawMeta.aspectRatio || "16:9",
+      dualPlatform: rawMeta.dualPlatform ?? false,
+      series: rawMeta.series || story?.series || "",
+      coverArtPrompt: rawMeta.coverArtPrompt || story?.coverArtPrompt || "",
+      seoContent: rawMeta.seoContent || story?.seoContent || null,
+      visualSuggestions: rawMeta.visualSuggestions || story?.visualSuggestions || "",
+      uploadedMediaUrl: rawMeta.uploadedMediaUrl || null,
+      characterReferences: normalizedCharRefs,
+      useStoryGuidelinesOnlyForPrompts: rawMeta.useStoryGuidelinesOnlyForPrompts ?? false,
+      useOmniAudio: rawMeta.useOmniAudio ?? false,
+      autoPublish: rawMeta.autoPublish ?? true,
+    };
+
+    return res.status(200).json({
+      id: workflow.id,
+      title: workflow.title || story?.title || "",
+      type: workflow.type,
+      status: workflow.status,
+      scheduledAt: workflow.scheduledAt,
+      createdAt: workflow.createdAt,
+      metadata: builderMetadata,
+      story: story || null,
+      voiceover: voiceover || null,
+      owner: user
+        ? {
+            id: user.id,
+            name: user.fullName,
+            role: user.role,
+          }
+        : null,
+    });
+  } catch (error) {
+    logger.error("Get Story Builder Info Error:", error);
+    return res.status(500).json({ error: "Failed to fetch story builder details" });
+  }
+};
+
 // cancel workflow
 export const cancelWorkflow = async (req, res) => {
   try {
