@@ -621,7 +621,16 @@ async function _runWorkflow({
     });
 
     // Determine if guidelines should only be routed to visual prompts (skipping script alteration)
-    const isGuidelinesOnlyForPrompts = useStoryGuidelinesOnlyForPrompts ?? existingWorkflow?.metadata?.useStoryGuidelinesOnlyForPrompts ?? config.workflow.useStoryGuidelinesOnlyForPrompts ?? false;
+    const effectiveStoryGuidelines = storyGuidelines || workflow?.metadata?.storyGuidelines || existingWorkflow?.metadata?.storyGuidelines || null;
+    const isGuidelinesOnlyForPrompts = isStoryGuidelinesOnlyForPromptsEnabled({
+      useStoryGuidelinesOnlyForPrompts,
+      ...(existingWorkflow?.metadata || {}),
+      ...(workflow?.metadata || {})
+    });
+    const parsedGuidelineFrames = (isGuidelinesOnlyForPrompts && effectiveStoryGuidelines)
+      ? parseStoryGuidelineFrames(effectiveStoryGuidelines)
+      : [];
+    const hasFastTrackGuidelines = isGuidelinesOnlyForPrompts && parsedGuidelineFrames.length > 0;
 
     // 2. Generate story outline & script
     let outline, script;
@@ -633,7 +642,7 @@ async function _runWorkflow({
         storyType,
         voiceTone,
         storyLength,
-        storyGuidelines: isGuidelinesOnlyForPrompts ? null : storyGuidelines,
+        storyGuidelines: isGuidelinesOnlyForPrompts ? null : effectiveStoryGuidelines,
       }));
       stopStoryTimer?.();
     } else {
@@ -661,16 +670,22 @@ async function _runWorkflow({
       //   B) Legacy: userCharacterReferenceBase64 = single base64 string
       //      → upload once, assign to main character (unchanged behaviour)
 
-      if (Array.isArray(userMultiCharacterReferences) && userMultiCharacterReferences.length > 0) {
-        logger.info(`User provided ${userMultiCharacterReferences.length} multi-character reference image(s). Processing...`);
-        for (const entry of userMultiCharacterReferences) {
+      const rawMultiRefs = (Array.isArray(userMultiCharacterReferences) && userMultiCharacterReferences.length > 0)
+        ? userMultiCharacterReferences
+        : (workflow?.metadata?.uploadedCharacterReferences || workflow?.metadata?.characterReferences || existingWorkflow?.metadata?.uploadedCharacterReferences || existingWorkflow?.metadata?.characterReferences || []);
+
+      if (Array.isArray(rawMultiRefs) && rawMultiRefs.length > 0) {
+        logger.info(`Processing ${rawMultiRefs.length} multi-character reference(s)...`);
+        for (const entry of rawMultiRefs) {
           const imgData = entry.url || entry.base64;
           if (!imgData) continue;
 
+          // If already a Cloudinary / HTTP URL, preserve it directly without re-uploading
           if (typeof imgData === "string" && imgData.startsWith("http")) {
-            uploadedMultiRefs.push({ name: entry.name || "", url: imgData });
-            logger.info(`✅ Multi-char ref URL preserved: "${entry.name}" → ${imgData}`);
+            uploadedMultiRefs.push({ id: entry.id, name: entry.name || "", url: imgData });
+            logger.info(`✅ Multi-char ref URL preserved (no re-upload): "${entry.name}" → ${imgData}`);
           } else {
+            // New base64 / updated character image uploaded by user
             try {
               const upload = await cloudinary.uploader.upload(imgData, {
                 folder: "character-references",
@@ -678,64 +693,68 @@ async function _runWorkflow({
                 public_id: `user-char-ref-${workflow.id}-${(entry.name || "char").replace(/\s+/g, "-").toLowerCase()}-${Date.now()}`,
                 overwrite: true,
               });
-              uploadedMultiRefs.push({ name: entry.name || "", url: upload.secure_url });
-              logger.info(`✅ Multi-char ref uploaded: "${entry.name}" → ${upload.secure_url}`);
+              uploadedMultiRefs.push({ id: entry.id, name: entry.name || "", url: upload.secure_url });
+              logger.info(`✅ Updated character ref uploaded to Cloudinary: "${entry.name}" → ${upload.secure_url}`);
             } catch (err) {
               logger.error(`⚠️ Failed to upload character ref for "${entry.name}": ${err.message}`);
               // Fallback: use inline base64/url so this character still has a reference
-              uploadedMultiRefs.push({ name: entry.name || "", url: imgData });
+              uploadedMultiRefs.push({ id: entry.id, name: entry.name || "", url: imgData });
             }
           }
         }
-      } else if (userCharacterReferenceBase64) {
+      } else if (userCharacterReferenceBase64 || workflow?.metadata?.characterReferenceUrl || existingWorkflow?.metadata?.characterReferenceUrl) {
         // Legacy single-character path
-        logger.info("User provided a character reference image (legacy). Uploading to Cloudinary...");
-        try {
-          const upload = await cloudinary.uploader.upload(userCharacterReferenceBase64, {
-            folder: "character-references",
-            resource_type: "image",
-            public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
-            overwrite: true,
-          });
-          characterReferenceUrl = upload.secure_url;
-          logger.info(`✅ User Character Reference URL: ${characterReferenceUrl}`);
-        } catch (err) {
-          logger.error(`⚠️ Failed to upload user character reference: ${err.message}`);
-          characterReferenceUrl = userCharacterReferenceBase64;
-        }
-      }
-
-      // Extract reference traits for extractStoryMetadata from uploaded references
-      let localRefTraits = [];
-
-      if (uploadedMultiRefs.length > 0) {
-        logger.info(`Extracting physical traits from ${uploadedMultiRefs.length} reference images...`);
-        const traitPromises = uploadedMultiRefs.map(async (ref) => {
-          if (ref.url && ref.url.startsWith("http")) {
-            const traits = await analyzeReferenceImage(ref.url);
-            if (traits) {
-              return { characterName: ref.name || "Main Character", ...traits };
-            }
+        const refCandidate = userCharacterReferenceBase64 || workflow?.metadata?.characterReferenceUrl || existingWorkflow?.metadata?.characterReferenceUrl;
+        if (typeof refCandidate === "string" && refCandidate.startsWith("http")) {
+          characterReferenceUrl = refCandidate;
+          logger.info(`✅ User Character Reference URL preserved (no re-upload): ${characterReferenceUrl}`);
+        } else if (refCandidate) {
+          logger.info("New character reference image provided. Uploading to Cloudinary...");
+          try {
+            const upload = await cloudinary.uploader.upload(refCandidate, {
+              folder: "character-references",
+              resource_type: "image",
+              public_id: `user-char-ref-${workflow.id}-${Date.now()}`,
+              overwrite: true,
+            });
+            characterReferenceUrl = upload.secure_url;
+            logger.info(`✅ User Character Reference URL: ${characterReferenceUrl}`);
+          } catch (err) {
+            logger.error(`⚠️ Failed to upload user character reference: ${err.message}`);
+            characterReferenceUrl = refCandidate;
           }
-          return null;
-        });
-        const resolvedTraits = await Promise.all(traitPromises);
-        localRefTraits = resolvedTraits.filter(Boolean);
-      } else if (characterReferenceUrl && characterReferenceUrl.startsWith("http")) {
-        logger.info("Extracting physical traits from main reference image...");
-        const traits = await analyzeReferenceImage(characterReferenceUrl);
-        if (traits) {
-          localRefTraits.push({ characterName: "Main Character", ...traits });
         }
       }
 
-      referenceTraits = localRefTraits.length > 0 ? localRefTraits : null;
+      // Extract reference traits only when fast-track guidelines are not present
+      if (!hasFastTrackGuidelines) {
+        let localRefTraits = [];
 
-      const parsedGuidelineFrames = (isGuidelinesOnlyForPrompts && storyGuidelines)
-        ? parseStoryGuidelineFrames(storyGuidelines)
-        : [];
+        if (uploadedMultiRefs.length > 0) {
+          logger.info(`Extracting physical traits from ${uploadedMultiRefs.length} reference images...`);
+          const traitPromises = uploadedMultiRefs.map(async (ref) => {
+            if (ref.url && ref.url.startsWith("http")) {
+              const traits = await analyzeReferenceImage(ref.url);
+              if (traits) {
+                return { characterName: ref.name || "Main Character", ...traits };
+              }
+            }
+            return null;
+          });
+          const resolvedTraits = await Promise.all(traitPromises);
+          localRefTraits = resolvedTraits.filter(Boolean);
+        } else if (characterReferenceUrl && characterReferenceUrl.startsWith("http")) {
+          logger.info("Extracting physical traits from main reference image...");
+          const traits = await analyzeReferenceImage(characterReferenceUrl);
+          if (traits) {
+            localRefTraits.push({ characterName: "Main Character", ...traits });
+          }
+        }
 
-      if (isGuidelinesOnlyForPrompts && parsedGuidelineFrames.length > 0) {
+        referenceTraits = localRefTraits.length > 0 ? localRefTraits : null;
+      }
+
+      if (hasFastTrackGuidelines) {
         logger.info(`⚡ [Fast-Track] USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS is active: Bypassing Modules 1–4 LLM analysis passes (Zero OpenAI bible calls).`);
 
         const charSet = new Set();
@@ -776,7 +795,7 @@ async function _runWorkflow({
       } else {
         const PROJECT_SPEC = await runModule1_InputNormalization({
           title, sourceType: storyType || "script", storyScript: script, imageCount,
-          aspectRatio, visualSuggestions, storyGuidelines
+          aspectRatio, visualSuggestions, storyGuidelines: effectiveStoryGuidelines
         });
         const STORY_WORLD_MAP = await runModule2_StoryWorldAnalysis(script, PROJECT_SPEC);
         const MATERIALIZED_CAST_BIBLE = await runModule3_MaterializedCastBible(STORY_WORLD_MAP, referenceTraits);
@@ -1394,7 +1413,7 @@ async function _runWorkflow({
           narrationSegments,       // ← Whisper-aligned narration segments
           referenceTraits,         // ← Analyzed reference image traits for MGE character locking
           characterReferences,     // ← [{ id, name, url }] for v7 per-frame Reference Selector
-          storyGuidelines,         // ← User story guidelines for prompt building
+          effectiveStoryGuidelines,// ← User story guidelines for prompt building
           { useStoryGuidelinesOnlyForPrompts: isGuidelinesOnlyForPrompts } // ← Gated by USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS
         );
         stopPromptTimer?.();
@@ -1518,8 +1537,8 @@ async function _runWorkflow({
               voice,
               whisperWords: timelineWords,
               targetSceneCount,
-              narrationDuration,
-              storyGuidelines,
+              storyGuidelines: effectiveStoryGuidelines,
+              useStoryGuidelinesOnlyForPrompts: isGuidelinesOnlyForPrompts,
             });
             scenePrompts = videoPlanResult.scenePrompts;
             if (videoPlanResult.plannedScenes && videoPlanResult.plannedScenes.length > 0) {
