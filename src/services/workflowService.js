@@ -96,11 +96,16 @@ fs.mkdirSync(TEMP_ROOT, { recursive: true });
  * Ensures long-running workflows and parallel tasks never fail from transient txn issues.
  */
 export async function updateWorkflowSafe(workflowId, updateData, retries = 3) {
+  // Normalize in case updateData was wrapped in { data: ... }
+  const cleanData = (updateData && updateData.data && typeof updateData.data === "object" && !Array.isArray(updateData.data))
+    ? updateData.data
+    : updateData;
+
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       return await prisma.workflow.update({
         where: { id: workflowId },
-        data: updateData,
+        data: cleanData,
       });
     } catch (err) {
       const isTxnError =
@@ -1299,13 +1304,11 @@ async function _runWorkflow({
     }))?.metadata || {};
 
     await updateWorkflowSafe(workflow.id, {
-      data: {
-        metadata: {
-          ...freshMetaForAudio,
-          characterTalk,
-          soundscapePlan: soundscapePlan || null,
-          soundscapeAssetsCount: soundscapeAssets.length,
-        },
+      metadata: {
+        ...freshMetaForAudio,
+        characterTalk,
+        soundscapePlan: soundscapePlan || null,
+        soundscapeAssetsCount: soundscapeAssets.length,
       },
     });
 
