@@ -428,7 +428,6 @@ export const getStoryBuilderInfo = async (req, res) => {
         createdAt: true,
         metadata: true,
         storyId: true,
-        voiceoverId: true,
         userId: true,
       },
     });
@@ -459,17 +458,15 @@ export const getStoryBuilderInfo = async (req, res) => {
             },
           })
         : null,
-      workflow.voiceoverId
-        ? prisma.voiceover.findUnique({
-            where: { id: workflow.voiceoverId },
-            select: {
-              id: true,
-              script: true,
-              audioURL: true,
-              voice: true,
-            },
-          })
-        : null,
+      prisma.voiceover.findUnique({
+        where: { workflowId: workflow.id },
+        select: {
+          id: true,
+          script: true,
+          audioURL: true,
+          voice: true,
+        },
+      }),
       workflow.userId
         ? prisma.user.findUnique({
             where: { id: workflow.userId },
