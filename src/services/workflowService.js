@@ -702,6 +702,15 @@ async function _runWorkflow({
             }
           }
         }
+
+        if (uploadedMultiRefs.length > 0) {
+          await updateWorkflowSafe(workflow.id, {
+            metadata: {
+              uploadedCharacterReferences: uploadedMultiRefs,
+              characterReferences: uploadedMultiRefs,
+            },
+          }).catch(err => logger.warn(`Failed to persist uploaded character refs early: ${err.message}`));
+        }
       } else if (userCharacterReferenceBase64 || workflow?.metadata?.characterReferenceUrl || existingWorkflow?.metadata?.characterReferenceUrl) {
         // Legacy single-character path
         const refCandidate = userCharacterReferenceBase64 || workflow?.metadata?.characterReferenceUrl || existingWorkflow?.metadata?.characterReferenceUrl;

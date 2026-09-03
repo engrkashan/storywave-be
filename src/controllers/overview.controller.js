@@ -516,12 +516,13 @@ export const getStoryBuilderInfo = async (req, res) => {
         const directUrl = (typeof c.url === "string" && c.url.startsWith("http")) ? c.url : null;
         const base64Url = (typeof c.base64 === "string" && c.base64.startsWith("http")) ? c.base64 : null;
         const remoteUrl = directUrl || base64Url || findRemoteUrlForName(charName);
+        const fallbackBase64 = (!remoteUrl && typeof c.base64 === "string" && c.base64.startsWith("data:")) ? c.base64 : "";
 
         charMap.set(key, {
           id: c.id || `char_${charMap.size + 1}`,
           name: charName,
           url: remoteUrl || "",
-          base64: "", // Never send raw base64 back when remote URL is available
+          base64: fallbackBase64,
         });
       }
     }

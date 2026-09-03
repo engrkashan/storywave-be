@@ -119,9 +119,12 @@ export const createWorkflow = async (req, res) => {
           visualSuggestions,
           uploadedMediaUrl,
           characterReferenceBase64: characterReferenceBase64 || null,
-          // Multi-character references: [{ name, base64 }]
+          // Multi-character references: [{ name, url, base64 }]
           characterReferences: Array.isArray(userCharacterReferences) && userCharacterReferences.length > 0
             ? userCharacterReferences
+            : null,
+          uploadedCharacterReferences: Array.isArray(userCharacterReferences) && userCharacterReferences.some(c => c.url && typeof c.url === "string" && c.url.startsWith("http"))
+            ? userCharacterReferences.filter(c => c.url && typeof c.url === "string" && c.url.startsWith("http"))
             : null,
           autoPublish,
           autoPublishDelayMinutes,
