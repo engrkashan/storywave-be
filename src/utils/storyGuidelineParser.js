@@ -67,7 +67,7 @@ export function wordSimilarity(textA, textB) {
 
 /**
  * Parses storyGuidelines into an array of structured frame objects.
- * Uses key word "FRAME ID" and `# FRAME` to detect and delimit frames.
+ * Uses key words "FRAME ID", "# FRAME", or "FRAME <number>" to detect and delimit frames.
  *
  * @param {string} text - Raw story guidelines string
  * @returns {Array<object>} Parsed frame objects with full verbatim content
@@ -75,26 +75,29 @@ export function wordSimilarity(textA, textB) {
 export function parseStoryGuidelineFrames(text) {
   if (!text || typeof text !== "string" || !text.trim()) return [];
 
-  // Check if text contains FRAME ID or # FRAME
-  const hasFrameId = /FRAME\s+ID\s*:/i.test(text);
-  const hasFrameHeading = /(?:^|\n)#+\s*FRAME\b/i.test(text);
+  // Check if text contains FRAME ID or # FRAME or FRAME <num>
+  const hasFramePattern = /(?:^|\n)(?:#+\s*)?FRAME(?:\s+ID\s*:|\s+\d+)/i.test(text);
 
-  if (!hasFrameId && !hasFrameHeading) {
+  if (!hasFramePattern) {
     return [];
   }
 
+  // Split hierarchically: if `# FRAME` headings exist, split on `# FRAME` only.
+  // Otherwise split on `FRAME ID:`, or `FRAME <num>`.
   let rawBlocks = [];
-
-  if (hasFrameHeading) {
-    // Split on `# FRAME` headings
+  if (/(?:^|\n)#+\s*FRAME\b/i.test(text)) {
     rawBlocks = text
       .split(/(?:^|\n)(?=#+\s*FRAME\b)/i)
       .map(b => b.trim())
       .filter(Boolean);
-  } else {
-    // Split on `FRAME ID:` headers
+  } else if (/FRAME\s+ID\s*:/i.test(text)) {
     rawBlocks = text
       .split(/(?:^|\n)(?=FRAME\s+ID\s*:)/i)
+      .map(b => b.trim())
+      .filter(Boolean);
+  } else {
+    rawBlocks = text
+      .split(/(?:^|\n)(?=FRAME\s+\d+)/i)
       .map(b => b.trim())
       .filter(Boolean);
   }
@@ -105,24 +108,42 @@ export function parseStoryGuidelineFrames(text) {
     const block = rawBlocks[idx];
     if (!block) continue;
 
-    // 1. Frame ID (primary key word)
-    const fIdMatch = block.match(/FRAME\s+ID\s*:\s*([A-Za-z0-9_\-]+)/i);
-    const frameId = fIdMatch ? fIdMatch[1].trim() : null;
+    // 1. Frame ID (primary key word or heading)
+    const fIdMatch = block.match(/FRAME\s+ID\s*:\s*([^\r\n]+)/i) ||
+                     block.match(/(?:^|\n)#+\s*(FRAME\s+[^\r\n]+)/i) ||
+                     block.match(/(?:^|\n)(FRAME\s+\d+[^\r\n]*)/i);
+    let frameId = fIdMatch ? fIdMatch[1].trim() : null;
 
     // 2. Frame Number & Total Frames
     let frameNumber = null;
     let totalFrames = null;
-    const fnMatch = block.match(/(?:#+\s*FRAME\s+|FRAME\s+ID\s*:\s*F?|FRAME\s+)(\d+)(?:\s+OF\s+(\d+))?/i);
-    if (fnMatch) {
-      frameNumber = parseInt(fnMatch[1], 10);
-      if (fnMatch[2]) totalFrames = parseInt(fnMatch[2], 10);
-    } else if (frameId) {
+
+    if (frameId) {
       const numM = frameId.match(/\d+/);
       if (numM) frameNumber = parseInt(numM[0], 10);
     }
 
+    if (frameNumber === null) {
+      const fnMatch = block.match(/(?:#+\s*FRAME\s+|FRAME\s+ID\s*:\s*(?:FRAME\s*|F)?|FRAME\s+)(\d+)(?:\s+OF\s+(\d+))?/i);
+      if (fnMatch) {
+        frameNumber = parseInt(fnMatch[1], 10);
+        if (fnMatch[2]) totalFrames = parseInt(fnMatch[2], 10);
+      }
+    }
+
+    // Default frameNumber to 1-based sequential index if not explicitly parsed
+    if (frameNumber === null) {
+      frameNumber = idx + 1;
+    }
+
+    const frameIdFormatted = `Frame ${String(frameNumber).padStart(3, "0")}`;
+    if (!frameId) {
+      frameId = frameIdFormatted;
+    }
+
     // 3. Scene ID & Number
-    const scIdMatch = block.match(/SCENE\s+ID\s*:\s*([A-Za-z0-9_\-]+)/i);
+    const scIdMatch = block.match(/SCENE\s+ID\s*:\s*([^\r\n]+)/i) ||
+                      block.match(/(?:^|\n)#+\s*(SCENE\s+[^\r\n]+)/i);
     const sceneId = scIdMatch ? scIdMatch[1].trim() : null;
     let sceneNumber = null;
     if (sceneId) {
@@ -183,6 +204,7 @@ export function parseStoryGuidelineFrames(text) {
       frameNumber,
       totalFrames,
       frameId,
+      frameIdFormatted,
       sceneId,
       sceneNumber,
       timeRange,
@@ -198,7 +220,7 @@ export function parseStoryGuidelineFrames(text) {
     });
   }
 
-  logger.info(`📋 [StoryGuidelineParser] Parsed ${parsed.length} pre-defined frame block(s) using key word "FRAME ID".`);
+  logger.info(`📋 [StoryGuidelineParser] Parsed ${parsed.length} pre-defined frame block(s) (Frame 001..${String(parsed.length).padStart(3, "0")}).`);
   return parsed;
 }
 
@@ -206,14 +228,14 @@ export function parseStoryGuidelineFrames(text) {
  * Finds the best matching guideline frame for a given scene or audio segment.
  *
  * Matching priorities:
- *   1. Explicit Frame ID or Scene ID match
- *   2. Narration Beat text substring or word similarity
- *   3. Timestamp range overlap
- *   4. Exact Frame Number / Scene Number match (1-based index)
- *   5. Sequential 1-to-1 index fallback
+ *   1. Strict Frame Number match (Frame 001 strictly for first image/scene, Frame 002 for second, etc.)
+ *   2. Explicit Scene ID / Segment ID number match
+ *   3. Sequential 1-to-1 index fallback
+ *   4. Timestamp range overlap
+ *   5. Narration Beat text substring or word similarity
  *
  * @param {object} segmentOrScene - Scene or narration segment
- * @param {number} sceneIndex     - 0-based scene index
+ * @param {number} sceneIndex     - 0-based scene index (0 = 1st image/scene)
  * @param {number} totalScenes    - Total scene count
  * @param {Array<object>} parsedFrames - Output from parseStoryGuidelineFrames
  * @param {Set<number>} claimedIndices - Set of claimed frame indices to avoid duplicates
@@ -222,8 +244,59 @@ export function parseStoryGuidelineFrames(text) {
 export function findMatchingGuidelineFrame(segmentOrScene, sceneIndex, totalScenes, parsedFrames, claimedIndices = new Set()) {
   if (!parsedFrames || parsedFrames.length === 0) return null;
 
-  const segText = segmentOrScene?.text || segmentOrScene?.narration || segmentOrScene?.narrative || "";
+  const targetFrameNum = sceneIndex + 1; // 1 for first image, 2 for second image, etc.
+  const targetFormattedTag = `Frame ${String(targetFrameNum).padStart(3, "0")}`;
 
+  // 1. Strict Frame Number / Image Number match (Frame 001 strictly for first image, Frame 002 for second, etc.)
+  for (let i = 0; i < parsedFrames.length; i++) {
+    if (claimedIndices.has(i)) continue;
+    const f = parsedFrames[i];
+    if (
+      f.frameNumber === targetFrameNum ||
+      f.sceneNumber === targetFrameNum ||
+      f.frameIdFormatted === targetFormattedTag
+    ) {
+      claimedIndices.add(i);
+      return f;
+    }
+  }
+
+  // 2. Explicit Scene / Segment ID match (e.g. "scene_001", "scene_1", "frame_001")
+  const segId = segmentOrScene?.sceneId || segmentOrScene?.frameId || segmentOrScene?.id || "";
+  if (segId) {
+    const segNumM = String(segId).match(/\d+/);
+    const segNum = segNumM ? parseInt(segNumM[0], 10) : null;
+    if (segNum !== null) {
+      for (let i = 0; i < parsedFrames.length; i++) {
+        if (claimedIndices.has(i)) continue;
+        const f = parsedFrames[i];
+        if (f.frameNumber === segNum || f.sceneNumber === segNum) {
+          claimedIndices.add(i);
+          return f;
+        }
+      }
+    }
+
+    const cleanId = String(segId).toLowerCase().replace(/[^a-z0-9]/g, "");
+    for (let i = 0; i < parsedFrames.length; i++) {
+      if (claimedIndices.has(i)) continue;
+      const f = parsedFrames[i];
+      const fId = String(f.frameId || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const sId = String(f.sceneId || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      if ((fId && cleanId === fId) || (sId && cleanId === sId)) {
+        claimedIndices.add(i);
+        return f;
+      }
+    }
+  }
+
+  // 3. Sequential 1-to-1 index fallback (e.g., sceneIndex 0 -> parsedFrames[0])
+  if (sceneIndex < parsedFrames.length && !claimedIndices.has(sceneIndex)) {
+    claimedIndices.add(sceneIndex);
+    return parsedFrames[sceneIndex];
+  }
+
+  // 4. Timestamp overlap match (if timestamps are specified)
   let segStartSec = null;
   if (segmentOrScene?.startSec !== undefined && segmentOrScene?.startSec !== null) {
     segStartSec = Number(segmentOrScene.startSec);
@@ -238,24 +311,23 @@ export function findMatchingGuidelineFrame(segmentOrScene, sceneIndex, totalScen
     segEndSec = Number(segmentOrScene.endMs) / 1000;
   }
 
-  const segId = segmentOrScene?.sceneId || segmentOrScene?.frameId || segmentOrScene?.id || "";
-
-  // 1. Explicit ID match (frameId or sceneId)
-  if (segId) {
-    const cleanId = String(segId).toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (segStartSec !== null && segEndSec !== null) {
     for (let i = 0; i < parsedFrames.length; i++) {
       if (claimedIndices.has(i)) continue;
       const f = parsedFrames[i];
-      const fId = String(f.frameId || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const sId = String(f.sceneId || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      if ((fId && cleanId === fId) || (sId && cleanId === sId)) {
-        claimedIndices.add(i);
-        return f;
+      if (f.startSec !== null && f.endSec !== null) {
+        const overlapStart = Math.max(segStartSec, f.startSec);
+        const overlapEnd = Math.min(segEndSec, f.endSec);
+        if (overlapEnd > overlapStart) {
+          claimedIndices.add(i);
+          return f;
+        }
       }
     }
   }
 
-  // 2. Narration text match (substring or word similarity >= 0.25)
+  // 5. Narration text match as ultimate fallback
+  const segText = segmentOrScene?.text || segmentOrScene?.narration || segmentOrScene?.narrative || "";
   if (segText && segText.length > 10) {
     const normSeg = normalizeText(segText);
     let bestMatchIdx = -1;
@@ -284,45 +356,6 @@ export function findMatchingGuidelineFrame(segmentOrScene, sceneIndex, totalScen
       claimedIndices.add(bestMatchIdx);
       return parsedFrames[bestMatchIdx];
     }
-  }
-
-  // 3. Timestamp overlap match
-  if (segStartSec !== null && segEndSec !== null) {
-    for (let i = 0; i < parsedFrames.length; i++) {
-      if (claimedIndices.has(i)) continue;
-      const f = parsedFrames[i];
-      if (f.startSec !== null && f.endSec !== null) {
-        const overlapStart = Math.max(segStartSec, f.startSec);
-        const overlapEnd = Math.min(segEndSec, f.endSec);
-        if (overlapEnd > overlapStart) {
-          claimedIndices.add(i);
-          return f;
-        }
-      }
-    }
-  }
-
-  // 4. Exact Frame Number / Scene Number match (1-based index)
-  const targetFrameNum = sceneIndex + 1;
-  for (let i = 0; i < parsedFrames.length; i++) {
-    if (claimedIndices.has(i)) continue;
-    const f = parsedFrames[i];
-    if (f.frameNumber === targetFrameNum || f.sceneNumber === targetFrameNum) {
-      claimedIndices.add(i);
-      return f;
-    }
-  }
-
-  // 5. 1-to-1 sequential index match (if frame count matches total scenes)
-  if (parsedFrames.length === totalScenes && !claimedIndices.has(sceneIndex)) {
-    claimedIndices.add(sceneIndex);
-    return parsedFrames[sceneIndex];
-  }
-
-  // Single frame fallback (1 frame in guidelines for 1 requested scene)
-  if (parsedFrames.length === 1 && totalScenes === 1 && !claimedIndices.has(0)) {
-    claimedIndices.add(0);
-    return parsedFrames[0];
   }
 
   return null;
