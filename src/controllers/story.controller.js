@@ -182,11 +182,15 @@ export const createWorkflow = async (req, res) => {
     const job = await addWorkflowJob(workflowPayload);
 
     // ✅ Step 3: Save the bullJobId back to the workflow DB record so cancellation can find it
+    const freshWf = await prisma.workflow.findUnique({
+      where: { id: workflow.id },
+      select: { metadata: true },
+    });
     await prisma.workflow.update({
       where: { id: workflow.id },
       data: {
         metadata: {
-          ...workflow.metadata,
+          ...(freshWf?.metadata || workflow.metadata || {}),
           bullJobId: job.id,
         },
       },

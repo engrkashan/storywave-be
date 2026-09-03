@@ -91,24 +91,35 @@ const TEMP_ROOT = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
 
 async function recordWorkflowWarning(workflowId, step, error) {
-  await prisma.workflow.update({
-    where: { id: workflowId },
-    data: {
-      metadata: {
-        ...(prisma.workflow.findUnique({ where: { id: workflowId } })
-          .metadata || {}),
-        warnings: [
-          ...(prisma.workflow.findUnique({ where: { id: workflowId } }).metadata
-            ?.warnings || []),
-          {
-            step,
-            message: error.message,
-            timestamp: new Date().toISOString(),
-          },
-        ],
+  try {
+    const current = await prisma.workflow.findUnique({
+      where: { id: workflowId },
+      select: { metadata: true },
+    });
+    const currentMeta = current?.metadata || {};
+    const existingWarnings = Array.isArray(currentMeta.warnings)
+      ? currentMeta.warnings
+      : [];
+
+    await prisma.workflow.update({
+      where: { id: workflowId },
+      data: {
+        metadata: {
+          ...currentMeta,
+          warnings: [
+            ...existingWarnings,
+            {
+              step,
+              message: error?.message || String(error),
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        },
       },
-    },
-  });
+    });
+  } catch (err) {
+    logger.warn(`Failed to record workflow warning: ${err.message}`);
+  }
 }
 
 export async function runScheduledWorkflows() {
@@ -791,11 +802,16 @@ async function _runWorkflow({
         }
       }
 
+      const freshMetaForPrompts = (await prisma.workflow.findUnique({
+        where: { id: workflow.id },
+        select: { metadata: true },
+      }))?.metadata || {};
+
       await prisma.workflow.update({
         where: { id: workflow.id },
         data: {
           metadata: {
-            ...(workflow.metadata || {}),
+            ...freshMetaForPrompts,
             storyMetadata,
             masterPrompts,
             commonPrompt,
@@ -946,17 +962,22 @@ async function _runWorkflow({
 
       // Store uploaded multi-char refs and music style in metadata for audit/debug and regeneration
       const savedCharRefs = uploadedMultiRefs.length > 0 ? uploadedMultiRefs : characterReferences;
+      const freshMetaForRefs = (await prisma.workflow.findUnique({
+        where: { id: workflow.id },
+        select: { metadata: true },
+      }))?.metadata || {};
+
       await prisma.workflow.update({
         where: { id: workflow.id },
         data: {
           metadata: {
-            ...(workflow.metadata || {}),
+            ...freshMetaForRefs,
             characterReferences: savedCharRefs,
             uploadedCharacterReferences: uploadedMultiRefs,
             userCharacterRefNames: uploadedMultiRefs.map(r => r.name).filter(Boolean),
-            backgroundMusicStyle: backgroundMusicStyle || (workflow.metadata && workflow.metadata.backgroundMusicStyle) || null,
+            backgroundMusicStyle: backgroundMusicStyle || freshMetaForRefs.backgroundMusicStyle || null,
             storyMetadata: {
-              ...(storyMetadata || {}),
+              ...(freshMetaForRefs.storyMetadata || storyMetadata || {}),
               characterReferences: savedCharRefs,
               backgroundMusicStyle: backgroundMusicStyle || null,
             },
@@ -1148,11 +1169,16 @@ async function _runWorkflow({
       actualAudioDuration = Math.max(5, Math.ceil(script.split(/\s+/).length * 0.35));
     }
 
+    const freshMetaForAudio = (await prisma.workflow.findUnique({
+      where: { id: workflow.id },
+      select: { metadata: true },
+    }))?.metadata || {};
+
     await prisma.workflow.update({
       where: { id: workflow.id },
       data: {
         metadata: {
-          ...(workflow.metadata || {}),
+          ...freshMetaForAudio,
           characterTalk,
           soundscapePlan: soundscapePlan || null,
           soundscapeAssetsCount: soundscapeAssets.length,
@@ -1329,11 +1355,16 @@ async function _runWorkflow({
         if (_globalNeg) {
           logger.info(`[v6.3 Engine] Global Negative Prompt captured (${_globalNeg.length} chars)`);
           try {
+            const freshMetaForAudit = (await prisma.workflow.findUnique({
+              where: { id: workflow.id },
+              select: { metadata: true },
+            }))?.metadata || {};
+
             await prisma.workflow.update({
               where: { id: workflow.id },
               data: {
                 metadata: {
-                  ...(workflow.metadata || {}),
+                  ...freshMetaForAudit,
                   globalNegativePrompt: _globalNeg,
                   finalAudit: _finalAudit,
                 },
@@ -1769,31 +1800,41 @@ async function _runWorkflow({
 
     // If cancelled by user → mark CANCELLED, do NOT let BullMQ retry
     if (err.isCancelled) {
+      const freshMetaErr = (await prisma.workflow.findUnique({
+        where: { id: workflow?.id },
+        select: { metadata: true },
+      }).catch(() => null))?.metadata || {};
+
       await prisma.workflow.update({
         where: { id: workflow.id },
         data: {
           status: "CANCELLED",
           metadata: {
-            ...(workflow.metadata || {}),
+            ...freshMetaErr,
             cancelledAt: new Date().toISOString(),
           },
         },
-      });
+      }).catch(() => {});
       logger.info("🚫 Workflow cancelled by user", "\x1b[33m");
       return { success: false, cancelled: true, workflowId: workflow.id };
     }
+
+    const freshMetaErr = (await prisma.workflow.findUnique({
+      where: { id: workflow?.id },
+      select: { metadata: true },
+    }).catch(() => null))?.metadata || {};
 
     await prisma.workflow.update({
       where: { id: workflow.id },
       data: {
         status: "FAILED",
         metadata: {
-          ...(workflow.metadata || {}),
+          ...freshMetaErr,
           error: err.message,
           failedAt: new Date().toISOString(),
         },
       },
-    });
+    }).catch(() => {});
 
     throw err;
   }
