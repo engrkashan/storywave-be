@@ -1,5 +1,6 @@
 import prisma from "../config/prisma.client.js";
 import { createLogger } from "../utils/logger.js";
+import { cloudinary } from "../config/cloudinary.config.js";
 
 const logger = createLogger("StoryController");
 import { generateStory } from "../services/storyService.js";
@@ -29,7 +30,6 @@ function toBool(val, defaultVal = true) {
 // POST Create Workflow (Start background process)
 export const createWorkflow = async (req, res) => {
   try {
-    logger.info(`📥 Incoming POST /workflow request body size: ${JSON.stringify(req.body).length} bytes`);
     const userId = req.user?.userId || req.user?.id || req.user?._id;
 
     const {
@@ -60,7 +60,7 @@ export const createWorkflow = async (req, res) => {
       visualSuggestions,
       uploadedMediaUrl,
       characterReferenceBase64,
-      // New: array of { name, base64 } — one per character
+      // New: array of { name, url, base64 } — one per character
       characterReferences: userCharacterReferences,
       autoPublish,
       autoPublishDelayMinutes,
@@ -68,7 +68,7 @@ export const createWorkflow = async (req, res) => {
     } = req.body;
 
     const subtitlesEnabled = toBool(subtitles, true);
-    logger.info(`🔤 [StoryController] Subtitles option parsed: ${subtitlesEnabled} (raw: ${JSON.stringify(subtitles)})`);
+    logger.info(`🔤 [StoryController] Subtitles option parsed: ${subtitlesEnabled}`);
 
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized: missing user" });
@@ -80,12 +80,72 @@ export const createWorkflow = async (req, res) => {
         .json({ error: "You must provide textIdea, url, or videoFile." });
     }
 
+    // ✅ Step 0: Upload any incoming base64 character reference images to Cloudinary in parallel
+    // This strips multi-megabyte base64 strings BEFORE storing in DB (prevents MongoDB 16MB document limit & 504 timeouts)
+    let processedCharRefs = [];
+    if (Array.isArray(userCharacterReferences) && userCharacterReferences.length > 0) {
+      logger.info(`Processing and uploading ${userCharacterReferences.length} character reference image(s)...`);
+      processedCharRefs = await Promise.all(
+        userCharacterReferences.map(async (c, idx) => {
+          if (!c) return null;
+          const charName = (c.name || `Character ${idx + 1}`).trim();
+          const imgData = c.url || c.base64;
+          if (!imgData) return { id: c.id || `char_${idx + 1}`, name: charName, url: "" };
+
+          // Already a Cloudinary / HTTP URL
+          if (typeof imgData === "string" && imgData.startsWith("http")) {
+            return { id: c.id || `char_${idx + 1}`, name: charName, url: imgData };
+          }
+
+          // Raw base64 data URI: upload to Cloudinary
+          if (typeof imgData === "string" && imgData.startsWith("data:")) {
+            try {
+              const upload = await cloudinary.uploader.upload(imgData, {
+                folder: "character-references",
+                resource_type: "image",
+                public_id: `user-char-ref-${Date.now()}-${idx}-${charName.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase()}`,
+                overwrite: true,
+              });
+              logger.info(`✅ Uploaded "${charName}" to Cloudinary → ${upload.secure_url}`);
+              return { id: c.id || `char_${idx + 1}`, name: charName, url: upload.secure_url };
+            } catch (err) {
+              logger.error(`⚠️ Cloudinary upload failed for "${charName}": ${err.message}`);
+              return null;
+            }
+          }
+
+          return { id: c.id || `char_${idx + 1}`, name: charName, url: "" };
+        })
+      );
+      processedCharRefs = processedCharRefs.filter(Boolean);
+    }
+
+    // Single legacy character reference upload
+    let singleCharRefUrl = null;
+    if (characterReferenceBase64 && typeof characterReferenceBase64 === "string") {
+      if (characterReferenceBase64.startsWith("http")) {
+        singleCharRefUrl = characterReferenceBase64;
+      } else if (characterReferenceBase64.startsWith("data:")) {
+        try {
+          const upload = await cloudinary.uploader.upload(characterReferenceBase64, {
+            folder: "character-references",
+            resource_type: "image",
+            public_id: `user-char-ref-${Date.now()}-main`,
+            overwrite: true,
+          });
+          singleCharRefUrl = upload.secure_url;
+        } catch (err) {
+          logger.error(`⚠️ Cloudinary single char upload failed: ${err.message}`);
+        }
+      }
+    }
+
     const finalTitle = title || generateRandomTitle(storyType);
     const nowUTC = new Date().toISOString();
     const scheduledUTC = scheduledAt ? new Date(scheduledAt).toISOString() : null;
     const isScheduled = scheduledUTC && new Date(scheduledUTC) > new Date(nowUTC);
 
-    // ✅ Step 1: Create the DB record FIRST so we have a workflowId to link to the BullMQ job
+    // ✅ Step 1: Create the DB record with clean Cloudinary URLs (ZERO base64 blobs in DB)
     const workflow = await prisma.workflow.create({
       data: {
         title: finalTitle,
@@ -118,14 +178,10 @@ export const createWorkflow = async (req, res) => {
           seoContent,
           visualSuggestions,
           uploadedMediaUrl,
-          characterReferenceBase64: characterReferenceBase64 || null,
-          // Multi-character references: [{ name, url, base64 }]
-          characterReferences: Array.isArray(userCharacterReferences) && userCharacterReferences.length > 0
-            ? userCharacterReferences
-            : null,
-          uploadedCharacterReferences: Array.isArray(userCharacterReferences) && userCharacterReferences.some(c => c.url && typeof c.url === "string" && c.url.startsWith("http"))
-            ? userCharacterReferences.filter(c => c.url && typeof c.url === "string" && c.url.startsWith("http"))
-            : null,
+          characterReferenceUrl: singleCharRefUrl,
+          // Clean multi-character references array with hosted URLs
+          characterReferences: processedCharRefs.length > 0 ? processedCharRefs : null,
+          uploadedCharacterReferences: processedCharRefs.length > 0 ? processedCharRefs : null,
           autoPublish,
           autoPublishDelayMinutes,
           useStoryGuidelinesOnlyForPrompts: useStoryGuidelinesOnlyForPrompts ?? undefined,
@@ -142,7 +198,7 @@ export const createWorkflow = async (req, res) => {
       });
     }
 
-    // ✅ Step 2: Queue the job with the workflowId embedded in the payload
+    // ✅ Step 2: Queue the job with the workflowId and clean URLs embedded in the payload
     const workflowPayload = {
       workflowId: workflow.id, // 🔑 Critical link
       userId,
@@ -172,11 +228,10 @@ export const createWorkflow = async (req, res) => {
       seoContent,
       visualSuggestions,
       uploadedMediaUrl,
-      characterReferenceBase64: characterReferenceBase64 || null,
-      // Multi-character references array
-      characterReferences: Array.isArray(userCharacterReferences) && userCharacterReferences.length > 0
-        ? userCharacterReferences
-        : null,
+      characterReferenceUrl: singleCharRefUrl,
+      // Multi-character references with Cloudinary URLs
+      characterReferences: processedCharRefs.length > 0 ? processedCharRefs : null,
+      uploadedCharacterReferences: processedCharRefs.length > 0 ? processedCharRefs : null,
       autoPublish,
       autoPublishDelayMinutes,
       useStoryGuidelinesOnlyForPrompts: useStoryGuidelinesOnlyForPrompts ?? undefined,
