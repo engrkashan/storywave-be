@@ -216,6 +216,9 @@ model Workflow {
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([userId, status])
+  @@index([createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([type, createdAt(sort: Desc)])
 }
 
 // ─── Storywave Editor: Per-Scene Record ──────────────────────────────────────

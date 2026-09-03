@@ -63,7 +63,7 @@ export const getWorkflows = async (req, res) => {
   try {
     const userId = req?.user?.userId;
     const role = req?.user?.role;
-    let { page = 1, limit = 20 } = req.query;
+    let { page = 1, limit = 20, type } = req.query;
 
     page = parseInt(page, 10);
     limit = parseInt(limit, 10);
@@ -73,23 +73,18 @@ export const getWorkflows = async (req, res) => {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    logger.info(`[WORKFLOW DEBUG] controller entered — userId=${userId} role=${role} page=${page} limit=${limit}`);
+    logger.info(`[WORKFLOW DEBUG] controller entered — userId=${userId} role=${role} page=${page} limit=${limit} type=${type}`);
     const t0 = Date.now();
 
-    const whereByRole = role === "CREATOR" ? { userId } : {};
+    const whereClause = {
+      ...(role === "CREATOR" ? { userId } : {}),
+      ...(type && type !== "ALL" ? { type } : {}),
+    };
 
-    // ─── FIX: Run findMany + count in parallel (was sequential — 2 serial RTTs) ──
-    // ─── FIX: metadata removed from select — it was fetching multi-MB JSON blobs ─
-    //         (storyMetadata, characterBible, MGE audit, soundscapePlan, etc.)      
-    //         per workflow, causing the gateway 504 when the collection grew.        
-    //         Only metadata.error is consumed here; recovered via a targeted query   
-    //         scoped to FAILED workflows in this page only.                          
-    logger.info(`[WORKFLOW DEBUG] before findMany + count (parallel)`);
-    const t1 = Date.now();
-
+    // 1. Fetch Workflow base records (no large relation graphs, no unprojected metadata)
     const [workflows, total] = await Promise.all([
       prisma.workflow.findMany({
-        where: whereByRole,
+        where: whereClause,
         orderBy: { createdAt: "desc" },
         skip,
         take: limit,
@@ -97,10 +92,25 @@ export const getWorkflows = async (req, res) => {
           id: true,
           title: true,
           status: true,
-          // metadata intentionally omitted — see fix comment above.
-          // Only metadata.error is needed; fetched separately below for FAILED rows only.
           createdAt: true,
-          story: {
+          storyId: true,
+          videoId: true,
+          userId: true,
+        },
+      }),
+      prisma.workflow.count({ where: whereClause }),
+    ]);
+
+    // 2. Parallel single-indexed batch lookups for relations & error projection
+    const storyIds = workflows.map((w) => w.storyId).filter(Boolean);
+    const videoIds = workflows.map((w) => w.videoId).filter(Boolean);
+    const userIds = workflows.map((w) => w.userId).filter(Boolean);
+    const failedIds = workflows.filter((w) => w.status === "FAILED").map((w) => w.id);
+
+    const [stories, videos, users, failedErrorsRaw] = await Promise.all([
+      storyIds.length > 0
+        ? prisma.story.findMany({
+            where: { id: { in: storyIds } },
             select: {
               id: true,
               isPodcast: true,
@@ -110,82 +120,88 @@ export const getWorkflows = async (req, res) => {
               coverArtURL_9_16: true,
               series: true,
             },
-          },
-          video: {
+          })
+        : [],
+      videoIds.length > 0
+        ? prisma.video.findMany({
+            where: { id: { in: videoIds } },
             select: {
+              id: true,
               fileURL: true,
               video_16_9: true,
               video_9_16: true,
             },
-          },
-          user: {
+          })
+        : [],
+      userIds.length > 0
+        ? prisma.user.findMany({
+            where: { id: { in: userIds } },
             select: {
               id: true,
               fullName: true,
               role: true,
             },
-          },
-        },
-      }),
-      prisma.workflow.count({ where: whereByRole }),
+          })
+        : [],
+      failedIds.length > 0
+        ? prisma.$runCommandRaw({
+            find: "Workflow",
+            filter: { _id: { $in: failedIds.map((id) => ({ $oid: id })) } },
+            projection: { "metadata.error": 1 },
+          }).catch(() => ({ cursor: { firstBatch: [] } }))
+        : { cursor: { firstBatch: [] } },
     ]);
 
-    logger.info(`[WORKFLOW DEBUG] after findMany + count: ${Date.now() - t1}ms — got ${workflows.length} rows, total=${total}`);
-
-    // ─── Recover metadata.error for FAILED workflows only ───────────────────────
-    // Tiny secondary query: at most `limit` IDs, status=FAILED, select only metadata.
-    // Index-covered by _id (hash). No-op when no FAILED workflows are on this page.
-    const failedIds = workflows
-      .filter((w) => w.status === "FAILED")
-      .map((w) => w.id);
-
-    const errorByWorkflowId = {};
-    if (failedIds.length > 0) {
-      logger.info(`[WORKFLOW DEBUG] fetching metadata.error for ${failedIds.length} FAILED workflow(s)`);
-      const t2 = Date.now();
-      const failedMeta = await prisma.workflow.findMany({
-        where: { id: { in: failedIds } },
-        select: { id: true, metadata: true },
-      });
-      logger.info(`[WORKFLOW DEBUG] after error fetch: ${Date.now() - t2}ms`);
-      for (const fm of failedMeta) {
-        errorByWorkflowId[fm.id] = fm.metadata?.error || null;
+    const storyMap = new Map(stories.map((s) => [s.id, s]));
+    const videoMap = new Map(videos.map((v) => [v.id, v]));
+    const userMap = new Map(users.map((u) => [u.id, u]));
+    const errorMap = new Map();
+    if (failedErrorsRaw?.cursor?.firstBatch) {
+      for (const doc of failedErrorsRaw.cursor.firstBatch) {
+        errorMap.set(doc._id?.$oid || String(doc._id), doc.metadata?.error || null);
       }
     }
 
-    logger.info(`[WORKFLOW DEBUG] before mapping`);
-    const stories = workflows.map((w) => ({
-      id: w.id,
-      workflow: w.id,
-      title: w.title || "Untitled Workflow",
-      status: w.status,
-      series: w.story?.series || null,
-      createdAt: w.createdAt,
-      error: errorByWorkflowId[w.id] ?? null,
-      isPodcast: w.story?.isPodcast || false,
-      audioURL: w.story?.audioURL || null,
-      thumbnail: w.story?.coverArtURL_16_9 || w.story?.coverArtURL_9_16 || w.story?.coverArtURL || null,
-      video: w.video ? {
-        fileURL: w.video.fileURL,
-        video_16_9: w.video.video_16_9,
-        video_9_16: w.video.video_9_16,
-      } : null,
-      owner: {
-        id: w.user?.id,
-        name: w.user?.fullName,
-        role: w.user?.role,
-      },
-    }));
+    const formattedStories = workflows.map((w) => {
+      const s = w.storyId ? storyMap.get(w.storyId) : null;
+      const v = w.videoId ? videoMap.get(w.videoId) : null;
+      const u = w.userId ? userMap.get(w.userId) : null;
+
+      return {
+        id: w.id,
+        workflow: w.id,
+        title: w.title || "Untitled Workflow",
+        status: w.status,
+        series: s?.series || null,
+        createdAt: w.createdAt,
+        error: errorMap.get(w.id) ?? null,
+        isPodcast: s?.isPodcast || false,
+        audioURL: s?.audioURL || null,
+        thumbnail: s?.coverArtURL_16_9 || s?.coverArtURL_9_16 || s?.coverArtURL || null,
+        video: v
+          ? {
+              fileURL: v.fileURL,
+              video_16_9: v.video_16_9,
+              video_9_16: v.video_9_16,
+            }
+          : null,
+        owner: {
+          id: u?.id,
+          name: u?.fullName,
+          role: u?.role,
+        },
+      };
+    });
 
     logger.info(`[WORKFLOW DEBUG] response completed — total elapsed: ${Date.now() - t0}ms`);
     return res.status(200).json({
-      stories,
+      stories: formattedStories,
       meta: {
         total,
         page,
         limit,
         totalPages: Math.ceil(total / limit),
-      }
+      },
     });
   } catch (error) {
     logger.error("Get Workflows Error:", error);
