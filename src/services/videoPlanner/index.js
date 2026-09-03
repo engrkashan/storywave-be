@@ -38,8 +38,31 @@ export async function planDedicatedVideoPipeline(script, storyBible = {}, option
 
   logger.info(`🚀 [Video Planner] Starting dedicated state-based video planning pipeline (Target Scene Count: ${effectiveTargetCount}, Authoritative Speech Duration: ${narrationDuration.toFixed(1)}s)...`);
 
-  // 2. Narrative Timeline Generator: Analyze entire script into chronological beats constrained by effectiveTargetCount
-  const rawNarrativeBeats = await generateNarrativeTimeline(script, storyBible, effectiveTargetCount);
+  // 2. Narrative Timeline Generator
+  const isOnlyForPrompts = isStoryGuidelinesOnlyForPromptsEnabled(options);
+  const parsedGuidelineFrames = (isOnlyForPrompts && options.storyGuidelines) ? parseStoryGuidelineFrames(options.storyGuidelines) : [];
+
+  let rawNarrativeBeats;
+  if (isOnlyForPrompts && parsedGuidelineFrames.length > 0) {
+    logger.info(`⚡ [Video Planner] USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS active: Deriving ${parsedGuidelineFrames.length} narrative beats directly from story guidelines (Zero OpenAI calls).`);
+    rawNarrativeBeats = parsedGuidelineFrames.map((f, idx) => ({
+      beatIndex: idx,
+      narrative: f.narrationBeat || `Beat ${idx + 1}`,
+      action: f.exactMoment || f.narrationBeat || "Scene action",
+      location: f.location || "Scene Location",
+      emotion: "focused",
+      characterName: f.visibleHumans?.[0] || "Subject",
+      spokenText: f.narrationBeat || "",
+      startSec: f.startSec,
+      endSec: f.endSec,
+      durationSec: (f.endSec && f.startSec) ? (f.endSec - f.startSec) : 5.0,
+      frameId: f.frameId,
+      sceneId: f.sceneId,
+      fullFramePrompt: f.fullFramePrompt
+    }));
+  } else {
+    rawNarrativeBeats = await generateNarrativeTimeline(script, storyBible, effectiveTargetCount);
+  }
 
   // 3. Atomic Beat Planner: Atomize compound beats only if below effectiveTargetCount
   const atomicBeats = planAtomicBeats(rawNarrativeBeats, effectiveTargetCount);
@@ -70,9 +93,6 @@ export async function planDedicatedVideoPipeline(script, storyBible = {}, option
   const stateBasedPrompts = [];
   const totalBeatsCount = validatedBeats.length;
 
-  // 📋 Gated by USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS
-  const isOnlyForPrompts = isStoryGuidelinesOnlyForPromptsEnabled(options);
-  const parsedGuidelineFrames = (isOnlyForPrompts && options.storyGuidelines) ? parseStoryGuidelineFrames(options.storyGuidelines) : [];
   const guidelineClaimedIndices = new Set();
 
   for (let i = 0; i < validatedBeats.length; i++) {

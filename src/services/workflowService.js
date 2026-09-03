@@ -44,6 +44,7 @@ import {
   runModule4_VisualWorldBible,
   generateSceneGraph
 } from "./motionGraphicEngine.js";
+import { parseStoryGuidelineFrames } from "../utils/storyGuidelineParser.js";
 import { createLogger, loggingStorage } from "../utils/logger.js";
 
 const logger = createLogger("WorkflowService");
@@ -90,20 +91,92 @@ import { CheckpointManager } from "../utils/checkpointManager.js";
 const TEMP_ROOT = path.resolve(process.cwd(), "temp");
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
 
+/**
+ * Safe workflow updater with retry on MongoDB transaction conflicts / aborts.
+ * Ensures long-running workflows and parallel tasks never fail from transient txn issues.
+ */
+export async function updateWorkflowSafe(workflowId, updateData, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await prisma.workflow.update({
+        where: { id: workflowId },
+        data: updateData,
+      });
+    } catch (err) {
+      const isTxnError =
+        err.message?.includes("Transaction") ||
+        err.message?.includes("WriteConflict") ||
+        err.message?.includes("has been aborted") ||
+        err.code === "P2028";
+
+      if (isTxnError && attempt < retries) {
+        logger.warn(
+          `⚠️ [DB Retry ${attempt}/${retries}] Retrying workflow update (${workflowId}) due to txn conflict: ${err.message}`
+        );
+        await new Promise((r) => setTimeout(r, 150 * Math.pow(2, attempt - 1)));
+        continue;
+      }
+
+      // Fallback: Direct raw MongoDB $set update (bypasses Prisma transaction session)
+      if (isTxnError) {
+        try {
+          logger.warn(
+            `⚡ [DB Fallback] Executing raw atomic update for workflow ${workflowId}`
+          );
+          await prisma.$runCommandRaw({
+            update: "Workflow",
+            updates: [
+              {
+                q: { _id: { $oid: workflowId } },
+                u: { $set: updateData },
+                upsert: false,
+              },
+            ],
+          });
+          return;
+        } catch (rawErr) {
+          logger.error(`❌ Raw fallback update failed: ${rawErr.message}`);
+        }
+      }
+      throw err;
+    }
+  }
+}
+
 async function recordWorkflowWarning(workflowId, step, error) {
   try {
-    const current = await prisma.workflow.findUnique({
-      where: { id: workflowId },
-      select: { metadata: true },
+    // Atomic push into metadata.warnings — zero multi-document transaction collision
+    await prisma.$runCommandRaw({
+      update: "Workflow",
+      updates: [
+        {
+          q: { _id: { $oid: workflowId } },
+          u: {
+            $push: {
+              "metadata.warnings": {
+                step,
+                message: error?.message || String(error),
+                timestamp: new Date().toISOString(),
+              },
+            },
+          },
+          upsert: false,
+        },
+      ],
     });
-    const currentMeta = current?.metadata || {};
-    const existingWarnings = Array.isArray(currentMeta.warnings)
-      ? currentMeta.warnings
-      : [];
+  } catch (err) {
+    // Graceful fallback via updateWorkflowSafe
+    try {
+      const current = await prisma.workflow.findUnique({
+        where: { id: workflowId },
+        select: { metadata: true },
+      });
+      const currentMeta = current?.metadata || {};
+      const existingWarnings = Array.isArray(currentMeta.warnings)
+        ? currentMeta.warnings
+        : [];
 
-    await prisma.workflow.update({
-      where: { id: workflowId },
-      data: {
+      await updateWorkflowSafe(workflowId, {
         metadata: {
           ...currentMeta,
           warnings: [
@@ -115,10 +188,10 @@ async function recordWorkflowWarning(workflowId, step, error) {
             },
           ],
         },
-      },
-    });
-  } catch (err) {
-    logger.warn(`Failed to record workflow warning: ${err.message}`);
+      });
+    } catch (_) {
+      logger.warn(`Failed to record workflow warning: ${err.message}`);
+    }
   }
 }
 
@@ -138,10 +211,7 @@ export async function runScheduledWorkflows() {
       return;
     }
 
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: { status: "PROCESSING" },
-    });
+    await updateWorkflowSafe(workflow.id, { status: "PROCESSING" });
 
     const meta = workflow.metadata || {};
     const payload = {
@@ -439,10 +509,7 @@ async function _runWorkflow({
     if (!workflow) {
       throw new Error(`Workflow ${workflowId} not found in DB`);
     }
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: { status: "PROCESSING" },
-    });
+    await updateWorkflowSafe(workflow.id, { status: "PROCESSING" });
     logger.info(`Attached to pre-created workflow: ${workflow.id}`);
   }
 
@@ -485,10 +552,7 @@ async function _runWorkflow({
       },
     });
   } else if (!workflowId) {
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: { status: "PROCESSING" },
-    });
+    await updateWorkflowSafe(workflow.id, { status: "PROCESSING" });
   }
 
   logger.info(`Workflow ID: ${workflow.id}`);
@@ -512,10 +576,7 @@ async function _runWorkflow({
     logger.info(
       `🚫 Workflow ${workflow.id} is already cancelled — aborting restart.`,
     );
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: { status: "CANCELLED" },
-    });
+    await updateWorkflowSafe(workflow.id, { status: "CANCELLED" });
     return { success: false, cancelled: true, workflowId: workflow.id };
   }
 
@@ -670,28 +731,72 @@ async function _runWorkflow({
 
       referenceTraits = localRefTraits.length > 0 ? localRefTraits : null;
 
-      const PROJECT_SPEC = await runModule1_InputNormalization({
-        title, sourceType: storyType || "script", storyScript: script, imageCount,
-        aspectRatio, visualSuggestions, storyGuidelines
-      });
-      const STORY_WORLD_MAP = await runModule2_StoryWorldAnalysis(script, PROJECT_SPEC);
-      const MATERIALIZED_CAST_BIBLE = await runModule3_MaterializedCastBible(STORY_WORLD_MAP, referenceTraits);
-      const MATERIALIZED_VISUAL_WORLD_BIBLE = await runModule4_VisualWorldBible(STORY_WORLD_MAP, PROJECT_SPEC);
+      const parsedGuidelineFrames = (isGuidelinesOnlyForPrompts && storyGuidelines)
+        ? parseStoryGuidelineFrames(storyGuidelines)
+        : [];
 
-      const { graph: SCENE_GRAPH } = await generateSceneGraph(script, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE, referenceTraits);
+      if (isGuidelinesOnlyForPrompts && parsedGuidelineFrames.length > 0) {
+        logger.info(`⚡ [Fast-Track] USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS is active: Bypassing Modules 1–4 LLM analysis passes (Zero OpenAI bible calls).`);
 
-      storyMetadata = {
-        characters: MATERIALIZED_CAST_BIBLE.characters || [],
-        locations: MATERIALIZED_VISUAL_WORLD_BIBLE.locations || [],
-        synopsis: STORY_WORLD_MAP.core_synopsis || "",
-        artStyle: STORY_WORLD_MAP.visual_style_record?.art_style || "",
-        colorPalette: STORY_WORLD_MAP.visual_style_record?.color_palette || [],
-        cinematicSpecs: STORY_WORLD_MAP.visual_style_record?.cinematic_treatment || "",
-        _preGeneratedBibles: { PROJECT_SPEC, STORY_WORLD_MAP, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE },
-        targetSceneCount: SCENE_GRAPH.length
-      };
-      masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
-      commonPrompt = generateCommonVisualPrompt(storyMetadata);
+        const charSet = new Set();
+        const derivedCharacters = [];
+        parsedGuidelineFrames.forEach(f => {
+          (f.visibleHumans || []).forEach(h => {
+            if (!charSet.has(h)) {
+              charSet.add(h);
+              derivedCharacters.push({
+                id: h.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase(),
+                name: h,
+                appearance: "Preserved in locked frame guidelines",
+                clothing: "Locked per frame specification",
+              });
+            }
+          });
+        });
+
+        const effectiveCount = parsedGuidelineFrames.length || imageCount || 5;
+
+        storyMetadata = {
+          characters: derivedCharacters,
+          locations: [{ name: "Story Location", description: "Locked per frame specification" }],
+          synopsis: title || "Cinematic Story",
+          artStyle: "Cinematic photorealistic film still",
+          colorPalette: [],
+          cinematicSpecs: "Locked per frame guidelines",
+          _preGeneratedBibles: {
+            PROJECT_SPEC: { title: title || "Untitled", requested_image_count: effectiveCount, aspect_ratio: aspectRatio },
+            STORY_WORLD_MAP: { core_synopsis: title || "Cinematic Story" },
+            MATERIALIZED_CAST_BIBLE: { characters: derivedCharacters },
+            MATERIALIZED_VISUAL_WORLD_BIBLE: { locations: [{ name: "Story Location" }] }
+          },
+          targetSceneCount: effectiveCount
+        };
+        masterPrompts = { singleImage: "", multiImages: [] };
+        commonPrompt = "Cinematic photorealistic film still";
+      } else {
+        const PROJECT_SPEC = await runModule1_InputNormalization({
+          title, sourceType: storyType || "script", storyScript: script, imageCount,
+          aspectRatio, visualSuggestions, storyGuidelines
+        });
+        const STORY_WORLD_MAP = await runModule2_StoryWorldAnalysis(script, PROJECT_SPEC);
+        const MATERIALIZED_CAST_BIBLE = await runModule3_MaterializedCastBible(STORY_WORLD_MAP, referenceTraits);
+        const MATERIALIZED_VISUAL_WORLD_BIBLE = await runModule4_VisualWorldBible(STORY_WORLD_MAP, PROJECT_SPEC);
+
+        const { graph: SCENE_GRAPH } = await generateSceneGraph(script, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE, referenceTraits);
+
+        storyMetadata = {
+          characters: MATERIALIZED_CAST_BIBLE.characters || [],
+          locations: MATERIALIZED_VISUAL_WORLD_BIBLE.locations || [],
+          synopsis: STORY_WORLD_MAP.core_synopsis || "",
+          artStyle: STORY_WORLD_MAP.visual_style_record?.art_style || "",
+          colorPalette: STORY_WORLD_MAP.visual_style_record?.color_palette || [],
+          cinematicSpecs: STORY_WORLD_MAP.visual_style_record?.cinematic_treatment || "",
+          _preGeneratedBibles: { PROJECT_SPEC, STORY_WORLD_MAP, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE },
+          targetSceneCount: SCENE_GRAPH.length
+        };
+        masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
+        commonPrompt = generateCommonVisualPrompt(storyMetadata);
+      }
 
       if (imagePrompt && (mediaType === "multi_image" || mediaType === "video")) {
         commonPrompt = `${commonPrompt}. Visual Reference: ${imagePrompt}`;
@@ -724,10 +829,7 @@ async function _runWorkflow({
       },
     });
 
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: { storyId: story.id },
-    });
+    await updateWorkflowSafe(workflow.id, { storyId: story.id });
 
     if (shouldGenerateImage) {
       await checkCancelled(workflow.id); // ✔️ Cancellation check
@@ -807,19 +909,16 @@ async function _runWorkflow({
         select: { metadata: true },
       }))?.metadata || {};
 
-      await prisma.workflow.update({
-        where: { id: workflow.id },
-        data: {
-          metadata: {
-            ...freshMetaForPrompts,
-            storyMetadata,
-            masterPrompts,
-            commonPrompt,
-            characterReferenceUrl,
-            styleReferenceUrl,
-            // v6.3 Engine: globalNegativePrompt stored here for image generation steps
-            globalNegativePrompt: null, // Populated after generateScenePrompts resolves
-          },
+      await updateWorkflowSafe(workflow.id, {
+        metadata: {
+          ...freshMetaForPrompts,
+          storyMetadata,
+          masterPrompts,
+          commonPrompt,
+          characterReferenceUrl,
+          styleReferenceUrl,
+          // v6.3 Engine: globalNegativePrompt stored here for image generation steps
+          globalNegativePrompt: null, // Populated after generateScenePrompts resolves
         },
       });
 
@@ -967,20 +1066,17 @@ async function _runWorkflow({
         select: { metadata: true },
       }))?.metadata || {};
 
-      await prisma.workflow.update({
-        where: { id: workflow.id },
-        data: {
-          metadata: {
-            ...freshMetaForRefs,
+      await updateWorkflowSafe(workflow.id, {
+        metadata: {
+          ...freshMetaForRefs,
+          characterReferences: savedCharRefs,
+          uploadedCharacterReferences: uploadedMultiRefs,
+          userCharacterRefNames: uploadedMultiRefs.map(r => r.name).filter(Boolean),
+          backgroundMusicStyle: backgroundMusicStyle || freshMetaForRefs.backgroundMusicStyle || null,
+          storyMetadata: {
+            ...(freshMetaForRefs.storyMetadata || storyMetadata || {}),
             characterReferences: savedCharRefs,
-            uploadedCharacterReferences: uploadedMultiRefs,
-            userCharacterRefNames: uploadedMultiRefs.map(r => r.name).filter(Boolean),
-            backgroundMusicStyle: backgroundMusicStyle || freshMetaForRefs.backgroundMusicStyle || null,
-            storyMetadata: {
-              ...(freshMetaForRefs.storyMetadata || storyMetadata || {}),
-              characterReferences: savedCharRefs,
-              backgroundMusicStyle: backgroundMusicStyle || null,
-            },
+            backgroundMusicStyle: backgroundMusicStyle || null,
           },
         },
       });
@@ -1174,8 +1270,7 @@ async function _runWorkflow({
       select: { metadata: true },
     }))?.metadata || {};
 
-    await prisma.workflow.update({
-      where: { id: workflow.id },
+    await updateWorkflowSafe(workflow.id, {
       data: {
         metadata: {
           ...freshMetaForAudio,
@@ -1360,14 +1455,11 @@ async function _runWorkflow({
               select: { metadata: true },
             }))?.metadata || {};
 
-            await prisma.workflow.update({
-              where: { id: workflow.id },
-              data: {
-                metadata: {
-                  ...freshMetaForAudit,
-                  globalNegativePrompt: _globalNeg,
-                  finalAudit: _finalAudit,
-                },
+            await updateWorkflowSafe(workflow.id, {
+              metadata: {
+                ...freshMetaForAudit,
+                globalNegativePrompt: _globalNeg,
+                finalAudit: _finalAudit,
               },
             });
           } catch (dbErr) {
@@ -1633,24 +1725,21 @@ async function _runWorkflow({
           select: { metadata: true },
         });
         const existingMeta = freshMeta?.metadata || {};
-        await prisma.workflow.update({
-          where: { id: workflow.id },
-          data: {
-            metadata: {
-              ...existingMeta,
-              dualPlatform,
-              // Frozen assembly data — Merge & Continue reads these:
-              _editorMasterTimeline: masterTimeline,
-              _editorFinalAudioUrl: mixedVoiceURL || null,
-              _editorActualAudioDuration: actualAudioDuration,
-              _editorAspectRatio: aspectRatio,
-              _editorCharacterTalk: characterTalk,
-              _editorHasVoiceSelected: hasVoiceSelected,
-              _editorSubtitles: isSubtitlesEnabled,
-              _editorMusicUsed: !!musicPath,
-              _editorTitle: title,
-              _editorUserId: userId,
-            },
+        await updateWorkflowSafe(workflow.id, {
+          metadata: {
+            ...existingMeta,
+            dualPlatform,
+            // Frozen assembly data — Merge & Continue reads these:
+            _editorMasterTimeline: masterTimeline,
+            _editorFinalAudioUrl: mixedVoiceURL || null,
+            _editorActualAudioDuration: actualAudioDuration,
+            _editorAspectRatio: aspectRatio,
+            _editorCharacterTalk: characterTalk,
+            _editorHasVoiceSelected: hasVoiceSelected,
+            _editorSubtitles: isSubtitlesEnabled,
+            _editorMusicUsed: !!musicPath,
+            _editorTitle: title,
+            _editorUserId: userId,
           },
         });
         logger.info(`✅ [Editor] masterTimeline and assembly params persisted for workflow ${workflow.id}. Pausing for user review.`);
@@ -1670,12 +1759,9 @@ async function _runWorkflow({
             userId,
           },
         });
-        await prisma.workflow.update({
-          where: { id: workflow.id },
-          data: {
-            videoId: videoRecord.id,
-            metadata: { ...(workflow.metadata || {}), dualPlatform },
-          },
+        await updateWorkflowSafe(workflow.id, {
+          videoId: videoRecord.id,
+          metadata: { ...(workflow.metadata || {}), dualPlatform },
         });
         isPodcast = false;
       } else {
@@ -1714,19 +1800,16 @@ async function _runWorkflow({
       select: { metadata: true },
     }))?.metadata || {};
 
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: {
-        status: finalStatus,
-        metadata: {
-          ...freshMetaFinal,
-          result: {
-            hasMedia: mediaUrls.length > 0 || sceneCountFinal > 0,
-            hasVideo: !!videoURL,
-            isPodcast,
-            mediaType,
-            pausedForEditor: pauseForEditor,
-          },
+    await updateWorkflowSafe(workflow.id, {
+      status: finalStatus,
+      metadata: {
+        ...freshMetaFinal,
+        result: {
+          hasMedia: mediaUrls.length > 0 || sceneCountFinal > 0,
+          hasVideo: !!videoURL,
+          isPodcast,
+          mediaType,
+          pausedForEditor: pauseForEditor,
         },
       },
     });
@@ -1805,14 +1888,11 @@ async function _runWorkflow({
         select: { metadata: true },
       }).catch(() => null))?.metadata || {};
 
-      await prisma.workflow.update({
-        where: { id: workflow.id },
-        data: {
-          status: "CANCELLED",
-          metadata: {
-            ...freshMetaErr,
-            cancelledAt: new Date().toISOString(),
-          },
+      await updateWorkflowSafe(workflow.id, {
+        status: "CANCELLED",
+        metadata: {
+          ...freshMetaErr,
+          cancelledAt: new Date().toISOString(),
         },
       }).catch(() => {});
       logger.info("🚫 Workflow cancelled by user", "\x1b[33m");
@@ -1824,15 +1904,12 @@ async function _runWorkflow({
       select: { metadata: true },
     }).catch(() => null))?.metadata || {};
 
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: {
-        status: "FAILED",
-        metadata: {
-          ...freshMetaErr,
-          error: err.message,
-          failedAt: new Date().toISOString(),
-        },
+    await updateWorkflowSafe(workflow.id, {
+      status: "FAILED",
+      metadata: {
+        ...freshMetaErr,
+        error: err.message,
+        failedAt: new Date().toISOString(),
       },
     }).catch(() => {});
 

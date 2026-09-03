@@ -23,8 +23,9 @@ import { createLogger } from "../utils/logger.js";
 import {
   concatSegments,
   renderMediaSegment,
-  convertTranscriptToAss,
 } from "./videoService.js";
+import { updateWorkflowSafe } from "./workflowService.js";
+import { convertTranscriptToAss } from "./videoService.js";
 import {
   validateCanonicalTimeline,
   logSyncDiagnostics,
@@ -334,10 +335,7 @@ export async function runFinalAssembly(workflowId) {
   const ratiosToGenerate = dualPlatform ? ["16:9", "9:16"] : [aspectRatio];
 
   // Set workflow to PROCESSING
-  await prisma.workflow.update({
-    where: { id: workflowId },
-    data: { status: "PROCESSING" },
-  });
+  await updateWorkflowSafe(workflowId, { status: "PROCESSING" });
   logger.info(`[FinalAssembly] Workflow ${workflowId} → PROCESSING`);
 
   const assemblyTempDir = path.join(TEMP_ROOT, `assembly_${workflowId}_${Date.now()}`);
@@ -504,19 +502,16 @@ export async function runFinalAssembly(workflowId) {
       select: { metadata: true },
     }))?.metadata || {};
 
-    await prisma.workflow.update({
-      where: { id: workflowId },
-      data: {
-        videoId: videoRecord.id,
-        status: "COMPLETED",
-        metadata: {
-          ...freshMeta,
-          result: {
-            ...(freshMeta.result || {}),
-            hasMedia: true,
-            hasVideo: true,
-            mergedAt: new Date().toISOString(),
-          },
+    await updateWorkflowSafe(workflowId, {
+      videoId: videoRecord.id,
+      status: "COMPLETED",
+      metadata: {
+        ...freshMeta,
+        result: {
+          ...(freshMeta.result || {}),
+          hasMedia: true,
+          hasVideo: true,
+          mergedAt: new Date().toISOString(),
         },
       },
     });
@@ -565,15 +560,12 @@ export async function runFinalAssembly(workflowId) {
       select: { metadata: true },
     }))?.metadata || {};
 
-    await prisma.workflow.update({
-      where: { id: workflowId },
-      data: {
-        status: "USER_CONFIRMATION_REQUIRED",
-        metadata: {
-          ...freshMeta,
-          mergeError: err.message,
-          mergeFailedAt: new Date().toISOString(),
-        },
+    await updateWorkflowSafe(workflowId, {
+      status: "USER_CONFIRMATION_REQUIRED",
+      metadata: {
+        ...freshMeta,
+        mergeError: err.message,
+        mergeFailedAt: new Date().toISOString(),
       },
     }).catch(() => { });
 

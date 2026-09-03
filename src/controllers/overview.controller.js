@@ -238,22 +238,72 @@ export const getWorkflowById = async (req, res) => {
 
     const filter = role === "CREATOR" ? { id, userId } : { id };
 
-    const workflow = await prisma.workflow.findFirst({
-      where: filter,
-      include: {
-        story: true,
-        voiceover: true,
-        video: true,
-        inputs: true,
-        media: true,
-        tasks: true,
-        user: { select: { id: true, fullName: true, role: true } },
-      },
-    });
+    const [workflow, metaCommand] = await Promise.all([
+      prisma.workflow.findFirst({
+        where: filter,
+        select: {
+          id: true,
+          title: true,
+          type: true,
+          subType: true,
+          status: true,
+          scheduledAt: true,
+          createdAt: true,
+          updatedAt: true,
+          story: true,
+          voiceover: true,
+          video: true,
+          inputs: true,
+          media: true,
+          tasks: true,
+          user: { select: { id: true, fullName: true, role: true } },
+        },
+      }),
+      prisma.$runCommandRaw({
+        find: "Workflow",
+        filter: { _id: { $oid: id } },
+        projection: {
+          "metadata.mediaType": 1,
+          "metadata.aspectRatio": 1,
+          "metadata.dualPlatform": 1,
+          "metadata.voice": 1,
+          "metadata.voiceTone": 1,
+          "metadata.storyLength": 1,
+          "metadata.storyType": 1,
+          "metadata.subtitles": 1,
+          "metadata.soundEffects": 1,
+          "metadata.characterTalk": 1,
+          "metadata.backgroundMusic": 1,
+          "metadata.characterReferences": 1,
+          "metadata.uploadedCharacterReferences": 1,
+          "metadata.error": 1,
+          "metadata.cancelledAt": 1,
+        },
+        limit: 1,
+      }),
+    ]);
 
     if (!workflow) {
       return res.status(404).json({ error: "Workflow not found" });
     }
+
+    const rawMeta = metaCommand?.cursor?.firstBatch?.[0]?.metadata || {};
+    const filteredMetadata = {
+      mediaType: rawMeta.mediaType || "multi_image",
+      aspectRatio: rawMeta.aspectRatio || "16:9",
+      dualPlatform: rawMeta.dualPlatform ?? false,
+      voice: rawMeta.voice || null,
+      voiceTone: rawMeta.voiceTone || null,
+      storyLength: rawMeta.storyLength || null,
+      storyType: rawMeta.storyType || null,
+      subtitles: rawMeta.subtitles ?? true,
+      soundEffects: rawMeta.soundEffects ?? false,
+      characterTalk: rawMeta.characterTalk ?? false,
+      backgroundMusic: rawMeta.backgroundMusic || null,
+      characterReferences: rawMeta.characterReferences || rawMeta.uploadedCharacterReferences || null,
+      error: rawMeta.error || null,
+      cancelledAt: rawMeta.cancelledAt || null,
+    };
 
     return res.status(200).json({
       id: workflow.id,
@@ -264,7 +314,7 @@ export const getWorkflowById = async (req, res) => {
       scheduledAt: workflow.scheduledAt,
       createdAt: workflow.createdAt,
       updatedAt: workflow.updatedAt,
-      metadata: workflow.metadata || {},
+      metadata: filteredMetadata,
       owner: workflow.user
         ? {
           id: workflow.user.id,
