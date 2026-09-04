@@ -286,12 +286,21 @@ export const getWorkflowById = async (req, res) => {
           "metadata.voiceTone": 1,
           "metadata.storyLength": 1,
           "metadata.storyType": 1,
+          "metadata.storyGuidelines": 1,
+          "metadata.useStoryGuidelinesOnlyForPrompts": 1,
+          "metadata.textIdea": 1,
+          "metadata.imagePrompt": 1,
+          "metadata.shouldGenerateImage": 1,
           "metadata.subtitles": 1,
           "metadata.soundEffects": 1,
           "metadata.characterTalk": 1,
           "metadata.backgroundMusic": 1,
+          "metadata.backgroundMusicStyle": 1,
           "metadata.characterReferences": 1,
           "metadata.uploadedCharacterReferences": 1,
+          "metadata.characterReferenceUrl": 1,
+          "metadata.uploadedMediaUrl": 1,
+          "metadata.storyMetadata": 1,
           "metadata.error": 1,
           "metadata.cancelledAt": 1,
         },
@@ -305,18 +314,35 @@ export const getWorkflowById = async (req, res) => {
 
     const rawMeta = metaCommand?.cursor?.firstBatch?.[0]?.metadata || {};
     const filteredMetadata = {
+      ...rawMeta,
       mediaType: rawMeta.mediaType || "multi_image",
       aspectRatio: rawMeta.aspectRatio || "16:9",
       dualPlatform: rawMeta.dualPlatform ?? false,
       voice: rawMeta.voice || null,
-      voiceTone: rawMeta.voiceTone || null,
+      voiceTone: rawMeta.voiceTone || rawMeta.storyMetadata?.voiceTone || null,
       storyLength: rawMeta.storyLength || null,
-      storyType: rawMeta.storyType || null,
+      storyType: rawMeta.storyType || rawMeta.storyMetadata?.genre || null,
+      storyGuidelines:
+        rawMeta.storyGuidelines ||
+        rawMeta.storyMetadata?.storyGuidelines ||
+        rawMeta.storyMetadata?.fallback_guidelines ||
+        rawMeta.directorialGuidelines ||
+        rawMeta.guidelines ||
+        null,
+      useStoryGuidelinesOnlyForPrompts:
+        rawMeta.useStoryGuidelinesOnlyForPrompts ??
+        rawMeta.storyMetadata?.useStoryGuidelinesOnlyForPrompts ??
+        false,
+      textIdea: rawMeta.textIdea || rawMeta.concept || null,
+      imagePrompt: rawMeta.imagePrompt || null,
+      shouldGenerateImage: rawMeta.shouldGenerateImage ?? true,
       subtitles: rawMeta.subtitles ?? true,
       soundEffects: rawMeta.soundEffects ?? false,
       characterTalk: rawMeta.characterTalk ?? false,
-      backgroundMusic: rawMeta.backgroundMusic || null,
-      characterReferences: rawMeta.characterReferences || rawMeta.uploadedCharacterReferences || null,
+      backgroundMusic: rawMeta.backgroundMusic ?? true,
+      backgroundMusicStyle: rawMeta.backgroundMusicStyle || rawMeta.storyMetadata?.backgroundMusicStyle || null,
+      characterReferences: rawMeta.characterReferences || rawMeta.uploadedCharacterReferences || rawMeta.storyMetadata?.characterReferences || null,
+      storyMetadata: rawMeta.storyMetadata || null,
       error: rawMeta.error || null,
       cancelledAt: rawMeta.cancelledAt || null,
     };
@@ -457,8 +483,26 @@ export const getStoryBuilderInfo = async (req, res) => {
               audioURL: true,
             },
           })
-        : null,
-      prisma.voiceover.findUnique({
+        : prisma.story.findFirst({
+            where: { Workflow: { some: { id: workflow.id } } },
+            select: {
+              id: true,
+              title: true,
+              outline: true,
+              content: true,
+              series: true,
+              coverArtPrompt: true,
+              coverArtURL: true,
+              coverArtURL_16_9: true,
+              coverArtURL_9_16: true,
+              coverArtURL_1_1: true,
+              seoContent: true,
+              visualSuggestions: true,
+              isPodcast: true,
+              audioURL: true,
+            },
+          }),
+      prisma.voiceover.findFirst({
         where: { workflowId: workflow.id },
         select: {
           id: true,
@@ -559,33 +603,48 @@ export const getStoryBuilderInfo = async (req, res) => {
 
     const normalizedCharRefs = Array.from(charMap.values());
 
+    const resolvedStoryGuidelines =
+      rawMeta.storyGuidelines ||
+      rawMeta.storyMetadata?.storyGuidelines ||
+      rawMeta.storyMetadata?.fallback_guidelines ||
+      rawMeta.directorialGuidelines ||
+      rawMeta.guidelines ||
+      "";
+
+    const resolvedUseGuidelinesOnly =
+      rawMeta.useStoryGuidelinesOnlyForPrompts ??
+      rawMeta.storyMetadata?.useStoryGuidelinesOnlyForPrompts ??
+      false;
+
     const builderMetadata = {
+      ...rawMeta,
       url: rawMeta.url || null,
       videoFile: rawMeta.videoFile || null,
-      textIdea: rawMeta.textIdea || story?.content || story?.outline || voiceover?.script || "",
-      storyGuidelines: rawMeta.storyGuidelines || "",
+      textIdea: rawMeta.textIdea || rawMeta.concept || story?.content || story?.outline || voiceover?.script || "",
+      storyGuidelines: resolvedStoryGuidelines,
+      useStoryGuidelinesOnlyForPrompts: resolvedUseGuidelinesOnly,
       imagePrompt: rawMeta.imagePrompt || "",
       shouldGenerateImage: rawMeta.shouldGenerateImage ?? true,
-      storyType: rawMeta.storyType || "fiction",
+      storyType: rawMeta.storyType || rawMeta.genre || rawMeta.storyMetadata?.genre || story?.series || "fiction",
       voice: rawMeta.voice || voiceover?.voice || null,
-      voiceTone: rawMeta.voiceTone || null,
-      storyLength: rawMeta.storyLength || null,
+      voiceTone: rawMeta.voiceTone || rawMeta.tone || rawMeta.storyMetadata?.voiceTone || null,
+      storyLength: rawMeta.storyLength || (story?.duration ? `${story.duration} minutes` : null),
       mediaType: rawMeta.mediaType || "single_image",
       imageCount: rawMeta.imageCount || 5,
       backgroundMusic: rawMeta.backgroundMusic ?? true,
-      backgroundMusicStyle: rawMeta.backgroundMusicStyle || "",
+      backgroundMusicStyle: rawMeta.backgroundMusicStyle || rawMeta.storyMetadata?.backgroundMusicStyle || "",
       soundEffects: rawMeta.soundEffects ?? false,
       characterTalk: rawMeta.characterTalk ?? false,
       subtitles: rawMeta.subtitles ?? true,
       aspectRatio: rawMeta.aspectRatio || "16:9",
       dualPlatform: rawMeta.dualPlatform ?? false,
-      series: rawMeta.series || story?.series || "",
-      coverArtPrompt: rawMeta.coverArtPrompt || story?.coverArtPrompt || "",
-      seoContent: rawMeta.seoContent || story?.seoContent || null,
-      visualSuggestions: rawMeta.visualSuggestions || story?.visualSuggestions || "",
+      series: rawMeta.series || story?.series || rawMeta.storyMetadata?.series || "",
+      coverArtPrompt: rawMeta.coverArtPrompt || story?.coverArtPrompt || rawMeta.storyMetadata?.coverArtPrompt || "",
+      seoContent: rawMeta.seoContent || story?.seoContent || rawMeta.storyMetadata?.seoContent || null,
+      visualSuggestions: rawMeta.visualSuggestions || story?.visualSuggestions || rawMeta.storyMetadata?.visualSuggestions || "",
       uploadedMediaUrl: rawMeta.uploadedMediaUrl || null,
       characterReferences: normalizedCharRefs,
-      useStoryGuidelinesOnlyForPrompts: rawMeta.useStoryGuidelinesOnlyForPrompts ?? false,
+      storyMetadata: rawMeta.storyMetadata || null,
       useOmniAudio: rawMeta.useOmniAudio ?? false,
       autoPublish: rawMeta.autoPublish ?? true,
     };

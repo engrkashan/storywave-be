@@ -65,6 +65,7 @@ export const createWorkflow = async (req, res) => {
       autoPublish,
       autoPublishDelayMinutes,
       useStoryGuidelinesOnlyForPrompts,
+      useOmniAudio,
     } = req.body;
 
     const subtitlesEnabled = toBool(subtitles, true);
@@ -185,6 +186,7 @@ export const createWorkflow = async (req, res) => {
           autoPublish,
           autoPublishDelayMinutes,
           useStoryGuidelinesOnlyForPrompts: useStoryGuidelinesOnlyForPrompts ?? undefined,
+          useOmniAudio: useOmniAudio ?? false,
         },
       },
     });
@@ -235,6 +237,7 @@ export const createWorkflow = async (req, res) => {
       autoPublish,
       autoPublishDelayMinutes,
       useStoryGuidelinesOnlyForPrompts: useStoryGuidelinesOnlyForPrompts ?? undefined,
+      useOmniAudio: useOmniAudio ?? false,
     };
 
     const job = await addWorkflowJob(workflowPayload);

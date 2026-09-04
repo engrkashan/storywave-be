@@ -531,6 +531,7 @@ async function _runWorkflow({
           url,
           videoFile,
           textIdea,
+          storyGuidelines,
           imagePrompt,
           shouldGenerateImage,
           storyType,
@@ -553,6 +554,7 @@ async function _runWorkflow({
           uploadedMediaUrl,
           characterReferenceBase64: userCharacterReferenceBase64,
           characterReferences: userMultiCharacterReferences,
+          useStoryGuidelinesOnlyForPrompts,
         },
       },
     });
