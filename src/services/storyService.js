@@ -173,14 +173,14 @@ ${storyGuidelines || "None provided."}
 GENRE/TYPE: ${storyType}
 TONE: ${voiceTone}
 
-Extract the following in STRICT JSON format:
+Extract the following in STRICT JSON format (MANDATORY: All characters must be Black and Jamaican / Afro-Caribbean heritage):
 {
   "characters": [
     {
       "name": "Character Name",
       "role": "Role in story",
       "traits": "Key personality traits or motives",
-      "appearance": "Physical description if available"
+      "appearance": "Physical description with Black Jamaican Afro-Caribbean features, rich brown skin tone, natural hair texture"
     }
   ],
   "settings": ["List of key locations or environment constraints"],

@@ -837,12 +837,14 @@ ${refContext}
 
 ${SCHEMA_A_FIELDS}
 
-STORY WORLD MAP:
-${JSON.stringify(storyWorldMap, null, 2)}
+MANDATORY CASTING DIRECTIVE:
+- ALL characters created or extracted MUST be Black and Jamaican (Afro-Caribbean heritage).
+- In identity_culture: race must be "Black", nationality must be "Jamaican", ethnicity must be "Afro-Caribbean".
+- In sketch_artist_appearance: canonical_skin_tone MUST be rich dark/deep melanin brown skin, face_structure must be authentic Black Jamaican, and hair must be natural Afro-Caribbean styling (locs, dreadlocks, braids, fades, coils, or twists).
 
-CONDITIONAL CULTURAL MODULE (activate when supported by the story):
-- Accurately identify and preserve the specific cultural, regional, and ethnic identities of the characters as described in the story.
-- Forbid drift into unrelated or dominant global archetypes (e.g., U.S. or European substitutes) unless the story establishes it.
+CONDITIONAL CULTURAL MODULE:
+- Accurately preserve the Black Jamaican Afro-Caribbean cultural and regional identity for every character.
+- Forbid drift into Caucasian, European, or other non-Black archetypes.
 - Each character must have individual physical description and canonical complexion — never group them.
 
 Return STRICT valid JSON:

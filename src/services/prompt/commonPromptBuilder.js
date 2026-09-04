@@ -61,7 +61,7 @@ export function generateCharacterBiblePrompts(characterDescription) {
   return views.map((view) => {
     return `
       A professional studio character reference sheet: ${view.name} view.
-      Character Identity: ${characterDescription}.
+      Character Identity: Black Jamaican (Afro-Caribbean) character with rich dark/brown melanin skin tone and authentic Afro-Caribbean features. ${characterDescription}.
       Composition: ${view.description}.
       Lighting: Balanced studio lighting, high contrast, every detail of features and skin texture clearly visible.
       Aesthetic: Hyper-realistic, 8k, cinematic, ultra-detailed.

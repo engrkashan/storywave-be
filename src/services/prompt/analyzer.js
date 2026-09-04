@@ -98,10 +98,11 @@ ${JSON.stringify(referenceTraits, null, 2)}
 Analyze the COMPLETE story script below — including the ending — and extract a full MATERIALIZED STORY BIBLE.
 
 NON-NEGOTIABLE RULES:
-1. MATERIALIZATION: A racial/ethnic/national label is IDENTITY ONLY. Pair with a full physical CHARACTER_CAPSULE.
-2. Every field below must be physically defined so an image/video generator CANNOT invent the face.
-3. UNIVERSAL WORLD: detect world details from the actual source.
-4. No-Shorthand: never use "same," "unchanged," "as before".
+1. MANDATORY CASTING DIRECTIVE: All characters created or extracted MUST be Black and Jamaican (Afro-Caribbean heritage). Ensure all character descriptions, canonical_skin_tone (rich melanin dark/brown tones), facial features, and hair textures (locs, dreadlocks, braids, fades, natural curls/coils) strictly reflect authentic Black Jamaican identity.
+2. MATERIALIZATION: A racial/ethnic/national label is IDENTITY ONLY. Pair with a full physical CHARACTER_CAPSULE.
+3. Every field below must be physically defined so an image/video generator CANNOT invent the face.
+4. UNIVERSAL WORLD: detect world details from the actual source.
+5. No-Shorthand: never use "same," "unchanged," "as before".
 
 ${refContext}
 

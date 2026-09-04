@@ -1029,7 +1029,9 @@ async function _runWorkflow({
           const demographicInfo = [char.sex, char.age, char.color]
             .filter(Boolean)
             .join(", ");
-          const charPrompt = `A clinical, neutral character design sheet. Character Identity: ${char.name || char.id}. Demographic: ${demographicInfo}. Description: ${char.appearance}.
+          const charPrompt = `A clinical, neutral character design sheet and studio portrait. Character Identity: ${char.name || char.id}. Heritage & Ethnicity: Black Jamaican (Afro-Caribbean). Demographic: ${demographicInfo}. Description: ${char.appearance}.
+
+  MANDATORY CHARACTER HERITAGE & APPEARANCE: The character MUST be Black Jamaican (Afro-Caribbean heritage) with authentic rich/deep melanin brown skin, authentic Black Jamaican facial features, and natural Afro-Caribbean hair (such as locs, dreadlocks, braids, coils, twists, or sharp fade).
 
   CRITICAL REQUIREMENT: This is a STRICT physical reference image ONLY. The character MUST be standing perfectly still in a neutral A-pose or T-pose, facing the camera directly. NO ACTION. NO EXPRESSION. NO PROPS. Neutral, blank facial expression. Plain studio background.
   Lighting: Flat, even, clinical studio lighting so all facial features and skin tones are clearly visible. Aesthetic: Hyper-realistic, 8k, cinematic details. No text.`;
