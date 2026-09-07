@@ -67,7 +67,8 @@ export function wordSimilarity(textA, textB) {
 
 /**
  * Parses storyGuidelines into an array of structured frame objects.
- * Uses key words "FRAME ID", "# FRAME", or "FRAME <number>" to detect and delimit frames.
+ * Strict implementation: locates all Frame ID / FRAME delimiters, starting from
+ * each Frame ID and ending right before the next Frame ID.
  *
  * @param {string} text - Raw story guidelines string
  * @returns {Array<object>} Parsed frame objects with full verbatim content
@@ -75,75 +76,52 @@ export function wordSimilarity(textA, textB) {
 export function parseStoryGuidelineFrames(text) {
   if (!text || typeof text !== "string" || !text.trim()) return [];
 
-  // Check if text contains FRAME ID or # FRAME or FRAME <num>
-  const hasFramePattern = /(?:^|\n)(?:#+\s*)?FRAME(?:\s+ID\s*:|\s+\d+)/i.test(text);
+  // Match all occurrences of Frame headers/delimiters
+  // Matches "Frame ID: 001", "FRAME ID: 001", "Frame Id: 001", "# Frame ID: 001", "Frame 001", etc.
+  const frameHeaderRegex = /(?:^|\r?\n)\s*(?:#+\s*)?(?:FRAME\s*ID\b(?:\s*[:\-]?\s*)?|FRAME\s+\d+)\b[^\r\n]*/gi;
 
-  if (!hasFramePattern) {
-    return [];
+  const matches = [];
+  let m;
+  while ((m = frameHeaderRegex.exec(text)) !== null) {
+    const matchStr = m[0];
+    const leadingWhitespaceMatch = matchStr.match(/^[\r\n\s]+/);
+    const leadingOffset = leadingWhitespaceMatch ? leadingWhitespaceMatch[0].length : 0;
+    const actualStart = m.index + leadingOffset;
+
+    matches.push({
+      start: actualStart,
+      headerLine: text.slice(actualStart, m.index + matchStr.length).trim(),
+    });
   }
 
-  // Split hierarchically: if `# FRAME` headings exist, split on `# FRAME` only.
-  // Otherwise split on `FRAME ID:`, or `FRAME <num>`.
-  let rawBlocks = [];
-  if (/(?:^|\n)#+\s*FRAME\b/i.test(text)) {
-    rawBlocks = text
-      .split(/(?:^|\n)(?=#+\s*FRAME\b)/i)
-      .map(b => b.trim())
-      .filter(Boolean);
-  } else if (/FRAME\s+ID\s*:/i.test(text)) {
-    rawBlocks = text
-      .split(/(?:^|\n)(?=FRAME\s+ID\s*:)/i)
-      .map(b => b.trim())
-      .filter(Boolean);
-  } else {
-    rawBlocks = text
-      .split(/(?:^|\n)(?=FRAME\s+\d+)/i)
-      .map(b => b.trim())
-      .filter(Boolean);
+  if (matches.length === 0) {
+    return [];
   }
 
   const parsed = [];
 
-  for (let idx = 0; idx < rawBlocks.length; idx++) {
-    const block = rawBlocks[idx];
+  for (let idx = 0; idx < matches.length; idx++) {
+    const currentStart = matches[idx].start;
+    const nextStart = idx + 1 < matches.length ? matches[idx + 1].start : text.length;
+
+    // Strict slicing: Starting exactly from current Frame ID header, ending right before the next Frame ID header
+    const block = text.slice(currentStart, nextStart).trim();
     if (!block) continue;
 
-    // 1. Frame ID (primary key word or heading)
-    const fIdMatch = block.match(/FRAME\s+ID\s*:\s*([^\r\n]+)/i) ||
-                     block.match(/(?:^|\n)#+\s*(FRAME\s+[^\r\n]+)/i) ||
-                     block.match(/(?:^|\n)(FRAME\s+\d+[^\r\n]*)/i);
-    let frameId = fIdMatch ? fIdMatch[1].trim() : null;
+    // Extract frame number & identifier
+    const header = matches[idx].headerLine;
+    const numMatch = header.match(/\d+/) || block.match(/FRAME\s*ID\s*[:\-]?\s*(\d+)/i) || block.match(/FRAME\s+(\d+)/i);
+    let frameNumber = numMatch ? parseInt(numMatch[0] || numMatch[1], 10) : (idx + 1);
 
-    // 2. Frame Number & Total Frames
-    let frameNumber = null;
-    let totalFrames = null;
-
-    if (frameId) {
-      const numM = frameId.match(/\d+/);
-      if (numM) frameNumber = parseInt(numM[0], 10);
-    }
-
-    if (frameNumber === null) {
-      const fnMatch = block.match(/(?:#+\s*FRAME\s+|FRAME\s+ID\s*:\s*(?:FRAME\s*|F)?|FRAME\s+)(\d+)(?:\s+OF\s+(\d+))?/i);
-      if (fnMatch) {
-        frameNumber = parseInt(fnMatch[1], 10);
-        if (fnMatch[2]) totalFrames = parseInt(fnMatch[2], 10);
-      }
-    }
-
-    // Default frameNumber to 1-based sequential index if not explicitly parsed
-    if (frameNumber === null) {
-      frameNumber = idx + 1;
-    }
-
+    const fIdMatch = header.match(/FRAME\s*ID\s*[:\-]?\s*([^\r\n]+)/i) ||
+                     block.match(/FRAME\s*ID\s*[:\-]?\s*([^\r\n]+)/i) ||
+                     header.match(/(?:#+\s*)?(FRAME\s+[^\r\n]+)/i);
+    let frameId = fIdMatch ? fIdMatch[1].trim() : `Frame ${String(frameNumber).padStart(3, "0")}`;
     const frameIdFormatted = `Frame ${String(frameNumber).padStart(3, "0")}`;
-    if (!frameId) {
-      frameId = frameIdFormatted;
-    }
 
-    // 3. Scene ID & Number
-    const scIdMatch = block.match(/SCENE\s+ID\s*:\s*([^\r\n]+)/i) ||
-                      block.match(/(?:^|\n)#+\s*(SCENE\s+[^\r\n]+)/i);
+    // Extract Scene ID & Number if explicitly specified
+    const scIdMatch = block.match(/SCENE\s*ID\s*[:\-]?\s*([^\r\n]+)/i) ||
+                      block.match(/(?:^|\r?\n)#+\s*(SCENE\s+[^\r\n]+)/i);
     const sceneId = scIdMatch ? scIdMatch[1].trim() : null;
     let sceneNumber = null;
     if (sceneId) {
@@ -151,16 +129,16 @@ export function parseStoryGuidelineFrames(text) {
       if (numM) sceneNumber = parseInt(numM[0], 10);
     }
 
-    // 4. Timestamp Range
+    // Timestamp Range (if specified)
     const timeMatch = block.match(/(\d{1,2}:\d{2}(?::\d{2})?\s*[–\-~to]+\s*\d{1,2}:\d{2}(?::\d{2})?)/);
     const timeRange = timeMatch ? timeMatch[1].trim() : null;
     const { startSec, endSec } = parseTimeRange(timeRange);
 
-    // 5. Narration Beat
+    // Narration Beat (if specified)
     const narrMatch = block.match(/STORY\s*\/\s*NARRATION\s+BEAT\s*:\s*([^\r\n]+(?:\n(?!(?:[A-Z0-9\s\/_\-]+:)|##)[^\r\n]+)*)/i);
     const narrationBeat = narrMatch ? narrMatch[1].trim().replace(/\s+/g, " ") : null;
 
-    // 6. Visible Humans
+    // Visible Humans (if specified)
     const humans = [];
     const humanRegex = /VISIBLE\s+HUMAN\s+\d+\s*:\s*([^\r\n]+)/gi;
     let hm;
@@ -168,8 +146,6 @@ export function parseStoryGuidelineFrames(text) {
       const name = hm[1].trim().replace(/\s*\(.*?\)/g, "");
       if (name && !humans.includes(name)) humans.push(name);
     }
-
-    // Also parse from VISIBLE HUMANS bullet list if none found above
     if (humans.length === 0) {
       const bulletRegex = /-\s+([A-Za-z0-9\s\-_"']+)\s*\([^)]*\):/g;
       let bm;
@@ -179,14 +155,14 @@ export function parseStoryGuidelineFrames(text) {
       }
     }
 
-    // 7. Extract negative constraints if present
+    // Negative constraints if present
     const negMatch = block.match(/NEGATIVE\s+CONSTRAINTS\s*:\s*([^\r\n]+(?:\n(?!(?:[A-Z0-9\s\/_\-]+:)|##)[^\r\n]+)*)/i);
     const negativePrompt = negMatch ? negMatch[1].trim() : "";
 
-    // 8. The FULL frame content block is the prompt (lengthy but perfect)
-    const fullFramePrompt = block.trim();
+    // The FULL frame content block starts strictly from Frame ID up to next Frame ID
+    const fullFramePrompt = block;
 
-    // 9. Sub-prompts as secondary convenience
+    // Sub-prompts as secondary convenience
     let imagePrompt = null;
     const imgPromptMatch = block.match(/##+\s*FINAL\s+IMAGE\s+PROMPT\s*([\s\S]*?)(?=(?:##+\s*FINAL[\s\S]*?MOTION\s+PROMPT|##+\s*MOTION\s+PROMPT|FRAME\s+QA:|FRAME\s+STATUS:|\n#+\s*FRAME|$))/i);
     if (imgPromptMatch) {
@@ -202,7 +178,7 @@ export function parseStoryGuidelineFrames(text) {
     parsed.push({
       index: idx,
       frameNumber,
-      totalFrames,
+      totalFrames: matches.length,
       frameId,
       frameIdFormatted,
       sceneId,
@@ -220,7 +196,7 @@ export function parseStoryGuidelineFrames(text) {
     });
   }
 
-  logger.info(`📋 [StoryGuidelineParser] Parsed ${parsed.length} pre-defined frame block(s) (Frame 001..${String(parsed.length).padStart(3, "0")}).`);
+  logger.info(`📋 [StoryGuidelineParser] Parsed ${parsed.length} pre-defined frame block(s) strictly delimited by Frame ID.`);
   return parsed;
 }
 

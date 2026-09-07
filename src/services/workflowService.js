@@ -711,8 +711,14 @@ async function _runWorkflow({
         }
 
         if (uploadedMultiRefs.length > 0) {
+          const freshMetaEarly = (await prisma.workflow.findUnique({
+            where: { id: workflow.id },
+            select: { metadata: true },
+          }))?.metadata || {};
+
           await updateWorkflowSafe(workflow.id, {
             metadata: {
+              ...freshMetaEarly,
               uploadedCharacterReferences: uploadedMultiRefs,
               characterReferences: uploadedMultiRefs,
             },
@@ -798,6 +804,7 @@ async function _runWorkflow({
           artStyle: "Cinematic photorealistic film still",
           colorPalette: [],
           cinematicSpecs: "Locked per frame guidelines",
+          storyGuidelines: effectiveStoryGuidelines || null,
           _preGeneratedBibles: {
             PROJECT_SPEC: { title: title || "Untitled", requested_image_count: effectiveCount, aspect_ratio: aspectRatio },
             STORY_WORLD_MAP: { core_synopsis: title || "Cinematic Story" },
@@ -826,6 +833,7 @@ async function _runWorkflow({
           artStyle: STORY_WORLD_MAP.visual_style_record?.art_style || "",
           colorPalette: STORY_WORLD_MAP.visual_style_record?.color_palette || [],
           cinematicSpecs: STORY_WORLD_MAP.visual_style_record?.cinematic_treatment || "",
+          storyGuidelines: effectiveStoryGuidelines || null,
           _preGeneratedBibles: { PROJECT_SPEC, STORY_WORLD_MAP, MATERIALIZED_CAST_BIBLE, MATERIALIZED_VISUAL_WORLD_BIBLE },
           targetSceneCount: SCENE_GRAPH.length
         };
@@ -947,6 +955,7 @@ async function _runWorkflow({
       await updateWorkflowSafe(workflow.id, {
         metadata: {
           ...freshMetaForPrompts,
+          storyGuidelines: effectiveStoryGuidelines || freshMetaForPrompts.storyGuidelines || null,
           storyMetadata,
           masterPrompts,
           commonPrompt,
@@ -1106,12 +1115,14 @@ async function _runWorkflow({
       await updateWorkflowSafe(workflow.id, {
         metadata: {
           ...freshMetaForRefs,
+          storyGuidelines: effectiveStoryGuidelines || freshMetaForRefs.storyGuidelines || null,
           characterReferences: savedCharRefs,
           uploadedCharacterReferences: uploadedMultiRefs,
           userCharacterRefNames: uploadedMultiRefs.map(r => r.name).filter(Boolean),
           backgroundMusicStyle: backgroundMusicStyle || freshMetaForRefs.backgroundMusicStyle || null,
           storyMetadata: {
             ...(freshMetaForRefs.storyMetadata || storyMetadata || {}),
+            storyGuidelines: effectiveStoryGuidelines || freshMetaForRefs.storyGuidelines || null,
             characterReferences: savedCharRefs,
             backgroundMusicStyle: backgroundMusicStyle || null,
           },
@@ -1595,7 +1606,6 @@ async function _runWorkflow({
             scenePrompts = preGeneratedScenePrompts || [];
             logger.info(`Using ${scenePrompts.length} Whisper-aligned scene prompts`);
           }
-          logger.info("Scene Prompts:", scenePrompts);
 
           if (mediaType === "video") {
             const videoProvider = workflow.inputData?.videoProvider || process.env.VIDEO_PROVIDER || "veo";
@@ -1794,9 +1804,14 @@ async function _runWorkflow({
             userId,
           },
         });
+        const freshMetaForVideo = (await prisma.workflow.findUnique({
+          where: { id: workflow.id },
+          select: { metadata: true },
+        }))?.metadata || {};
+
         await updateWorkflowSafe(workflow.id, {
           videoId: videoRecord.id,
-          metadata: { ...(workflow.metadata || {}), dualPlatform },
+          metadata: { ...freshMetaForVideo, dualPlatform },
         });
         isPodcast = false;
       } else {

@@ -320,8 +320,6 @@ export const getWorkflowById = async (req, res) => {
       dualPlatform: rawMeta.dualPlatform ?? false,
       voice: rawMeta.voice || null,
       voiceTone: rawMeta.voiceTone || rawMeta.storyMetadata?.voiceTone || null,
-      storyLength: rawMeta.storyLength || null,
-      storyType: rawMeta.storyType || rawMeta.storyMetadata?.genre || null,
       storyGuidelines:
         rawMeta.storyGuidelines ||
         rawMeta.storyMetadata?.storyGuidelines ||
@@ -462,7 +460,7 @@ export const getStoryBuilderInfo = async (req, res) => {
       return res.status(404).json({ error: "Workflow not found" });
     }
 
-    const [story, voiceover, user] = await Promise.all([
+    const [story, voiceover, video, sceneCount, user] = await Promise.all([
       workflow.storyId
         ? prisma.story.findUnique({
             where: { id: workflow.storyId },
@@ -511,6 +509,16 @@ export const getStoryBuilderInfo = async (req, res) => {
           voice: true,
         },
       }),
+      workflow.videoId
+        ? prisma.video.findUnique({
+            where: { id: workflow.videoId },
+            select: { id: true, fileURL: true, duration: true, subtitles: true, video_16_9: true, video_9_16: true },
+          })
+        : prisma.video.findFirst({
+            where: { Workflow: { some: { id: workflow.id } } },
+            select: { id: true, fileURL: true, duration: true, subtitles: true, video_16_9: true, video_9_16: true },
+          }),
+      prisma.scene ? prisma.scene.count({ where: { workflowId: workflow.id } }).catch(() => 0) : 0,
       workflow.userId
         ? prisma.user.findUnique({
             where: { id: workflow.userId },
@@ -616,6 +624,10 @@ export const getStoryBuilderInfo = async (req, res) => {
       rawMeta.storyMetadata?.useStoryGuidelinesOnlyForPrompts ??
       false;
 
+    const resolvedImageCount = rawMeta.imageCount || (sceneCount > 0 ? sceneCount : 5);
+    const resolvedVoice = rawMeta.voice || voiceover?.voice || rawMeta.storyMetadata?.voice || "";
+    const resolvedMediaType = rawMeta.mediaType || (rawMeta.shouldGenerateImage === false ? "single_image" : (resolvedImageCount > 1 ? "multi_image" : "single_image"));
+
     const builderMetadata = {
       ...rawMeta,
       url: rawMeta.url || null,
@@ -623,19 +635,19 @@ export const getStoryBuilderInfo = async (req, res) => {
       textIdea: rawMeta.textIdea || rawMeta.concept || story?.content || story?.outline || voiceover?.script || "",
       storyGuidelines: resolvedStoryGuidelines,
       useStoryGuidelinesOnlyForPrompts: resolvedUseGuidelinesOnly,
-      imagePrompt: rawMeta.imagePrompt || "",
+      imagePrompt: rawMeta.imagePrompt || rawMeta.storyMetadata?.imagePrompt || "",
       shouldGenerateImage: rawMeta.shouldGenerateImage ?? true,
-      storyType: rawMeta.storyType || rawMeta.genre || rawMeta.storyMetadata?.genre || story?.series || "fiction",
-      voice: rawMeta.voice || voiceover?.voice || null,
-      voiceTone: rawMeta.voiceTone || rawMeta.tone || rawMeta.storyMetadata?.voiceTone || null,
+      storyType: rawMeta.storyType || rawMeta.genre || rawMeta.storyMetadata?.genre || story?.series || "true_crime_fiction_cinematic",
+      voice: resolvedVoice,
+      voiceTone: rawMeta.voiceTone || rawMeta.tone || rawMeta.storyMetadata?.voiceTone || "neutral",
       storyLength: rawMeta.storyLength || (story?.duration ? `${story.duration} minutes` : null),
-      mediaType: rawMeta.mediaType || "single_image",
-      imageCount: rawMeta.imageCount || 5,
+      mediaType: resolvedMediaType,
+      imageCount: resolvedImageCount,
       backgroundMusic: rawMeta.backgroundMusic ?? true,
       backgroundMusicStyle: rawMeta.backgroundMusicStyle || rawMeta.storyMetadata?.backgroundMusicStyle || "",
       soundEffects: rawMeta.soundEffects ?? false,
       characterTalk: rawMeta.characterTalk ?? false,
-      subtitles: rawMeta.subtitles ?? true,
+      subtitles: rawMeta.subtitles ?? (video?.subtitles ? true : true),
       aspectRatio: rawMeta.aspectRatio || "16:9",
       dualPlatform: rawMeta.dualPlatform ?? false,
       series: rawMeta.series || story?.series || rawMeta.storyMetadata?.series || "",
