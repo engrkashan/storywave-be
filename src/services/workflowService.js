@@ -814,7 +814,7 @@ async function _runWorkflow({
           targetSceneCount: effectiveCount
         };
         masterPrompts = { singleImage: "", multiImages: [] };
-        commonPrompt = "Cinematic photorealistic film still";
+        commonPrompt = "";
       } else {
         const PROJECT_SPEC = await runModule1_InputNormalization({
           title, sourceType: storyType || "script", storyScript: script, imageCount,
@@ -839,10 +839,10 @@ async function _runWorkflow({
         };
         masterPrompts = generateMasterPrompts(storyMetadata, title, aspectRatio);
         commonPrompt = generateCommonVisualPrompt(storyMetadata);
-      }
 
-      if (imagePrompt && (mediaType === "multi_image" || mediaType === "video")) {
-        commonPrompt = `${commonPrompt}. Visual Reference: ${imagePrompt}`;
+        if (imagePrompt && (mediaType === "multi_image" || mediaType === "video")) {
+          commonPrompt = `${commonPrompt}. Visual Reference: ${imagePrompt}`;
+        }
       }
       stopMetaTimer?.();
     }

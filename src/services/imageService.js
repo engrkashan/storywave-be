@@ -18,6 +18,7 @@ import OpenAI from "openai";
 import { config } from "../config/workflow.config.js";
 import { createLogger } from "../utils/logger.js";
 import { withExponentialBackoff } from "../utils/retry.js";
+import { isStoryGuidelinesOnlyForPromptsEnabled } from "../utils/storyGuidelineParser.js";
 
 // OpenAI client — used as fallback for prompt repair when Gemini repair model is unavailable
 const openai = process.env.OPENAI_API_KEY
@@ -285,7 +286,13 @@ function validatePrompt(prompt, sceneMeta = {}) {
    - Semantic negative prompts embedded as affirmative directives ("an empty street with no
      traffic" instead of "no cars")
 -------------------------------------------------- */
-function buildFinalPrompt({ prompt, commonPrompt, characterTextSection, styleSection, continuityInstructions, sceneMeta = {} }) {
+function buildFinalPrompt({ prompt, commonPrompt, characterTextSection, styleSection, continuityInstructions, sceneMeta = {}, isPredefined = false }) {
+  // If strict story guidelines mode is enabled or prompt is pre-defined from guidelines,
+  // return the exact verbatim prompt with zero StoryWave additions/decorations.
+  if (isPredefined || isStoryGuidelinesOnlyForPromptsEnabled()) {
+    return prompt;
+  }
+
   // Context + intent block: helps the model understand WHY this image is being created
   const intentBlock = [
     sceneMeta.storyProgress ? `STORY CONTEXT: This is ${sceneMeta.storyProgress} of the narrative.` : "",
@@ -501,6 +508,7 @@ async function generateWithGemini({
   prevFrameImagePath = null,      // FIX 3: absolute path to the previous frame's generated PNG
   onCheckCancelled = null,
   stickyTierRef = null,           // B5: optional { tier: "PRO"|"FLASH" } shared across a batch
+  isPredefined = false,
 }) {
   const isVerticalRatio = aspectRatio === "9:16" || aspectRatio === "9/16" || aspectRatio === "vertical";
   const normalizedAspectRatio = isVerticalRatio ? "9:16" : (aspectRatio === "1:1" ? "1:1" : "16:9");
@@ -701,6 +709,7 @@ CRITICAL: The character MUST perform the action described in the SCENE DESCRIPTI
         styleSection,
         continuityInstructions,
         sceneMeta,   // context + intent + camera framing injected here
+        isPredefined,
       });
 
       const attemptLog = {
@@ -1137,6 +1146,7 @@ export async function generateMultiImages(
           prevFrameImagePath,                 // FIX 3: visual anchor from previous frame
           onCheckCancelled,
           stickyTierRef,                      // B5: keep model consistent across the batch
+          isPredefined: promptObj.isPredefined || false,
         });
       }, `Image ${sceneId}`, 6, 8000);
 
@@ -1218,6 +1228,7 @@ export async function generateImage(
       styleUrl,
       globalNegativePrompt: globalNeg,
       frameNegativePrompt: frameNeg,
+      isPredefined: promptObj.isPredefined || false,
     });
     logger.info(`✅ [SingleImage] ${sceneId} — Succeeded: ${result.filePath}`);
     return { imageUrl: result.filePath, error: null };

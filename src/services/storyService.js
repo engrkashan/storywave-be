@@ -766,82 +766,30 @@ export async function generateScenePrompts(storyScript, count = 5, storyBible = 
   // Gated by USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS
   const isOnlyForPrompts = isStoryGuidelinesOnlyForPromptsEnabled(options);
   const parsedGuidelineFrames = (isOnlyForPrompts && storyGuidelines) ? parseStoryGuidelineFrames(storyGuidelines) : [];
-  if (parsedGuidelineFrames.length > 0) {
-    logger.info(`📋 [StoryGuidelines] USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS is active. Found ${parsedGuidelineFrames.length} pre-defined frame block(s) keyed by "FRAME ID". Checking matches for ${segments.length} scenes...`);
+  if (isOnlyForPrompts && parsedGuidelineFrames.length > 0) {
+    logger.info(`📋 [StoryGuidelines] USE_STORY_GUIDELINES_ONLY_FOR_PROMPTS is active. Found ${parsedGuidelineFrames.length} pre-defined frame block(s) keyed by "FRAME ID". Copying verbatim for ${segments.length} scenes (Zero AI synthesis)...`);
     const guidelineClaimedIndices = new Set();
-    const preMatchedPrompts = new Array(segments.length).fill(null);
-    let matchedCount = 0;
+    const preMatchedPrompts = [];
 
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
-      const matched = findMatchingGuidelineFrame(seg, i, segments.length, parsedGuidelineFrames, guidelineClaimedIndices);
-      if (matched && matched.fullFramePrompt) {
-        matchedCount++;
-        preMatchedPrompts[i] = {
-          prompt: matched.fullFramePrompt, // Full content from # FRAME ... / FRAME ID up to next heading
-          charactersInScene: matched.visibleHumans || [],
-          narration: seg.text,
-          _startSec: seg.startSec,
-          _endSec: seg.endSec,
-          _negativePrompt: matched.negativePrompt || "",
-          _globalNegativePrompt: storyBible?.globalNegativePrompt || "",
-          isPredefined: true,
-          _guidelineFrame: matched
-        };
-        logger.info(`✅ [StoryGuidelines] Scene ${i + 1}/${segments.length}: Copied full frame block (${matched.frameId || `Frame ${matched.frameNumber || i + 1}`}, ${matched.fullFramePrompt.length} chars) — ZERO remake.`);
-      }
+      const matched = findMatchingGuidelineFrame(seg, i, segments.length, parsedGuidelineFrames, guidelineClaimedIndices) || parsedGuidelineFrames[i % parsedGuidelineFrames.length];
+      preMatchedPrompts.push({
+        prompt: matched.fullFramePrompt, // Full verbatim block starting from Frame ID to before next Frame ID
+        charactersInScene: [],
+        narration: seg.text || "",
+        _startSec: seg.startSec,
+        _endSec: seg.endSec,
+        _negativePrompt: matched.negativePrompt || "",
+        _globalNegativePrompt: "",
+        isPredefined: true,
+        _guidelineFrame: matched
+      });
+      logger.info(`✅ [StoryGuidelines] Scene ${i + 1}/${segments.length}: Copied verbatim frame block (${matched.frameId || `Frame ${matched.frameNumber || i + 1}`}, ${matched.fullFramePrompt.length} chars) — ZERO remake.`);
     }
 
-    if (matchedCount === segments.length) {
-      logger.info(`✨ [StoryGuidelines] ALL ${segments.length} scene prompts were copied directly from story guidelines! Skipping AI prompt generation entirely.`);
-      return { scenePrompts: preMatchedPrompts, castBible: storyBible?._preGeneratedBibles?.MATERIALIZED_CAST_BIBLE || null };
-    }
-
-    if (matchedCount > 0) {
-      logger.info(`⚡ [StoryGuidelines] ${matchedCount}/${segments.length} scene prompts copied from guidelines; generating remaining ${segments.length - matchedCount} scene(s) with AI...`);
-      let prevVisualContext = null;
-      let prevChunkText = null;
-      let prevCharactersInScene = [];
-
-      for (let i = 0; i < segments.length; i++) {
-        if (preMatchedPrompts[i]) {
-          prevVisualContext = "";
-          prevChunkText = segments[i].text;
-          prevCharactersInScene = preMatchedPrompts[i].charactersInScene || [];
-          continue;
-        }
-
-        const chunk = segments[i];
-        logger.info(`🧠 Generating missing prompt for chunk ${i + 1}/${segments.length}`);
-        const promptData = await generatePromptForChunk({
-          chunkText: chunk.text,
-          chunkIndex: i,
-          storyBible,
-          visualSuggestions,
-          prevVisualContext,
-          prevChunkText,
-          prevCharactersInScene,
-          characterReferences,
-          storyGuidelines,
-        });
-
-        preMatchedPrompts[i] = {
-          prompt: promptData.prompt,
-          charactersInScene: promptData.charactersInScene || [],
-          narration: chunk.text,
-          _startSec: chunk.startSec,
-          _endSec: chunk.endSec,
-          _negativePrompt: "",
-          _globalNegativePrompt: storyBible?.globalNegativePrompt || ""
-        };
-
-        prevVisualContext = promptData.visualContext;
-        prevChunkText = chunk.text;
-        prevCharactersInScene = promptData.charactersInScene || [];
-      }
-
-      return { scenePrompts: preMatchedPrompts, castBible: storyBible?._preGeneratedBibles?.MATERIALIZED_CAST_BIBLE || null };
-    }
+    logger.info(`✨ [StoryGuidelines] ALL ${segments.length} scene prompts copied strictly from guidelines! Bypassed AI prompt generation entirely.`);
+    return { scenePrompts: preMatchedPrompts, castBible: null };
   }
 
   // ⚡ Strategy 2: Attempt batched prompt generation first (1 API call instead of N)
