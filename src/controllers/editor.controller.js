@@ -173,15 +173,17 @@ export async function regenerateSceneHandler(req, res) {
   try {
     const { userId } = extractUser(req);
     const { workflowId, sceneId } = req.params;
-    const { prompt, characterReference, generateAsVideo, mediaType } = req.body;
+    const { prompt, characterReference, characterReferences, generateAsVideo, mediaType } = req.body;
 
     const shouldGenerateAsVideo = Boolean(generateAsVideo) || mediaType === "video";
+    const refs = characterReferences || (characterReference ? (Array.isArray(characterReference) ? characterReference : [characterReference]) : []);
 
     const result = await requestSceneRegen({
       workflowId,
       sceneId,
       prompt,
-      characterReference,
+      characterReference: refs[0] || characterReference || null,
+      characterReferences: refs,
       generateAsVideo: shouldGenerateAsVideo,
       userId,
     });

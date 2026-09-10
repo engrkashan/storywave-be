@@ -66,8 +66,8 @@ async function uploadRegenAsset(localPath, workflowId, sceneIndex, ratio, versio
  *   - Custom prompt overriding
  * @param {{ workflowId: string, sceneId: string, prompt?: string, characterReference?: any, generateAsVideo?: boolean }} param0
  */
-export async function regenerateScene({ workflowId, sceneId, prompt, characterReference, generateAsVideo }) {
-  logger.info(`EDITOR_SCENE_GENERATION_STARTED workflowId=${workflowId} sceneId=${sceneId} generateAsVideo=${Boolean(generateAsVideo)} hasCharRef=${Boolean(characterReference)}`);
+export async function regenerateScene({ workflowId, sceneId, prompt, characterReference, characterReferences: explicitMultiRefs, generateAsVideo }) {
+  logger.info(`EDITOR_SCENE_GENERATION_STARTED workflowId=${workflowId} sceneId=${sceneId} generateAsVideo=${Boolean(generateAsVideo)} hasCharRef=${Boolean(characterReference || explicitMultiRefs)}`);
 
   const targetScene = await prisma.scene.findUnique({
     where: { id: sceneId },
@@ -118,25 +118,35 @@ export async function regenerateScene({ workflowId, sceneId, prompt, characterRe
 
   try {
     let characterReferences = [];
-    let customRef = null;
+    const explicitRefs = (Array.isArray(explicitMultiRefs) && explicitMultiRefs.length > 0)
+      ? explicitMultiRefs
+      : (characterReference ? (Array.isArray(characterReference) ? characterReference : [characterReference]) : null);
 
-    if (characterReference) {
-      // 1. MUST USE: User explicitly provided/uploaded a character reference for this scene regeneration!
-      customRef = typeof characterReference === "string"
-        ? { id: `custom_ref_${Date.now()}`, name: "Character Ref", url: characterReference, isCustomOverride: true, isExplicit: true }
-        : {
-            id: characterReference.id || `custom_ref_${Date.now()}`,
-            name: characterReference.name || "Character Ref",
-            url: characterReference.url || characterReference.secureUrl || characterReference.imageUrl,
-            base64: characterReference.base64,
-            mimeType: characterReference.mimeType,
+    if (explicitRefs && explicitRefs.length > 0) {
+      // 1. MUST USE: User explicitly provided / selected character references for this scene regeneration!
+      characterReferences = explicitRefs.map((ref, idx) => {
+        if (typeof ref === "string") {
+          return {
+            id: `custom_ref_${Date.now()}_${idx}`,
+            name: `Character Ref ${idx + 1}`,
+            url: ref,
             isCustomOverride: true,
             isExplicit: true,
           };
+        }
+        return {
+          id: ref.id || `custom_ref_${Date.now()}_${idx}`,
+          name: ref.name || `Character Ref ${idx + 1}`,
+          url: ref.url || ref.secureUrl || ref.imageUrl,
+          base64: ref.base64,
+          mimeType: ref.mimeType,
+          isCustomOverride: true,
+          isExplicit: true,
+        };
+      }).filter((r) => r.url || r.base64);
 
-      if (customRef.url || customRef.base64) {
-        characterReferences = [customRef];
-        logger.info(`👤 [Regen] MUST USE attached character reference: ${customRef.name || customRef.id} (${customRef.url ? "URL" : "Base64"})`);
+      if (characterReferences.length > 0) {
+        logger.info(`👤 [Regen] MUST USE ${characterReferences.length} attached character reference(s): ${characterReferences.map((r) => r.name || r.id).join(", ")}`);
       }
     } else {
       // 2. OPTIONAL: User did NOT attach a character reference in the scene editor modal.
@@ -182,10 +192,12 @@ export async function regenerateScene({ workflowId, sceneId, prompt, characterRe
       const assetType = isVideoGeneration ? "video" : "image";
       const generationType = generateAsVideo ? "veo_video" : (isVideoGeneration ? "video_regen" : "regen");
 
-      // Merge scene characters with custom character reference name if present
-      const charactersInScene = customRef
-        ? [customRef.name || customRef.id || "Character Ref", ...(sc.charactersInScene || [])]
-        : (sc.charactersInScene || []);
+      // Merge scene characters with custom character reference names if present
+      const customRefNames = characterReferences.map((r) => r.name).filter(Boolean);
+      const charactersInScene = Array.from(new Set([
+        ...customRefNames,
+        ...(sc.charactersInScene || [])
+      ]));
 
       if (isVideoGeneration) {
         // Video regeneration with Google Veo 3

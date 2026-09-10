@@ -685,7 +685,7 @@ export async function uploadCharacterReferenceAsset({ workflowId, sceneId, file,
  * Dispatch scene regeneration job.
  * Supports custom prompt, character reference image, and generateAsVideo (Veo 3).
  */
-export async function requestSceneRegen({ workflowId, sceneId, prompt, characterReference, generateAsVideo, userId }) {
+export async function requestSceneRegen({ workflowId, sceneId, prompt, characterReference, characterReferences, generateAsVideo, userId }) {
   const scene = await prisma.scene.findFirst({
     where: { id: sceneId, workflowId },
     select: {
@@ -729,14 +729,16 @@ export async function requestSceneRegen({ workflowId, sceneId, prompt, character
     });
   }
 
-  // If custom character reference is attached, save it into scene's selectedRefs
-  if (characterReference) {
-    const existingRefs = Array.isArray(scene.selectedRefs) ? scene.selectedRefs : [];
-    const updatedRefs = [characterReference, ...existingRefs.filter(r => r.url !== characterReference.url)];
+  // Normalize character references
+  const rawRefs = characterReferences || (characterReference ? (Array.isArray(characterReference) ? characterReference : [characterReference]) : []);
+  const validRefs = Array.isArray(rawRefs) ? rawRefs.filter(Boolean) : [];
+
+  // Update scene's selectedRefs with the explicitly chosen references
+  if (validRefs.length > 0) {
     await prisma.scene.update({
       where: { id: sceneId },
       data: {
-        selectedRefs: updatedRefs,
+        selectedRefs: validRefs,
       },
     });
   }
@@ -746,7 +748,8 @@ export async function requestSceneRegen({ workflowId, sceneId, prompt, character
     workflowId,
     sceneId,
     prompt: prompt || scene.activePrompt || scene.originalPrompt,
-    characterReference,
+    characterReference: validRefs[0] || characterReference || null,
+    characterReferences: validRefs,
     generateAsVideo: Boolean(generateAsVideo),
   });
 
